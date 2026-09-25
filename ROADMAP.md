@@ -18,7 +18,7 @@ compact delivery view and must not introduce new product requirements.
 - [x] Full, Efficient, and Opaque material levels
 - [x] Windowed shell and settings prototypes
 - [x] Reduced-motion and reduced-transparency controls in the prototype
-- [ ] Add Qt Quick Test visual/keyboard coverage
+- [x] Add Qt Quick Test visual/keyboard coverage
 - [ ] Capture 60 Hz and 120 Hz frame-time baselines on reference hardware
 
 ## M2 — Shell vertical slice
@@ -37,4 +37,3 @@ compact delivery view and must not introduce new product requirements.
 
 - [ ] Reference hardware qualification and public release artifacts
 - [ ] External design, accessibility, performance, and security reviews
-
