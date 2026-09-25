@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=Hydrogen Developer (Plasma fallback)
+Comment=Hydrogen prototypes running in the supported Plasma Wayland session
+Exec=/usr/bin/startplasma-wayland
+TryExec=/usr/bin/startplasma-wayland
+Type=Application
+DesktopNames=KDE
+

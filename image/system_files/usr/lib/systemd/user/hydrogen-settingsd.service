@@ -1,0 +1,19 @@
+[Unit]
+Description=Hydrogen settings service
+Documentation=https://github.com/xyzhenrik/HydrogenOS
+PartOf=graphical-session.target
+After=dbus.socket
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/hydrogen-settingsd
+Restart=on-failure
+RestartSec=2s
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+RestrictSUIDSGID=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=default.target

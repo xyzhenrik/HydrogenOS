@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<node name="/org/hydrogen/Settings1">
+  <interface name="org.hydrogen.Settings1">
+    <method name="SchemaVersion">
+      <arg name="version" type="u" direction="out"/>
+    </method>
+    <method name="MaterialQuality">
+      <arg name="quality" type="s" direction="out"/>
+    </method>
+    <method name="SetMaterialQuality">
+      <arg name="quality" type="s" direction="in"/>
+    </method>
+    <method name="ReduceMotion">
+      <arg name="enabled" type="b" direction="out"/>
+    </method>
+    <method name="SetReduceMotion">
+      <arg name="enabled" type="b" direction="in"/>
+    </method>
+    <method name="ReduceTransparency">
+      <arg name="enabled" type="b" direction="out"/>
+    </method>
+    <method name="SetReduceTransparency">
+      <arg name="enabled" type="b" direction="in"/>
+    </method>
+    <method name="DiagnosticsOptIn">
+      <arg name="enabled" type="b" direction="out"/>
+    </method>
+    <method name="SetDiagnosticsOptIn">
+      <arg name="enabled" type="b" direction="in"/>
+    </method>
+  </interface>
+</node>
+

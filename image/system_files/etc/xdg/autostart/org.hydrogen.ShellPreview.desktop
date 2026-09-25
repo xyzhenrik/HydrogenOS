@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Hydrogen Shell Preview
+Comment=Windowed HydrogenOS design-system prototype
+Exec=/usr/bin/hydrogen-shell
+OnlyShowIn=KDE;
+X-KDE-autostart-phase=2
+X-GNOME-Autostart-enabled=true
+

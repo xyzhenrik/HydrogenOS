@@ -1,0 +1,37 @@
+# syntax=docker/dockerfile:1
+
+FROM registry.fedoraproject.org/fedora:44 AS builder
+
+RUN dnf install -y --setopt=install_weak_deps=False \
+        cargo \
+        cmake \
+        gcc-c++ \
+        ninja-build \
+        qt6-qtbase-devel \
+        qt6-qtdeclarative-devel \
+        qt6-qtshadertools-devel \
+        rust \
+    && dnf clean all
+
+WORKDIR /src
+COPY . /src
+
+RUN cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
+    && cmake --build build \
+    && DESTDIR=/staging cmake --install build --prefix /usr \
+    && cargo build --release --workspace
+
+FROM quay.io/fedora-ostree-desktops/kinoite@sha256:a381cb70cc5877a3582112f81d7db98cc3e53573b3a01ca5a26d142b2caf3bc0
+
+LABEL org.opencontainers.image.title="HydrogenOS Developer Image" \
+      org.opencontainers.image.description="Unreleased HydrogenOS development image" \
+      org.opencontainers.image.licenses="GPL-3.0-or-later" \
+      org.opencontainers.image.source="https://github.com/xyzhenrik/HydrogenOS"
+
+COPY --from=builder /staging/ /
+COPY --from=builder /src/target/release/hydrogen-settingsd /usr/bin/hydrogen-settingsd
+COPY image/system_files/ /
+
+RUN systemctl --global enable hydrogen-settingsd.service \
+    && ostree container commit
+

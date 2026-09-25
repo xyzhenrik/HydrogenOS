@@ -1,0 +1,54 @@
+name: Agent-ready task
+description: A bounded implementation task for a human or coding agent
+title: "[area] "
+labels: ["agent-ready"]
+body:
+  - type: textarea
+    id: objective
+    attributes:
+      label: Objective and user value
+      description: State one observable outcome.
+    validations:
+      required: true
+  - type: textarea
+    id: scope
+    attributes:
+      label: Allowed scope
+      description: List directories or interfaces that may change.
+    validations:
+      required: true
+  - type: textarea
+    id: exclusions
+    attributes:
+      label: Explicit exclusions
+      description: List files, behavior, or decisions that must not change.
+    validations:
+      required: true
+  - type: textarea
+    id: contracts
+    attributes:
+      label: Inputs, outputs, and dependencies
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria
+      description: Include behavior, performance, security, and accessibility where relevant.
+    validations:
+      required: true
+  - type: textarea
+    id: verification
+    attributes:
+      label: Required verification
+      description: Provide exact commands and any hardware-only checks.
+    validations:
+      required: true
+  - type: textarea
+    id: docs
+    attributes:
+      label: Documentation impact
+      description: Name expected docs, contract, translation, or ADR updates.
+    validations:
+      required: true
+

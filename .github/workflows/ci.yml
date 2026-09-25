@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  rust:
+    runs-on: ubuntu-24.04
+    container: rust:1.98.1
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install lint components
+        run: rustup component add clippy rustfmt
+      - name: Formatting
+        run: cargo fmt --all --check
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Tests
+        run: cargo test --workspace --all-targets --locked
+      - name: Generate dependency metadata
+        run: cargo metadata --locked --format-version 1 > cargo-metadata.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cargo-metadata
+          path: cargo-metadata.json
+
+  qt:
+    runs-on: ubuntu-24.04
+    container: fedora:44
+    steps:
+      - name: Install build dependencies
+        run: >-
+          dnf install -y --setopt=install_weak_deps=False
+          cmake gcc-c++ git ninja-build
+          qt6-qtbase-devel qt6-qtdeclarative-devel qt6-qtshadertools-devel
+      - uses: actions/checkout@v5
+      - name: Configure
+        run: cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+  policy:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Repository policy checks
+        run: ./tests/policy/check-repository.sh
+

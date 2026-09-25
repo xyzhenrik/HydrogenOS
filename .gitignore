@@ -1,0 +1,15 @@
+/build/
+/target/
+/.cache/
+/.idea/
+/.vscode/
+*.user
+*.qmlc
+*.junit.xml
+*.profraw
+*.profdata
+*.qcow2
+*.iso
+result
+result-*
+
