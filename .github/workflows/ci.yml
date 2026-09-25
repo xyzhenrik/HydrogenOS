@@ -36,7 +36,7 @@ jobs:
       - name: Install build dependencies
         run: >-
           dnf install -y --setopt=install_weak_deps=False
-          cmake gcc-c++ git ninja-build
+          cmake dejavu-sans-fonts gcc-c++ git ninja-build
           qt6-qtbase-devel qt6-qtdeclarative-devel qt6-qtshadertools-devel
       - uses: actions/checkout@v7
       - name: Configure
@@ -45,6 +45,12 @@ jobs:
         run: cmake --build build
       - name: Test
         run: ctest --test-dir build --output-on-failure
+      - uses: actions/upload-artifact@v7
+        if: failure()
+        with:
+          name: qt-test-failure-artifacts
+          path: build/test-artifacts
+          if-no-files-found: ignore
 
   policy:
     runs-on: ubuntu-24.04

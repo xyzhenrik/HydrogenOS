@@ -16,6 +16,7 @@ ApplicationWindow {
 
     property bool reduceMotion: false
     property bool reduceTransparency: false
+    property string clockText: ""
     property int glassLevel: reduceTransparency
                              ? Tokens.materialOpaque
                              : Tokens.materialFull
@@ -41,6 +42,7 @@ ApplicationWindow {
 
     GlassSurface {
         id: panel
+        objectName: "panelSurface"
         anchors.top: parent.top
         anchors.left: parent.left
         anchors.right: parent.right
@@ -72,7 +74,9 @@ ApplicationWindow {
             }
 
             Text {
-                text: Qt.formatTime(new Date(), "hh:mm")
+                text: window.clockText.length > 0
+                      ? window.clockText
+                      : Qt.formatTime(new Date(), "hh:mm")
                 color: Tokens.textPrimary
                 font.pixelSize: 14
                 font.weight: Font.Medium
@@ -82,6 +86,7 @@ ApplicationWindow {
 
     GlassSurface {
         id: welcome
+        objectName: "welcomeSurface"
         width: Math.min(640, window.width - 96)
         height: 330
         anchors.centerIn: parent
@@ -138,6 +143,7 @@ ApplicationWindow {
     }
 
     GlassSurface {
+        objectName: "dockSurface"
         anchors.bottom: parent.bottom
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.bottomMargin: Tokens.space6
@@ -177,4 +183,3 @@ ApplicationWindow {
         }
     }
 }
-

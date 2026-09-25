@@ -23,9 +23,11 @@ Rectangle {
     }
 
     ShaderEffect {
+        objectName: "glassHighlight"
+        property bool materialEnabled: root.materialLevel === Tokens.materialFull
+                                       && root.interactiveHighlight
         anchors.fill: parent
-        visible: root.materialLevel === Tokens.materialFull
-                 && root.interactiveHighlight
+        visible: materialEnabled
         opacity: 0.52
         fragmentShader: "qrc:/qt/qml/Hydrogen/Design/shaders/glass-highlight.frag.qsb"
         property vector2d resolution: Qt.vector2d(width, height)
@@ -41,4 +43,3 @@ Rectangle {
         border.color: "#16ffffff"
     }
 }
-
