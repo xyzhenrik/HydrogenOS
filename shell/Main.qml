@@ -16,10 +16,30 @@ ApplicationWindow {
 
     property bool reduceMotion: false
     property bool reduceTransparency: false
+    property bool benchmarkMode: false
+    property real benchmarkPhase: 0
     property string clockText: ""
     property int glassLevel: reduceTransparency
                              ? Tokens.materialOpaque
                              : Tokens.materialFull
+
+    SequentialAnimation on benchmarkPhase {
+        running: window.benchmarkMode
+        loops: Animation.Infinite
+
+        NumberAnimation {
+            from: 0
+            to: 1
+            duration: 650
+            easing.type: Easing.InOutCubic
+        }
+        NumberAnimation {
+            from: 1
+            to: 0
+            duration: 650
+            easing.type: Easing.InOutCubic
+        }
+    }
 
     Rectangle {
         anchors.fill: parent
@@ -90,6 +110,7 @@ ApplicationWindow {
         width: Math.min(640, window.width - 96)
         height: 330
         anchors.centerIn: parent
+        scale: window.benchmarkMode ? 0.985 + (window.benchmarkPhase * 0.015) : 1
         materialLevel: window.glassLevel
         reduceMotion: window.reduceMotion
 
@@ -149,6 +170,7 @@ ApplicationWindow {
         anchors.bottomMargin: Tokens.space6
         width: 420
         height: 70
+        scale: window.benchmarkMode ? 1 - (window.benchmarkPhase * 0.02) : 1
         radius: 24
         materialLevel: window.glassLevel
         reduceMotion: window.reduceMotion

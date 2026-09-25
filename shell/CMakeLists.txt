@@ -1,4 +1,10 @@
-qt_add_executable(hydrogen-shell main.cpp)
+qt_add_executable(hydrogen-shell
+    main.cpp
+    BenchmarkRunner.cpp
+    BenchmarkRunner.h
+    FrameMetrics.cpp
+    FrameMetrics.h
+)
 
 qt_add_qml_module(hydrogen-shell
     URI Hydrogen.Shell
