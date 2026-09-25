@@ -19,6 +19,7 @@ compact delivery view and must not introduce new product requirements.
 - [x] Windowed shell and settings prototypes
 - [x] Reduced-motion and reduced-transparency controls in the prototype
 - [x] Add Qt Quick Test visual/keyboard coverage
+- [x] Add reproducible frame-time and idle-resource measurement tooling
 - [ ] Capture 60 Hz and 120 Hz frame-time baselines on reference hardware
 
 ## M2 — Shell vertical slice
