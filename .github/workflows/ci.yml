@@ -24,7 +24,7 @@ jobs:
         run: cargo test --workspace --all-targets --locked
       - name: Generate dependency metadata
         run: cargo metadata --locked --format-version 1 > cargo-metadata.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: cargo-metadata
           path: cargo-metadata.json
