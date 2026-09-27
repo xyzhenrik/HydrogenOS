@@ -16,6 +16,11 @@ The UI remains usable as an explanatory offline view when the service is not
 running and reconnects after the bus name gets a new owner. Writes are
 optimistic, disable controls while pending, and roll back on an error.
 
+The sidebar exposes every M2 settings category as a keyboard-operable,
+single-selection control. Appearance is the first functional page; the other
+categories use an explicit roadmap placeholder until their system integrations
+and D-Bus contracts are implemented.
+
 ## Dependency review
 
 `Qt6::DBus` is part of the already required Qt 6 base stack and uses the system
