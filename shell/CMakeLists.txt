@@ -22,6 +22,7 @@ target_link_libraries(hydrogen-shell PRIVATE
     Qt6::Quick
     Qt6::QuickControls2
     hydrogen-designplugin
+    hydrogen-settings-client
 )
 
 install(TARGETS hydrogen-shell RUNTIME DESTINATION bin)

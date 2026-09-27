@@ -16,7 +16,10 @@
 #include <QTimer>
 #include <QVariantMap>
 
+#include <memory>
+
 #include "BenchmarkRunner.h"
+#include "SettingsBackend.h"
 
 int main(int argc, char *argv[])
 {
@@ -124,17 +127,26 @@ int main(int argc, char *argv[])
         QGuiApplication::setFont(QFont(QStringLiteral("DejaVu Sans"), 10));
     }
 
-    QQmlApplicationEngine engine;
-    QObject::connect(
-        &engine, &QQmlApplicationEngine::objectCreationFailed, &app,
-        [] { QCoreApplication::exit(EXIT_FAILURE); }, Qt::QueuedConnection);
+    QVariantMap initialProperties;
+    std::unique_ptr<SettingsBackend> settingsBackend;
     if (!visualTestPath.isEmpty() || benchmarkMode) {
-        QVariantMap initialProperties{
+        initialProperties = {
             {QStringLiteral("clockText"), QStringLiteral("09:41")},
             {QStringLiteral("reduceMotion"), !benchmarkMode},
             {QStringLiteral("reduceTransparency"), false},
             {QStringLiteral("benchmarkMode"), benchmarkMode},
         };
+    } else {
+        settingsBackend = std::make_unique<SettingsBackend>();
+        initialProperties.insert(QStringLiteral("settingsBackend"),
+                                 QVariant::fromValue(settingsBackend.get()));
+    }
+
+    QQmlApplicationEngine engine;
+    QObject::connect(
+        &engine, &QQmlApplicationEngine::objectCreationFailed, &app,
+        [] { QCoreApplication::exit(EXIT_FAILURE); }, Qt::QueuedConnection);
+    if (!visualTestPath.isEmpty() || benchmarkMode) {
         if (requestedScreen) {
             initialProperties.insert(QStringLiteral("screen"),
                                      QVariant::fromValue(requestedScreen));
@@ -142,8 +154,8 @@ int main(int argc, char *argv[])
         if (benchmarkMode) {
             initialProperties.insert(QStringLiteral("visible"), false);
         }
-        engine.setInitialProperties(initialProperties);
     }
+    engine.setInitialProperties(initialProperties);
 
     if (benchmarkMode) {
         Hydrogen::Performance::startFrameBenchmark(
