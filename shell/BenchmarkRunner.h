@@ -14,6 +14,7 @@ struct BenchmarkConfig
 {
     QString outputPath;
     QString hardwareLabel;
+    QString requestedScreenName;
     int warmupFrames = 0;
     int measuredFrames = 0;
     int targetRefreshHz = 60;

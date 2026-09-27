@@ -23,6 +23,15 @@ add_test(
 set_tests_properties(shell-performance-smoke PROPERTIES LABELS performance TIMEOUT 30)
 
 add_test(
+    NAME screen-selection-smoke
+    COMMAND
+        ${CMAKE_COMMAND}
+        -DSHELL_EXECUTABLE=$<TARGET_FILE:hydrogen-shell>
+        -P ${CMAKE_CURRENT_SOURCE_DIR}/run-screen-selection-smoke.cmake
+)
+set_tests_properties(screen-selection-smoke PROPERTIES LABELS performance TIMEOUT 10)
+
+add_test(
     NAME idle-measurement-smoke
     COMMAND
         ${CMAKE_CURRENT_SOURCE_DIR}/test-idle-measurement.sh

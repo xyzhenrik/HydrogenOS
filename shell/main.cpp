@@ -10,8 +10,11 @@
 #include <QQmlApplicationEngine>
 #include <QQuickStyle>
 #include <QQuickWindow>
+#include <QScreen>
 #include <QSGRendererInterface>
+#include <QTextStream>
 #include <QTimer>
+#include <QVariantMap>
 
 #include "BenchmarkRunner.h"
 
@@ -45,14 +48,34 @@ int main(int argc, char *argv[])
     QCommandLineOption hardwareLabelOption(
         QStringLiteral("hardware-label"),
         QStringLiteral("Stable identifier from docs/HARDWARE_MATRIX.md."), QStringLiteral("label"));
+    QCommandLineOption benchmarkScreenOption(QStringLiteral("benchmark-screen"),
+                                             QStringLiteral("Qt screen name used for measurement."),
+                                             QStringLiteral("name"));
+    QCommandLineOption listScreensOption(QStringLiteral("list-screens"),
+                                         QStringLiteral("List screens visible to Qt and exit."));
     parser.addOptions({
         benchmarkOutputOption,
         benchmarkRefreshOption,
         benchmarkFramesOption,
         benchmarkWarmupOption,
         hardwareLabelOption,
+        benchmarkScreenOption,
+        listScreensOption,
     });
     parser.process(app);
+
+    if (parser.isSet(listScreensOption)) {
+        QTextStream output(stdout);
+        for (QScreen *screen : QGuiApplication::screens()) {
+            output << screen->name() << "\t" << screen->geometry().width() << "x"
+                   << screen->geometry().height() << "\t" << screen->refreshRate() << " Hz";
+            if (screen == QGuiApplication::primaryScreen()) {
+                output << "\tprimary";
+            }
+            output << "\n";
+        }
+        return EXIT_SUCCESS;
+    }
 
     const QString visualTestPath = parser.value(visualTestOption);
     const QString benchmarkOutputPath = parser.value(benchmarkOutputOption);
@@ -63,6 +86,20 @@ int main(int argc, char *argv[])
     const int targetRefreshHz = parser.value(benchmarkRefreshOption).toInt(&refreshRateValid);
     const int measuredFrames = parser.value(benchmarkFramesOption).toInt(&frameCountValid);
     const int warmupFrames = parser.value(benchmarkWarmupOption).toInt(&warmupCountValid);
+    const QString requestedScreenName = parser.value(benchmarkScreenOption);
+    QScreen *requestedScreen = nullptr;
+    if (!requestedScreenName.isEmpty()) {
+        for (QScreen *screen : QGuiApplication::screens()) {
+            if (screen->name() == requestedScreenName) {
+                requestedScreen = screen;
+                break;
+            }
+        }
+        if (!requestedScreen) {
+            qCritical("requested benchmark screen was not found; use --list-screens");
+            return EXIT_FAILURE;
+        }
+    }
 
     if (!visualTestPath.isEmpty() && benchmarkMode) {
         qCritical("--visual-test and --benchmark-output cannot be combined");
@@ -92,12 +129,20 @@ int main(int argc, char *argv[])
         &engine, &QQmlApplicationEngine::objectCreationFailed, &app,
         [] { QCoreApplication::exit(EXIT_FAILURE); }, Qt::QueuedConnection);
     if (!visualTestPath.isEmpty() || benchmarkMode) {
-        engine.setInitialProperties({
+        QVariantMap initialProperties{
             {QStringLiteral("clockText"), QStringLiteral("09:41")},
             {QStringLiteral("reduceMotion"), !benchmarkMode},
             {QStringLiteral("reduceTransparency"), false},
             {QStringLiteral("benchmarkMode"), benchmarkMode},
-        });
+        };
+        if (requestedScreen) {
+            initialProperties.insert(QStringLiteral("screen"),
+                                     QVariant::fromValue(requestedScreen));
+        }
+        if (benchmarkMode) {
+            initialProperties.insert(QStringLiteral("visible"), false);
+        }
+        engine.setInitialProperties(initialProperties);
     }
 
     if (benchmarkMode) {
@@ -106,6 +151,7 @@ int main(int argc, char *argv[])
             {
                 .outputPath = benchmarkOutputPath,
                 .hardwareLabel = parser.value(hardwareLabelOption),
+                .requestedScreenName = requestedScreenName,
                 .warmupFrames = warmupFrames,
                 .measuredFrames = measuredFrames,
                 .targetRefreshHz = targetRefreshHz,

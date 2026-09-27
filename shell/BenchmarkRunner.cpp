@@ -58,6 +58,7 @@ bool writeBenchmarkResult(const Hydrogen::Performance::BenchmarkConfig &config,
     const QString platformName = QGuiApplication::platformName();
     const QString graphicsApi = graphicsApiName(window->rendererInterface()->graphicsApi());
     const double detectedRefreshHz = window->screen() ? window->screen()->refreshRate() : 0.0;
+    const QString screenName = window->screen() ? window->screen()->name() : QString();
 #ifdef NDEBUG
     constexpr bool optimizedBuild = true;
 #else
@@ -77,6 +78,13 @@ bool writeBenchmarkResult(const Hydrogen::Performance::BenchmarkConfig &config,
     }
     if (config.hardwareLabel.isEmpty()) {
         qualificationReasons.append(QStringLiteral("--hardware-label is required"));
+    }
+    if (QGuiApplication::screens().size() > 1 && config.requestedScreenName.isEmpty()) {
+        qualificationReasons.append(
+            QStringLiteral("--benchmark-screen is required on a multi-screen system"));
+    }
+    if (!config.requestedScreenName.isEmpty() && screenName != config.requestedScreenName) {
+        qualificationReasons.append(QStringLiteral("the window is not on the requested screen"));
     }
     if (detectedRefreshHz <= 0.0 || std::abs(detectedRefreshHz - config.targetRefreshHz) > 1.0) {
         qualificationReasons.append(
@@ -125,6 +133,14 @@ bool writeBenchmarkResult(const Hydrogen::Performance::BenchmarkConfig &config,
              {QStringLiteral("session_type"), qEnvironmentVariable("XDG_SESSION_TYPE")},
              {QStringLiteral("desktop"), qEnvironmentVariable("XDG_CURRENT_DESKTOP")},
              {QStringLiteral("graphics_api"), graphicsApi},
+             {QStringLiteral("screen_count"), QGuiApplication::screens().size()},
+             {QStringLiteral("screen_name"), screenName},
+             {QStringLiteral("screen_manufacturer"),
+              window->screen() ? window->screen()->manufacturer() : QString()},
+             {QStringLiteral("screen_model"),
+              window->screen() ? window->screen()->model() : QString()},
+             {QStringLiteral("screen_serial_number"),
+              window->screen() ? window->screen()->serialNumber() : QString()},
              {QStringLiteral("detected_refresh_hz"), detectedRefreshHz},
              {QStringLiteral("device_pixel_ratio"), window->devicePixelRatio()},
              {QStringLiteral("logical_width"), window->width()},
@@ -184,6 +200,23 @@ void startFrameBenchmark(QGuiApplication &app, QQmlApplicationEngine &engine,
             app.exit(EXIT_FAILURE);
             return;
         }
+
+        if (!config.requestedScreenName.isEmpty()) {
+            QScreen *requestedScreen = nullptr;
+            for (QScreen *screen : QGuiApplication::screens()) {
+                if (screen->name() == config.requestedScreenName) {
+                    requestedScreen = screen;
+                    break;
+                }
+            }
+            if (!requestedScreen) {
+                qCritical("requested benchmark screen disappeared before the run started");
+                app.exit(EXIT_FAILURE);
+                return;
+            }
+            window->setScreen(requestedScreen);
+        }
+        window->show();
 
         auto state = std::make_shared<BenchmarkState>();
         state->warmupFramesRemaining = config.warmupFrames;
