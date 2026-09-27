@@ -11,3 +11,6 @@ and the explicit diagnostic-consent flag.
 The checked-in introspection XML is part of the public contract. Any incompatible
 change requires a new interface version and an ADR. Diagnostics default to off.
 
+The Qt Quick consumer is documented in `settings/README.md`. The service may be
+started before or after the UI; the UI watches the well-known bus name and
+reloads state when ownership changes.

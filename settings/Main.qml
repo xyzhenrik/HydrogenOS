@@ -14,11 +14,30 @@ ApplicationWindow {
     title: qsTr("Hydrogen Settings")
     color: Tokens.canvasBottom
 
-    property bool reduceMotion: false
-    property bool reduceTransparency: false
+    property var settingsBackend: null
+    readonly property bool backendAvailable: settingsBackend !== null
+                                             && settingsBackend.available
+    readonly property bool backendBusy: settingsBackend !== null
+                                        && settingsBackend.busy
+    readonly property bool reduceMotion: settingsBackend !== null
+                                         && settingsBackend.reduceMotion
+    readonly property bool reduceTransparency: settingsBackend !== null
+                                               && settingsBackend.reduceTransparency
+    readonly property string materialQuality: settingsBackend !== null
+                                              ? settingsBackend.materialQuality
+                                              : "full"
+    readonly property string backendError: settingsBackend !== null
+                                           ? settingsBackend.errorMessage
+                                           : qsTr("No settings backend was provided.")
     property int materialLevel: reduceTransparency
                                 ? Tokens.materialOpaque
-                                : Tokens.materialFull
+                                : materialQuality === "efficient"
+                                  ? Tokens.materialEfficient
+                                  : materialQuality === "opaque"
+                                    ? Tokens.materialOpaque
+                                    : Tokens.materialFull
+
+    ButtonGroup { id: materialGroup }
 
     Rectangle {
         anchors.fill: parent
@@ -95,45 +114,81 @@ ApplicationWindow {
 
                 CheckBox {
                     id: transparencyToggle
+                    objectName: "transparencyToggle"
                     text: qsTr("Reduce transparency")
                     checked: root.reduceTransparency
-                    onToggled: root.reduceTransparency = checked
+                    enabled: root.backendAvailable && !root.backendBusy
+                    onToggled: {
+                        if (root.settingsBackend !== null
+                                && checked !== root.settingsBackend.reduceTransparency)
+                            root.settingsBackend.setReduceTransparency(checked)
+                    }
                     Accessible.description: qsTr("Uses opaque surfaces and disables glass highlights")
                 }
 
                 CheckBox {
                     id: motionToggle
+                    objectName: "motionToggle"
                     text: qsTr("Reduce motion")
                     checked: root.reduceMotion
-                    onToggled: root.reduceMotion = checked
+                    enabled: root.backendAvailable && !root.backendBusy
+                    onToggled: {
+                        if (root.settingsBackend !== null
+                                && checked !== root.settingsBackend.reduceMotion)
+                            root.settingsBackend.setReduceMotion(checked)
+                    }
                     Accessible.description: qsTr("Disables non-essential interface animations")
                 }
 
                 GroupBox {
+                    objectName: "materialQualityGroup"
                     title: qsTr("Material quality")
                     Layout.fillWidth: true
-                    enabled: !root.reduceTransparency
+                    enabled: root.backendAvailable && !root.backendBusy
+                             && !root.reduceTransparency
 
                     RowLayout {
                         anchors.fill: parent
 
-                        RadioButton { text: qsTr("Full"); checked: true }
-                        RadioButton { text: qsTr("Efficient") }
-                        RadioButton { text: qsTr("Opaque") }
+                        RadioButton {
+                            objectName: "materialFull"
+                            text: qsTr("Full")
+                            ButtonGroup.group: materialGroup
+                            checked: root.materialQuality === "full"
+                            onClicked: root.settingsBackend.setMaterialQuality("full")
+                        }
+                        RadioButton {
+                            objectName: "materialEfficient"
+                            text: qsTr("Efficient")
+                            ButtonGroup.group: materialGroup
+                            checked: root.materialQuality === "efficient"
+                            onClicked: root.settingsBackend.setMaterialQuality("efficient")
+                        }
+                        RadioButton {
+                            objectName: "materialOpaque"
+                            text: qsTr("Opaque")
+                            ButtonGroup.group: materialGroup
+                            checked: root.materialQuality === "opaque"
+                            onClicked: root.settingsBackend.setMaterialQuality("opaque")
+                        }
                     }
                 }
 
                 Item { Layout.fillHeight: true }
 
                 Text {
+                    objectName: "backendStatus"
                     Layout.fillWidth: true
-                    text: qsTr("Settings are local in this prototype. The versioned settings service is implemented separately and will be connected in M2.")
+                    text: root.backendAvailable
+                          ? qsTr("Changes are saved automatically.")
+                          : qsTr("Settings service unavailable. %1").arg(root.backendError)
                     wrapMode: Text.WordWrap
-                    color: Tokens.textSecondary
+                    color: root.backendAvailable ? Tokens.textSecondary : Tokens.focus
                     font.pixelSize: 13
+                    Accessible.role: Accessible.StaticText
+                    Accessible.name: text
                 }
             }
         }
     }
 }
-

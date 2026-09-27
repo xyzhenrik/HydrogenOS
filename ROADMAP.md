@@ -24,6 +24,7 @@ compact delivery view and must not introduce new product requirements.
 
 ## M2 — Shell vertical slice
 
+- [x] Connect appearance and accessibility settings to `org.hydrogen.Settings1`
 - [ ] Layer-shell integration and supervised production session
 - [ ] Launcher, overview, notifications, control center, and workspaces
 - [ ] Complete settings categories backed by versioned D-Bus contracts
