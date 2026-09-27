@@ -32,6 +32,7 @@ ApplicationWindow {
     property bool benchmarkMode: false
     property real benchmarkPhase: 0
     property string clockText: ""
+    property string lastDockActivation: ""
     property int glassLevel: reduceTransparency
                              ? Tokens.materialOpaque
                              : materialQuality === "efficient"
@@ -213,63 +214,33 @@ ApplicationWindow {
                 spacing: Tokens.space3
 
                 HydrogenButton {
+                    objectName: "welcomeTransparencyButton"
                     text: window.reduceTransparency
                           ? qsTr("Enable transparency")
                           : qsTr("Reduce transparency")
                     reduceMotion: window.reduceMotion
-                    onClicked: window.reduceTransparency = !window.reduceTransparency
+                    onClicked: window.requestReduceTransparency(!window.reduceTransparency)
                 }
 
                 HydrogenButton {
+                    objectName: "welcomeMotionButton"
                     text: window.reduceMotion
                           ? qsTr("Enable motion")
                           : qsTr("Reduce motion")
                     reduceMotion: window.reduceMotion
-                    onClicked: window.reduceMotion = !window.reduceMotion
+                    onClicked: window.requestReduceMotion(!window.reduceMotion)
                 }
             }
         }
     }
 
-    GlassSurface {
-        objectName: "dockSurface"
+    HydrogenDock {
         anchors.bottom: parent.bottom
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.bottomMargin: Tokens.space6
-        width: 420
-        height: 70
         scale: window.benchmarkMode ? 1 - (window.benchmarkPhase * 0.02) : 1
-        radius: 24
         materialLevel: window.glassLevel
         reduceMotion: window.reduceMotion
-
-        Row {
-            anchors.centerIn: parent
-            spacing: Tokens.space3
-
-            Repeater {
-                model: ["Files", "Web", "Settings", "Terminal"]
-
-                delegate: Rectangle {
-                    required property string modelData
-                    width: 48
-                    height: 48
-                    radius: 15
-                    color: "#2effffff"
-                    border.color: "#28ffffff"
-
-                    Text {
-                        anchors.centerIn: parent
-                        text: modelData.substring(0, 1)
-                        color: Tokens.textPrimary
-                        font.pixelSize: 18
-                        font.weight: Font.DemiBold
-                    }
-
-                    Accessible.role: Accessible.Button
-                    Accessible.name: modelData
-                }
-            }
-        }
+        onApplicationActivated: appId => window.lastDockActivation = appId
     }
 }
