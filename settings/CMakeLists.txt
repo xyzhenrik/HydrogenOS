@@ -1,4 +1,8 @@
-qt_add_executable(hydrogen-settings main.cpp)
+qt_add_executable(hydrogen-settings
+    main.cpp
+    SettingsBackend.cpp
+    SettingsBackend.h
+)
 
 qt_add_qml_module(hydrogen-settings
     URI Hydrogen.Settings
@@ -9,6 +13,7 @@ qt_add_qml_module(hydrogen-settings
 
 target_link_libraries(hydrogen-settings PRIVATE
     Qt6::Core
+    Qt6::DBus
     Qt6::Gui
     Qt6::Qml
     Qt6::Quick

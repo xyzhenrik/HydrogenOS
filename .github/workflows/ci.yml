@@ -36,7 +36,7 @@ jobs:
       - name: Install build dependencies
         run: >-
           dnf install -y --setopt=install_weak_deps=False
-          cmake dejavu-sans-fonts gcc-c++ git ninja-build
+          cmake dbus-daemon dejavu-sans-fonts gcc-c++ git ninja-build
           qt6-qtbase-devel qt6-qtdeclarative-devel qt6-qtshadertools-devel
       - uses: actions/checkout@v7
       - name: Configure
