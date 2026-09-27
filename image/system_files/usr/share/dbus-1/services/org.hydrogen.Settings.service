@@ -1,0 +1,4 @@
+[D-BUS Service]
+Name=org.hydrogen.Settings
+Exec=/usr/bin/hydrogen-settingsd
+SystemdService=hydrogen-settingsd.service

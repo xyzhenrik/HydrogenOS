@@ -32,6 +32,4 @@ COPY --from=builder /staging/ /
 COPY --from=builder /src/target/release/hydrogen-settingsd /usr/bin/hydrogen-settingsd
 COPY image/system_files/ /
 
-RUN systemctl --global enable hydrogen-settingsd.service \
-    && ostree container commit
-
+RUN ostree container commit

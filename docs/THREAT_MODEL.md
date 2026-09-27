@@ -23,6 +23,8 @@ network transmission, persistent sensitive data, update trust, or authentication
 - Wayland isolation and portals for graphical applications
 - SELinux enforcing in the product image
 - Minimal user-session D-Bus services with explicit method contracts
+- Exact-name D-Bus activation backed by sandboxed, unprivileged systemd user
+  services; callers and services share the logged-in user's authority
 - Atomic, signed deployments with a retained rollback deployment
 - No network diagnostics before explicit consent
 - CI dependency review, secret scanning, SBOM, and artifact attestations

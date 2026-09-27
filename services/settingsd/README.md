@@ -14,3 +14,7 @@ change requires a new interface version and an ADR. Diagnostics default to off.
 The Qt Quick consumer is documented in `settings/README.md`. The service may be
 started before or after the UI; the UI watches the well-known bus name and
 reloads state when ownership changes.
+
+The product image installs a standard D-Bus activation file backed by a
+`Type=dbus` systemd user service. Calling the well-known name starts the daemon
+on demand; it is not enabled as an unconditional login service.

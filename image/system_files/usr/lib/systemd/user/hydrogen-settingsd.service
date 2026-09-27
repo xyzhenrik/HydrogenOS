@@ -5,7 +5,8 @@ PartOf=graphical-session.target
 After=dbus.socket
 
 [Service]
-Type=simple
+Type=dbus
+BusName=org.hydrogen.Settings
 ExecStart=/usr/bin/hydrogen-settingsd
 Restart=on-failure
 RestartSec=2s
@@ -14,6 +15,3 @@ PrivateTmp=yes
 ProtectSystem=strict
 RestrictSUIDSGID=yes
 LockPersonality=yes
-
-[Install]
-WantedBy=default.target
