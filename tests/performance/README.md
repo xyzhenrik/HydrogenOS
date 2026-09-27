@@ -12,6 +12,7 @@ Build a release binary before collecting evidence:
 ```sh
 cmake -S . -B build-release -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build-release
+build-release/shell/hydrogen-shell --list-screens
 ```
 
 Run each target on a matching physical display in a Wayland session. Use the
@@ -22,15 +23,17 @@ and unobstructed:
 QT_SCALE_FACTOR=1 build-release/shell/hydrogen-shell \
   --benchmark-output /tmp/hydrogen-frame-60.json \
   --benchmark-refresh 60 \
-  --benchmark-warmup 120 \
+  --benchmark-warmup 600 \
   --benchmark-frames 600 \
-  --hardware-label development-ryzen-9800x3d-radeon
+  --benchmark-screen DP-2 \
+  --hardware-label development-ryzen-9800x3d-nvidia
 
 QT_SCALE_FACTOR=1 build-release/shell/hydrogen-shell \
   --benchmark-output /tmp/hydrogen-frame-120.json \
   --benchmark-refresh 120 \
-  --benchmark-warmup 240 \
+  --benchmark-warmup 1200 \
   --benchmark-frames 1200 \
+  --benchmark-screen eDP-1 \
   --hardware-label reference-notebook
 ```
 
@@ -44,10 +47,15 @@ to the nearest target interval.
 
 A report is qualification-eligible only when it comes from an optimized release
 build, has a hardware label, runs on Wayland with hardware acceleration, and the
-detected display rate matches the 60 Hz or 120 Hz target. Eligibility does not
-mean that the budget passed. For M1, `metrics.p95_ms` must be at most 16.67 ms
-at 60 Hz and at most 8.33 ms at 120 Hz. Attach the JSON to the review that
-records a baseline, then copy an accepted result into
+detected display rate matches the 60 Hz or 120 Hz target. Multi-screen systems
+must select the exact Qt screen name reported by `--list-screens`. The name is a
+run selector, not a stable hardware identifier. Wayland compositors may ignore
+the application's initial placement request. If that happens, move the visible
+benchmark window to the selected screen during a longer warm-up; the report
+rejects the run if the window is still on another screen when measurement ends.
+Eligibility does not mean that the budget passed. For M1, `metrics.p95_ms` must
+be at most 16.67 ms at 60 Hz and at most 8.33 ms at 120 Hz. Attach the JSON to
+the review that records a baseline, then copy an accepted result into
 `tests/performance/baselines/<hardware-label>/` in that review. Do not hand-edit
 measurements. The provisional `reference-notebook` label is not accepted until
 the exact notebook SKU is recorded in the hardware matrix.
