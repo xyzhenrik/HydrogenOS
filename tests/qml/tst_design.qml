@@ -51,6 +51,7 @@ TestCase {
         const highlight = findChild(surface, "glassHighlight")
         verify(highlight !== null)
         compare(highlight.materialEnabled, data.highlight)
+        compare(highlight.cornerRadius, surface.radius)
         surface.destroy()
     }
 

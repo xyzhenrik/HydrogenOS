@@ -35,6 +35,11 @@ int main(int argc, char *argv[])
         QStringLiteral("visual-test"),
         QStringLiteral("Capture a deterministic test image and exit."), QStringLiteral("path"));
     parser.addOption(visualTestOption);
+    QCommandLineOption gpuVisualTestOption(
+        QStringLiteral("gpu-visual-test"),
+        QStringLiteral("Capture a diagnostic image with the active GPU backend and exit."),
+        QStringLiteral("path"));
+    parser.addOption(gpuVisualTestOption);
     QCommandLineOption benchmarkOutputOption(
         QStringLiteral("benchmark-output"),
         QStringLiteral("Measure the built-in frame scenario and write JSON."),
@@ -81,6 +86,9 @@ int main(int argc, char *argv[])
     }
 
     const QString visualTestPath = parser.value(visualTestOption);
+    const QString gpuVisualTestPath = parser.value(gpuVisualTestOption);
+    const QString capturePath = visualTestPath.isEmpty() ? gpuVisualTestPath : visualTestPath;
+    const bool captureMode = !capturePath.isEmpty();
     const QString benchmarkOutputPath = parser.value(benchmarkOutputOption);
     const bool benchmarkMode = !benchmarkOutputPath.isEmpty();
     bool refreshRateValid = false;
@@ -104,8 +112,9 @@ int main(int argc, char *argv[])
         }
     }
 
-    if (!visualTestPath.isEmpty() && benchmarkMode) {
-        qCritical("--visual-test and --benchmark-output cannot be combined");
+    if ((!visualTestPath.isEmpty() && !gpuVisualTestPath.isEmpty()) ||
+        (captureMode && benchmarkMode)) {
+        qCritical("visual capture options and --benchmark-output are mutually exclusive");
         return EXIT_FAILURE;
     }
     if (benchmarkMode &&
@@ -119,7 +128,7 @@ int main(int argc, char *argv[])
     if (!visualTestPath.isEmpty()) {
         QQuickWindow::setGraphicsApi(QSGRendererInterface::Software);
     }
-    if (!visualTestPath.isEmpty() || benchmarkMode) {
+    if (captureMode || benchmarkMode) {
         if (!QFontDatabase::families().contains(QStringLiteral("DejaVu Sans"))) {
             qCritical("DejaVu Sans is required for deterministic test and benchmark runs");
             return EXIT_FAILURE;
@@ -129,7 +138,7 @@ int main(int argc, char *argv[])
 
     QVariantMap initialProperties;
     std::unique_ptr<SettingsBackend> settingsBackend;
-    if (!visualTestPath.isEmpty() || benchmarkMode) {
+    if (captureMode || benchmarkMode) {
         initialProperties = {
             {QStringLiteral("clockText"), QStringLiteral("09:41")},
             {QStringLiteral("reduceMotion"), !benchmarkMode},
@@ -146,7 +155,7 @@ int main(int argc, char *argv[])
     QObject::connect(
         &engine, &QQmlApplicationEngine::objectCreationFailed, &app,
         [] { QCoreApplication::exit(EXIT_FAILURE); }, Qt::QueuedConnection);
-    if (!visualTestPath.isEmpty() || benchmarkMode) {
+    if (captureMode || benchmarkMode) {
         if (requestedScreen) {
             initialProperties.insert(QStringLiteral("screen"),
                                      QVariant::fromValue(requestedScreen));
@@ -171,8 +180,8 @@ int main(int argc, char *argv[])
     }
     engine.loadFromModule(QStringLiteral("Hydrogen.Shell"), QStringLiteral("Main"));
 
-    if (!visualTestPath.isEmpty()) {
-        QTimer::singleShot(500, &app, [&app, &engine, visualTestPath] {
+    if (captureMode) {
+        QTimer::singleShot(500, &app, [&app, &engine, capturePath] {
             if (engine.rootObjects().isEmpty()) {
                 app.exit(EXIT_FAILURE);
                 return;
@@ -180,8 +189,8 @@ int main(int argc, char *argv[])
 
             auto *window = qobject_cast<QQuickWindow *>(engine.rootObjects().constFirst());
             const QImage image = window ? window->grabWindow() : QImage();
-            const QFileInfo output(visualTestPath);
-            if (image.isNull() || !output.dir().exists() || !image.save(visualTestPath)) {
+            const QFileInfo output(capturePath);
+            if (image.isNull() || !output.dir().exists() || !image.save(capturePath)) {
                 app.exit(EXIT_FAILURE);
                 return;
             }
@@ -189,7 +198,7 @@ int main(int argc, char *argv[])
         });
     }
 
-    if (visualTestPath.isEmpty() && !benchmarkMode &&
+    if (!captureMode && !benchmarkMode &&
         qEnvironmentVariableIsSet("HYDROGEN_SMOKE_TEST")) {
         QTimer::singleShot(250, &app, &QCoreApplication::quit);
     }
