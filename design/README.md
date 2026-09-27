@@ -13,3 +13,7 @@ Material levels:
 Components must remain useful with reduced motion, reduced transparency,
 keyboard-only input, and 100–200% scale. Do not encode product policy here.
 
+Shader output follows Qt Quick's premultiplied-alpha blending convention and
+masks highlights to the surface's rounded corners. Reversed `smoothstep` edges
+are forbidden because their result is undefined and differs across GPU drivers.
+The software-rendered golden screenshots do not replace a live GPU smoke test.

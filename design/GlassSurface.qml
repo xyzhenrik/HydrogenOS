@@ -32,6 +32,7 @@ Rectangle {
         fragmentShader: "qrc:/qt/qml/Hydrogen/Design/shaders/glass-highlight.frag.qsb"
         property vector2d resolution: Qt.vector2d(width, height)
         property real strength: 0.8
+        property real cornerRadius: root.radius
     }
 
     Rectangle {

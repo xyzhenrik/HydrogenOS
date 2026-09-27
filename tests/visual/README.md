@@ -10,6 +10,17 @@ backend, a fixed `09:41` clock, reduced motion, the DejaVu Sans font, `C.UTF-8`,
 and a pinned Qt environment in CI. The capture path is active only when
 `hydrogen-shell --visual-test PATH` is used.
 
+The software renderer does not replace live shader validation. On a graphical
+development session, capture the active Qt Quick GPU backend with:
+
+```sh
+build/shell/hydrogen-shell --gpu-visual-test /tmp/hydrogen-gpu.png
+```
+
+This diagnostic image is intentionally not a golden baseline because output can
+vary by GPU and driver. Review it for blown-out color, rectangular shader edges,
+and other backend-specific artifacts.
+
 DejaVu Sans is a test-environment prerequisite, not a HydrogenOS runtime
 dependency. Capture fails instead of silently substituting a host font. Fedora
 CI installs `dejavu-sans-fonts`; Arch-family development hosts can provide it

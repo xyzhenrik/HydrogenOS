@@ -38,5 +38,6 @@ if grep -RIn --include='*.qml' --include='*.cpp' --include='*.rs' \
 fi
 
 "${repo_root}/tests/policy/check-session-services.sh"
+"${repo_root}/tests/policy/check-shaders.sh"
 
 echo "Repository policy checks passed"
