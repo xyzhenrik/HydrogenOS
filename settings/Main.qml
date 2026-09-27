@@ -29,6 +29,12 @@ ApplicationWindow {
     readonly property string backendError: settingsBackend !== null
                                            ? settingsBackend.errorMessage
                                            : qsTr("No settings backend was provided.")
+    property int currentCategory: 0
+    readonly property var categories: [
+        qsTr("Appearance"), qsTr("Displays"), qsTr("Sound"),
+        qsTr("Network"), qsTr("Bluetooth"), qsTr("Input"),
+        qsTr("Power"), qsTr("Privacy")
+    ]
     property int materialLevel: reduceTransparency
                                 ? Tokens.materialOpaque
                                 : materialQuality === "efficient"
@@ -37,6 +43,7 @@ ApplicationWindow {
                                     ? Tokens.materialOpaque
                                     : Tokens.materialFull
 
+    ButtonGroup { id: navigationGroup }
     ButtonGroup { id: materialGroup }
 
     Rectangle {
@@ -73,17 +80,24 @@ ApplicationWindow {
                 }
 
                 Repeater {
-                    model: [
-                        qsTr("Appearance"), qsTr("Displays"), qsTr("Sound"),
-                        qsTr("Network"), qsTr("Bluetooth"), qsTr("Input"),
-                        qsTr("Power"), qsTr("Privacy")
-                    ]
+                    objectName: "settingsCategories"
+                    model: root.categories
 
                     delegate: HydrogenButton {
+                        required property int index
                         required property string modelData
+
                         text: modelData
                         Layout.fillWidth: true
                         reduceMotion: root.reduceMotion
+                        checkable: true
+                        checked: root.currentCategory === index
+                        ButtonGroup.group: navigationGroup
+                        Accessible.checked: checked
+                        Accessible.description: checked
+                                                ? qsTr("Selected settings category")
+                                                : qsTr("Settings category")
+                        onClicked: root.currentCategory = index
                     }
                 }
 
@@ -98,95 +112,129 @@ ApplicationWindow {
             materialLevel: root.materialLevel
             reduceMotion: root.reduceMotion
 
-            ColumnLayout {
+            StackLayout {
                 anchors.fill: parent
                 anchors.margins: Tokens.space8
-                spacing: Tokens.space6
+                currentIndex: root.currentCategory === 0 ? 0 : 1
 
-                SectionLabel { text: qsTr("Appearance") }
+                ColumnLayout {
+                    spacing: Tokens.space6
 
-                Text {
-                    text: qsTr("Comfort and clarity")
-                    color: Tokens.textPrimary
-                    font.pixelSize: 30
-                    font.weight: Font.DemiBold
-                }
+                    SectionLabel { text: qsTr("Appearance") }
 
-                CheckBox {
-                    id: transparencyToggle
-                    objectName: "transparencyToggle"
-                    text: qsTr("Reduce transparency")
-                    checked: root.reduceTransparency
-                    enabled: root.backendAvailable && !root.backendBusy
-                    onToggled: {
-                        if (root.settingsBackend !== null
-                                && checked !== root.settingsBackend.reduceTransparency)
-                            root.settingsBackend.setReduceTransparency(checked)
+                    Text {
+                        text: qsTr("Comfort and clarity")
+                        color: Tokens.textPrimary
+                        font.pixelSize: 30
+                        font.weight: Font.DemiBold
                     }
-                    Accessible.description: qsTr("Uses opaque surfaces and disables glass highlights")
-                }
 
-                CheckBox {
-                    id: motionToggle
-                    objectName: "motionToggle"
-                    text: qsTr("Reduce motion")
-                    checked: root.reduceMotion
-                    enabled: root.backendAvailable && !root.backendBusy
-                    onToggled: {
-                        if (root.settingsBackend !== null
-                                && checked !== root.settingsBackend.reduceMotion)
-                            root.settingsBackend.setReduceMotion(checked)
+                    CheckBox {
+                        id: transparencyToggle
+                        objectName: "transparencyToggle"
+                        text: qsTr("Reduce transparency")
+                        checked: root.reduceTransparency
+                        enabled: root.backendAvailable && !root.backendBusy
+                        onToggled: {
+                            if (root.settingsBackend !== null
+                                    && checked !== root.settingsBackend.reduceTransparency)
+                                root.settingsBackend.setReduceTransparency(checked)
+                        }
+                        Accessible.description: qsTr("Uses opaque surfaces and disables glass highlights")
                     }
-                    Accessible.description: qsTr("Disables non-essential interface animations")
-                }
 
-                GroupBox {
-                    objectName: "materialQualityGroup"
-                    title: qsTr("Material quality")
-                    Layout.fillWidth: true
-                    enabled: root.backendAvailable && !root.backendBusy
-                             && !root.reduceTransparency
+                    CheckBox {
+                        id: motionToggle
+                        objectName: "motionToggle"
+                        text: qsTr("Reduce motion")
+                        checked: root.reduceMotion
+                        enabled: root.backendAvailable && !root.backendBusy
+                        onToggled: {
+                            if (root.settingsBackend !== null
+                                    && checked !== root.settingsBackend.reduceMotion)
+                                root.settingsBackend.setReduceMotion(checked)
+                        }
+                        Accessible.description: qsTr("Disables non-essential interface animations")
+                    }
 
-                    RowLayout {
-                        anchors.fill: parent
+                    GroupBox {
+                        objectName: "materialQualityGroup"
+                        title: qsTr("Material quality")
+                        Layout.fillWidth: true
+                        enabled: root.backendAvailable && !root.backendBusy
+                                 && !root.reduceTransparency
 
-                        RadioButton {
-                            objectName: "materialFull"
-                            text: qsTr("Full")
-                            ButtonGroup.group: materialGroup
-                            checked: root.materialQuality === "full"
-                            onClicked: root.settingsBackend.setMaterialQuality("full")
+                        RowLayout {
+                            anchors.fill: parent
+
+                            RadioButton {
+                                objectName: "materialFull"
+                                text: qsTr("Full")
+                                ButtonGroup.group: materialGroup
+                                checked: root.materialQuality === "full"
+                                onClicked: root.settingsBackend.setMaterialQuality("full")
+                            }
+                            RadioButton {
+                                objectName: "materialEfficient"
+                                text: qsTr("Efficient")
+                                ButtonGroup.group: materialGroup
+                                checked: root.materialQuality === "efficient"
+                                onClicked: root.settingsBackend.setMaterialQuality("efficient")
+                            }
+                            RadioButton {
+                                objectName: "materialOpaque"
+                                text: qsTr("Opaque")
+                                ButtonGroup.group: materialGroup
+                                checked: root.materialQuality === "opaque"
+                                onClicked: root.settingsBackend.setMaterialQuality("opaque")
+                            }
                         }
-                        RadioButton {
-                            objectName: "materialEfficient"
-                            text: qsTr("Efficient")
-                            ButtonGroup.group: materialGroup
-                            checked: root.materialQuality === "efficient"
-                            onClicked: root.settingsBackend.setMaterialQuality("efficient")
-                        }
-                        RadioButton {
-                            objectName: "materialOpaque"
-                            text: qsTr("Opaque")
-                            ButtonGroup.group: materialGroup
-                            checked: root.materialQuality === "opaque"
-                            onClicked: root.settingsBackend.setMaterialQuality("opaque")
-                        }
+                    }
+
+                    Item { Layout.fillHeight: true }
+
+                    Text {
+                        objectName: "backendStatus"
+                        Layout.fillWidth: true
+                        text: root.backendAvailable
+                              ? qsTr("Changes are saved automatically.")
+                              : qsTr("Settings service unavailable. %1").arg(root.backendError)
+                        wrapMode: Text.WordWrap
+                        color: root.backendAvailable ? Tokens.textSecondary : Tokens.focus
+                        font.pixelSize: 13
+                        Accessible.role: Accessible.StaticText
+                        Accessible.name: text
                     }
                 }
 
-                Item { Layout.fillHeight: true }
+                ColumnLayout {
+                    spacing: Tokens.space6
 
-                Text {
-                    objectName: "backendStatus"
-                    Layout.fillWidth: true
-                    text: root.backendAvailable
-                          ? qsTr("Changes are saved automatically.")
-                          : qsTr("Settings service unavailable. %1").arg(root.backendError)
-                    wrapMode: Text.WordWrap
-                    color: root.backendAvailable ? Tokens.textSecondary : Tokens.focus
-                    font.pixelSize: 13
-                    Accessible.role: Accessible.StaticText
-                    Accessible.name: text
+                    SectionLabel { text: qsTr("Settings") }
+
+                    Text {
+                        id: categoryPageTitle
+                        objectName: "categoryPageTitle"
+                        text: root.currentCategory > 0
+                              ? root.categories[root.currentCategory]
+                              : ""
+                        color: Tokens.textPrimary
+                        font.pixelSize: 30
+                        font.weight: Font.DemiBold
+                        Accessible.role: Accessible.Heading
+                        Accessible.name: text
+                    }
+
+                    Text {
+                        Layout.fillWidth: true
+                        text: qsTr("This category is part of the M2 settings roadmap. Its controls will appear here as their system integration becomes available.")
+                        wrapMode: Text.WordWrap
+                        color: Tokens.textSecondary
+                        font.pixelSize: 15
+                        lineHeight: 1.35
+                    }
+
+                    Item { Layout.fillHeight: true }
                 }
             }
         }

@@ -25,6 +25,7 @@ Button {
     background: Rectangle {
         radius: Tokens.radiusSmall
         color: control.down ? "#6631bde9"
+              : control.checked ? "#5266d7ff"
               : control.hovered ? "#4d66d7ff"
               : "#2effffff"
         border.color: control.activeFocus ? Tokens.focus : "#28ffffff"
@@ -36,4 +37,3 @@ Button {
         }
     }
 }
-
