@@ -10,7 +10,9 @@ qt_add_qml_module(hydrogen-shell
     URI Hydrogen.Shell
     VERSION 1.0
     RESOURCE_PREFIX /qt/qml
-    QML_FILES Main.qml
+    QML_FILES
+        ControlCenter.qml
+        Main.qml
 )
 
 target_link_libraries(hydrogen-shell PRIVATE
