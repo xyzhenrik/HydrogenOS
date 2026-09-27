@@ -93,6 +93,19 @@ ApplicationWindow {
                 font.pixelSize: 13
             }
 
+            HydrogenButton {
+                id: controlCenterButton
+                objectName: "controlCenterButton"
+                text: qsTr("Control Center")
+                implicitWidth: 132
+                implicitHeight: 38
+                reduceMotion: window.reduceMotion
+                Accessible.description: qsTr("Open display and accessibility controls")
+                onClicked: controlCenter.opened
+                           ? controlCenter.close()
+                           : controlCenter.open()
+            }
+
             Text {
                 text: window.clockText.length > 0
                       ? window.clockText
@@ -102,6 +115,18 @@ ApplicationWindow {
                 font.weight: Font.Medium
             }
         }
+    }
+
+    ControlCenter {
+        id: controlCenter
+        x: window.width - width - Tokens.space4
+        y: panel.y + panel.height + Tokens.space2
+        reduceMotion: window.reduceMotion
+        reduceTransparency: window.reduceTransparency
+        materialLevel: window.glassLevel
+        onReduceMotionRequested: enabled => window.reduceMotion = enabled
+        onReduceTransparencyRequested: enabled => window.reduceTransparency = enabled
+        onClosed: controlCenterButton.forceActiveFocus()
     }
 
     GlassSurface {
