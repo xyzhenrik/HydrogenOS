@@ -26,9 +26,6 @@ Popup {
     signal reduceMotionRequested(bool enabled)
     signal reduceTransparencyRequested(bool enabled)
 
-    Accessible.role: Accessible.Dialog
-    Accessible.name: qsTr("Control Center")
-
     enter: Transition {
         NumberAnimation {
             property: "opacity"
@@ -67,6 +64,8 @@ Popup {
                        ? Tokens.materialOpaque
                        : root.materialLevel
         reduceMotion: root.reduceMotion
+        Accessible.role: Accessible.Dialog
+        Accessible.name: qsTr("Control Center")
     }
 
     contentItem: ColumnLayout {

@@ -12,6 +12,7 @@ qt_add_qml_module(hydrogen-shell
     RESOURCE_PREFIX /qt/qml
     QML_FILES
         ControlCenter.qml
+        HydrogenDock.qml
         Main.qml
 )
 
