@@ -2,11 +2,13 @@
 
 qt_add_executable(tst-settings-backend
     tst_settings_backend.cpp
-    ../../settings/SettingsBackend.cpp
-    ../../settings/SettingsBackend.h
 )
-target_include_directories(tst-settings-backend PRIVATE ../../settings)
-target_link_libraries(tst-settings-backend PRIVATE Qt6::Core Qt6::DBus Qt6::Test)
+target_link_libraries(tst-settings-backend PRIVATE
+    Qt6::Core
+    Qt6::DBus
+    Qt6::Test
+    hydrogen-settings-client
+)
 
 find_program(DBUS_RUN_SESSION_EXECUTABLE dbus-run-session REQUIRED)
 add_test(

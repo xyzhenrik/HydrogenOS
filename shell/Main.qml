@@ -14,14 +14,49 @@ ApplicationWindow {
     title: qsTr("Hydrogen Shell Preview")
     color: Tokens.canvasBottom
 
-    property bool reduceMotion: false
-    property bool reduceTransparency: false
+    property var settingsBackend: null
+    readonly property bool backendConfigured: settingsBackend !== null
+    readonly property bool backendAvailable: backendConfigured
+                                             && settingsBackend.available
+    readonly property bool backendBusy: backendConfigured
+                                        && settingsBackend.busy
+    property bool reduceMotion: backendConfigured
+                                ? settingsBackend.reduceMotion
+                                : false
+    property bool reduceTransparency: backendConfigured
+                                      ? settingsBackend.reduceTransparency
+                                      : false
+    readonly property string materialQuality: backendConfigured
+                                              ? settingsBackend.materialQuality
+                                              : "full"
     property bool benchmarkMode: false
     property real benchmarkPhase: 0
     property string clockText: ""
     property int glassLevel: reduceTransparency
                              ? Tokens.materialOpaque
-                             : Tokens.materialFull
+                             : materialQuality === "efficient"
+                               ? Tokens.materialEfficient
+                               : materialQuality === "opaque"
+                                 ? Tokens.materialOpaque
+                                 : Tokens.materialFull
+
+    function requestReduceMotion(enabled) {
+        if (backendConfigured) {
+            if (backendAvailable && !backendBusy)
+                settingsBackend.setReduceMotion(enabled)
+            return
+        }
+        reduceMotion = enabled
+    }
+
+    function requestReduceTransparency(enabled) {
+        if (backendConfigured) {
+            if (backendAvailable && !backendBusy)
+                settingsBackend.setReduceTransparency(enabled)
+            return
+        }
+        reduceTransparency = enabled
+    }
 
     SequentialAnimation on benchmarkPhase {
         running: window.benchmarkMode
@@ -124,8 +159,16 @@ ApplicationWindow {
         reduceMotion: window.reduceMotion
         reduceTransparency: window.reduceTransparency
         materialLevel: window.glassLevel
-        onReduceMotionRequested: enabled => window.reduceMotion = enabled
-        onReduceTransparencyRequested: enabled => window.reduceTransparency = enabled
+        controlsEnabled: !window.backendConfigured
+                         || (window.backendAvailable && !window.backendBusy)
+        statusText: !window.backendConfigured
+                    ? qsTr("Preview controls affect this shell session only.")
+                    : window.backendAvailable
+                      ? qsTr("Changes are saved automatically.")
+                      : qsTr("Settings service unavailable. %1")
+                        .arg(window.settingsBackend.errorMessage)
+        onReduceMotionRequested: enabled => window.requestReduceMotion(enabled)
+        onReduceTransparencyRequested: enabled => window.requestReduceTransparency(enabled)
         onClosed: controlCenterButton.forceActiveFocus()
     }
 

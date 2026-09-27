@@ -5,6 +5,11 @@ boundary. The production backend talks asynchronously to the existing
 `org.hydrogen.Settings1` session-bus contract; QML tests inject an in-memory
 backend with the same properties and methods.
 
+The same `hydrogen-settings-client` adapter is linked into the shell so the
+Control Center and Settings application share one asynchronous contract without
+duplicating D-Bus logic. Deterministic visual and performance modes do not start
+the service and continue to use explicitly supplied preview values.
+
 Run the service and UI in separate terminals:
 
 ```sh

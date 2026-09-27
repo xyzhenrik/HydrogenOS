@@ -1,8 +1,11 @@
-qt_add_executable(hydrogen-settings
-    main.cpp
+add_library(hydrogen-settings-client STATIC
     SettingsBackend.cpp
     SettingsBackend.h
 )
+target_include_directories(hydrogen-settings-client PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(hydrogen-settings-client PUBLIC Qt6::Core Qt6::DBus)
+
+qt_add_executable(hydrogen-settings main.cpp)
 
 qt_add_qml_module(hydrogen-settings
     URI Hydrogen.Settings
@@ -19,6 +22,7 @@ target_link_libraries(hydrogen-settings PRIVATE
     Qt6::Quick
     Qt6::QuickControls2
     hydrogen-designplugin
+    hydrogen-settings-client
 )
 
 install(TARGETS hydrogen-settings RUNTIME DESTINATION bin)

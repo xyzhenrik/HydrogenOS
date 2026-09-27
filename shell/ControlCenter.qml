@@ -17,6 +17,8 @@ Popup {
     property bool reduceMotion: false
     property bool reduceTransparency: false
     property int materialLevel: Tokens.materialFull
+    property bool controlsEnabled: true
+    property string statusText: ""
     readonly property int transitionDuration: reduceMotion
                                               ? 0
                                               : Tokens.durationNormal
@@ -111,6 +113,7 @@ Popup {
             Layout.rightMargin: Tokens.space4
             text: qsTr("Reduce transparency")
             checked: root.reduceTransparency
+            enabled: root.controlsEnabled
             onToggled: {
                 if (checked !== root.reduceTransparency)
                     root.reduceTransparencyRequested(checked)
@@ -126,6 +129,7 @@ Popup {
             Layout.rightMargin: Tokens.space4
             text: qsTr("Reduce motion")
             checked: root.reduceMotion
+            enabled: root.controlsEnabled
             onToggled: {
                 if (checked !== root.reduceMotion)
                     root.reduceMotionRequested(checked)
@@ -140,7 +144,9 @@ Popup {
             Layout.leftMargin: Tokens.space4
             Layout.rightMargin: Tokens.space4
             Layout.bottomMargin: Tokens.space4
-            text: qsTr("System controls will arrive as their M2 integrations become available.")
+            text: root.statusText.length > 0
+                  ? root.statusText
+                  : qsTr("System controls will arrive as their M2 integrations become available.")
             wrapMode: Text.WordWrap
             color: Tokens.textSecondary
             font.pixelSize: 12

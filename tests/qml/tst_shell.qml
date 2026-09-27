@@ -13,12 +13,47 @@ TestCase {
 
     property var shellWindow: null
 
+    QtObject {
+        id: backend
+
+        property bool available: true
+        property bool busy: false
+        property string materialQuality: "full"
+        property bool reduceMotion: true
+        property bool reduceTransparency: false
+        property string errorMessage: ""
+        property int motionWrites: 0
+        property int transparencyWrites: 0
+
+        function setReduceMotion(enabled) {
+            motionWrites += 1
+            reduceMotion = enabled
+        }
+
+        function setReduceTransparency(enabled) {
+            transparencyWrites += 1
+            reduceTransparency = enabled
+        }
+
+        function reset() {
+            available = true
+            busy = false
+            materialQuality = "full"
+            reduceMotion = true
+            reduceTransparency = false
+            errorMessage = ""
+            motionWrites = 0
+            transparencyWrites = 0
+        }
+    }
+
     function init() {
+        backend.reset()
         const component = Qt.createComponent(Qt.resolvedUrl("../../shell/Main.qml"))
         compare(component.status, Component.Ready, component.errorString())
         shellWindow = component.createObject(null, {
             clockText: "09:41",
-            reduceMotion: true
+            settingsBackend: backend
         })
         verify(shellWindow !== null, component.errorString())
         shellWindow.show()
@@ -63,8 +98,12 @@ TestCase {
         mouseClick(button)
         tryCompare(center, "opened", true)
 
+        backend.materialQuality = "efficient"
+        tryCompare(shellWindow, "glassLevel", Tokens.materialEfficient)
+
         mouseClick(transparency)
         tryCompare(shellWindow, "reduceTransparency", true)
+        compare(backend.transparencyWrites, 1)
         compare(shellWindow.glassLevel, Tokens.materialOpaque)
         compare(surface.materialLevel, Tokens.materialOpaque)
         const highlight = findChild(surface, "glassHighlight")
@@ -73,6 +112,22 @@ TestCase {
 
         mouseClick(motion)
         tryCompare(shellWindow, "reduceMotion", false)
+        compare(backend.motionWrites, 1)
         compare(center.transitionDuration, Tokens.durationNormal)
+    }
+
+    function test_unavailableBackendExplainsAndDisablesControls() {
+        backend.available = false
+        backend.errorMessage = "test service stopped"
+
+        const button = findChild(shellWindow, "controlCenterButton")
+        const transparency = findChild(shellWindow, "controlCenterTransparency")
+        const motion = findChild(shellWindow, "controlCenterMotion")
+        mouseClick(button)
+
+        tryCompare(transparency, "enabled", false)
+        compare(motion.enabled, false)
+        const center = findChild(shellWindow, "controlCenter")
+        verify(center.statusText.indexOf("test service stopped") !== -1)
     }
 }
