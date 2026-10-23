@@ -1,0 +1,25 @@
+logsink syslog "sink-a\nsink-b\n"
+service bootprobe oneshot /bootprobe 100 restart=on-failure
+service handoffcheck oneshot /handoffcheck 100 restart=on-failure stdin=pipe "init handoff ok\n" bootprobe
+service stdiocheck oneshot /stdiocheck 100 restart=on-failure stdin=pipe "init stdio ok\n" stdout=capture "stdiocheck: stdout ok\n" stderr=capture "stdiocheck: stderr ok\n" bootprobe handoffcheck
+service stdiobadbind oneshot /stdiobadbind 100 restart=on-failure bootprobe handoffcheck stdiocheck
+service dupcheck oneshot /dupcheck 100 restart=on-failure stdout=capture "dupcheck: dup ok\n" bootprobe handoffcheck stdiocheck stdiobadbind
+service handlelimitcheck oneshot /handlelimitcheck 100 restart=on-failure stdout=capture "handlelimitcheck: emfile ok\n" bootprobe handoffcheck stdiocheck stdiobadbind dupcheck
+service fileoffsetcheck oneshot /fileoffsetcheck 100 restart=on-failure stdout=capture "fileoffsetcheck: offset ok\n" bootprobe handoffcheck stdiocheck stdiobadbind handlelimitcheck
+service seekcheck oneshot /seekcheck 100 restart=on-failure stdout=capture "seekcheck: seek ok\n" bootprobe handoffcheck stdiocheck stdiobadbind fileoffsetcheck
+service pollcheck oneshot /pollcheck 100 restart=on-failure stdout=capture "pollcheck: poll ok\n" bootprobe handoffcheck stdiocheck stdiobadbind seekcheck
+service pollwaitcheck oneshot /pollwaitcheck 100 restart=on-failure stdout=capture "pollwaitcheck: wait ok\n" bootprobe handoffcheck stdiocheck stdiobadbind pollcheck
+service pollmanycheck oneshot /pollmanycheck 100 restart=on-failure stdout=capture "pollmanycheck: many ok\n" bootprobe handoffcheck stdiocheck stdiobadbind pollwaitcheck
+service cwdcheck oneshot /cwdcheck 100 restart=on-failure stdout=capture "cwdcheck: cwd ok\n" bootprobe handoffcheck stdiocheck stdiobadbind pollmanycheck
+service logproducer_a oneshot /logproducer_a 100 restart=on-failure stdout=channel logbus bootprobe handoffcheck stdiocheck stdiobadbind
+service logproducer_b oneshot /logproducer_b 100 restart=on-failure stdout=channel logbus bootprobe handoffcheck stdiocheck stdiobadbind logproducer_a
+service logcollector oneshot /logcollector 100 restart=on-failure stdin=channel logbus stdout=capture "logcollector: multiwriter ok\n" bootprobe handoffcheck stdiocheck stdiobadbind logproducer_b
+service logsink_writer_a oneshot /logsink_writer_a 100 restart=on-failure stdout=logsink syslog bootprobe handoffcheck stdiocheck stdiobadbind logcollector
+service logsink_writer_b oneshot /logsink_writer_b 100 restart=on-failure stdout=logsink syslog bootprobe handoffcheck stdiocheck stdiobadbind logcollector logsink_writer_a
+service teewriter oneshot /teewriter 100 restart=on-failure stdout=tee teebus bootprobe handoffcheck stdiocheck stdiobadbind logcollector logsink_writer_b
+service teereader_a oneshot /teereader_a 100 restart=on-failure stdin=tee teebus stdout=capture "teereader_a: tee ok\n" bootprobe handoffcheck stdiocheck stdiobadbind logcollector teewriter
+service teereader_b oneshot /teereader_b 100 restart=on-failure stdin=tee teebus stdout=capture "teereader_b: tee ok\n" bootprobe handoffcheck stdiocheck stdiobadbind logcollector teewriter
+service pipeproducer oneshot /pipeproducer 100 restart=on-failure stdout=channel bootseq bootprobe handoffcheck stdiocheck stdiobadbind logcollector teereader_b
+service pipeconsumer oneshot /pipeconsumer 100 restart=on-failure stdin=channel bootseq stdout=capture "pipeconsumer: channel ok\n" bootprobe handoffcheck stdiocheck stdiobadbind logcollector pipeproducer
+service stdionullcheck oneshot /stdionullcheck 100 restart=on-failure stdin=null stdout=null stderr=null bootprobe handoffcheck stdiocheck stdiobadbind pipeconsumer
+service shell supervised /shell 100 restart=always stdin=inherit stdout=inherit stderr=inherit bootprobe handoffcheck stdiocheck stdiobadbind dupcheck handlelimitcheck fileoffsetcheck seekcheck pollcheck pollwaitcheck pollmanycheck cwdcheck logcollector pipeconsumer stdionullcheck

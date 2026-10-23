@@ -1,0 +1,680 @@
+#include "syscall.h"
+
+#include "console.h"
+#include "core/time.h"
+#include "fs/vfs.h"
+#include "higher_half.h"
+#include "paging.h"
+#include "pmm.h"
+#include "process.h"
+#include "user_exec.h"
+#include "tty.h"
+#include "stat.h"
+#include "dirent.h"
+
+#include <stddef.h>
+#include <stdint.h>
+
+#include "errno.h"
+
+static uintptr_t user_return_rip = 0;
+static uintptr_t user_return_rsp = 0;
+
+static int poll_events_valid(uint32_t events) {
+    uint32_t known = PROCESS_POLL_READ | PROCESS_POLL_WRITE | PROCESS_POLL_HUP;
+    return (events & ~known) == 0;
+}
+
+static int user_range_ok(const void *ptr, size_t len) {
+    if (!ptr) return 0;
+    uintptr_t start = (uintptr_t)ptr;
+    if (start < 0x1000) return 0;
+    if (len == 0) return 1;
+    uintptr_t end = start + len - 1;
+    if (end < start) return 0;
+    if (end >= (uintptr_t)KERNEL_VMA_BASE) return 0;
+    return 1;
+}
+
+static int user_str_copy(const char *uptr, char *dst, size_t dst_sz) {
+    if (!dst || dst_sz == 0) return -1;
+    if (!user_range_ok(uptr, 1)) return -1;
+    for (size_t i = 0; i < dst_sz - 1; ++i) {
+        if (!user_range_ok(uptr + i, 1)) return -1;
+        char c = uptr[i];
+        dst[i] = c;
+        if (c == 0) {
+            return 0;
+        }
+    }
+    dst[dst_sz - 1] = 0;
+    return -1;
+}
+
+/* Minimal string helpers for syscall.c (kernel has no string.h) */
+static size_t k_strlen(const char *s) {
+    size_t n = 0;
+    while (s[n]) n++;
+    return n;
+}
+
+static int copy_resolved_user_path(process_t *proc, const char *uptr,
+                                   char *dst, size_t dst_sz) {
+    char raw[PROCESS_CWD_CAP];
+    if (!proc || !uptr || !dst || dst_sz == 0)
+        return -1;
+    if (user_str_copy(uptr, raw, sizeof(raw)) != 0)
+        return -1;
+    if (process_resolve_path(proc, raw, dst, (uint32_t)dst_sz) != 0)
+        return -1;
+    return 0;
+}
+
+void syscall_set_user_return(uintptr_t rip, uintptr_t rsp) {
+    user_return_rip = rip;
+    user_return_rsp = rsp;
+}
+
+static void user_return_to_kernel(regs_t *r, uint64_t status) {
+    if (!r || user_return_rip == 0 || user_return_rsp == 0)
+        return;
+    process_set_current(process_kernel());
+    paging_switch(paging_kernel_pml4());
+    r->rdi = status;
+    r->rip = user_return_rip;
+    r->cs = 0x08;
+    r->rflags = 0x202;
+    r->rsp = user_return_rsp;
+    r->ss = 0x10;
+    user_return_rip = 0;
+    user_return_rsp = 0;
+}
+
+uint64_t syscall_handle(regs_t *r) {
+    switch (r->rax) {
+    case SYS_EXIT: {
+        process_t *exiting = process_current();
+        process_mark_exited(exiting, (int)r->rdi);
+        if (!process_has_runnable_other_than(exiting)) {
+            user_return_to_kernel(r, r->rdi);
+            process_destroy(exiting);
+        }
+        return 0;
+    }
+    case SYS_PUTCHAR:
+        tty_putc((char)r->rdi);
+        return 0;
+    case SYS_WRITE: {
+        int fd = (int)r->rdi;
+        const char *buf = (const char *)(uintptr_t)r->rsi;
+        size_t len = (size_t)r->rdx;
+        process_t *proc = process_current();
+        if (!buf || len == 0)
+            return 0;
+        if (!user_range_ok(buf, len))
+            return (uint64_t)-EFAULT;
+        if (fd < 0 || fd == 0)
+            return (uint64_t)-EBADF;
+        uint32_t wrote = 0;
+        int rc = process_fd_write(proc, fd, (const uint8_t *)buf,
+                                  (uint32_t)len, &wrote);
+        if (rc == 1) {
+            if (!process_has_runnable_other_than(proc)) {
+                do {
+                    __asm__ volatile("sti\n\thlt\n\tcli");
+                    rc = process_fd_write(proc, fd, (const uint8_t *)buf,
+                                          (uint32_t)len, &wrote);
+                } while (rc == 1);
+            } else if (process_begin_fd_write_wait(proc, fd) == 0) {
+                return 0;
+            } else {
+                return (uint64_t)-EIO;
+            }
+        }
+        if (rc == -2)
+            return (uint64_t)-EPIPE;
+        if (rc != 0)
+            return (uint64_t)-EBADF;
+        return wrote;
+    }
+    case SYS_READ: {
+        int fd = (int)r->rdi;
+        char *buf = (char *)(uintptr_t)r->rsi;
+        size_t len = (size_t)r->rdx;
+        process_t *proc = process_current();
+        if (!buf || len == 0)
+            return 0;
+        if (!user_range_ok(buf, len))
+            return (uint64_t)-EFAULT;
+        if (fd < 0 || fd == 1 || fd == 2)
+            return (uint64_t)-EBADF;
+        uint32_t got = 0;
+        int rc = process_fd_read(proc, fd, (uint8_t *)buf, (uint32_t)len, &got);
+        if (rc == 1) {
+            if (!process_has_runnable_other_than(proc)) {
+                do {
+                    __asm__ volatile("sti\n\thlt\n\tcli");
+                    rc = process_fd_read(proc, fd, (uint8_t *)buf,
+                                         (uint32_t)len, &got);
+                } while (rc == 1);
+                if (rc != 0)
+                    return (uint64_t)-EIO;
+                return got;
+            }
+            if (process_begin_fd_read_wait(proc, fd) != 0)
+                return (uint64_t)-EIO;
+            return 0;
+        }
+        if (rc != 0)
+            return (uint64_t)-EIO;
+        return got;
+    }
+    case SYS_OPEN: {
+        const char *path = (const char *)(uintptr_t)r->rdi;
+        if (!path)
+            return (uint64_t)-EFAULT;
+        if (!vfs_is_ready())
+            return (uint64_t)-ENOENT;
+        process_t *proc = process_current();
+        char kpath[PROCESS_HANDLE_PATH_CAP];
+        if (copy_resolved_user_path(proc, path, kpath, sizeof(kpath)) != 0)
+            return (uint64_t)-EFAULT;
+        int handle = process_handle_open_file(proc, kpath);
+        if (handle == PROCESS_RESOURCE_NO_HANDLE_SLOT)
+            return (uint64_t)-EMFILE;
+        if (handle < 0)
+            return (uint64_t)-ENOENT;
+        return (uint64_t)(handle + 3);
+    }
+    case SYS_CLOSE: {
+        int fd = (int)r->rdi;
+        process_t *proc = process_current();
+        if (fd >= 0 && fd < 3) {
+            if (process_stdio_close(proc, fd) == 0)
+                return 0;
+            return (uint64_t)-EBADF;
+        }
+        if (fd < 3)
+            return (uint64_t)-EBADF;
+        int handle = fd - 3;
+        if (process_handle_close(proc, handle) != 0)
+            return (uint64_t)-EBADF;
+        return 0;
+    }
+    case SYS_LSEEK: {
+        int fd = (int)r->rdi;
+        int64_t off = (int64_t)r->rsi;
+        int whence = (int)r->rdx;
+        process_t *proc = process_current();
+        uint64_t pos = 0;
+        int rc = process_fd_seek(proc, fd, off, whence, &pos);
+        if (rc == -1)
+            return (uint64_t)-EBADF;
+        if (rc == -2)
+            return (uint64_t)-ESPIPE;
+        if (rc == -3)
+            return (uint64_t)-EINVAL;
+        return pos;
+    }
+    case SYS_POLL: {
+        int fd = (int)r->rdi;
+        uint32_t events = (uint32_t)r->rsi;
+        process_t *proc = process_current();
+        uint32_t ready = 0;
+        if (!poll_events_valid(events)) {
+            return (uint64_t)-EINVAL;
+        }
+        if (process_fd_poll(proc, fd, events, &ready) != 0)
+            return (uint64_t)-EBADF;
+        return ready;
+    }
+    case SYS_POLL_WAIT: {
+        int fd = (int)r->rdi;
+        uint32_t events = (uint32_t)r->rsi;
+        int64_t timeout_ms = (int64_t)r->rdx;
+        process_t *proc = process_current();
+        uint32_t ready = 0;
+        uint64_t start = 0;
+
+        if (!poll_events_valid(events)) {
+            return (uint64_t)-EINVAL;
+        }
+        if (timeout_ms < -1) {
+            return (uint64_t)-EINVAL;
+        }
+        if (process_fd_poll(proc, fd, events, &ready) != 0) {
+            return (uint64_t)-EBADF;
+        }
+        if (ready != 0 || timeout_ms == 0) {
+            return ready;
+        }
+
+        if (!process_has_runnable_other_than(proc)) {
+            start = time_ms();
+            do {
+                __asm__ volatile("sti\n\thlt\n\tcli");
+                if (process_fd_poll(proc, fd, events, &ready) != 0) {
+                    return (uint64_t)-EBADF;
+                }
+                if (ready != 0) {
+                    return ready;
+                }
+            } while (timeout_ms == -1 ||
+                     (time_ms() - start) < (uint64_t)timeout_ms);
+            return 0;
+        }
+
+        if (process_begin_fd_poll_wait(proc, fd, events, timeout_ms) != 0) {
+            return (uint64_t)-EIO;
+        }
+        return 0;
+    }
+    case SYS_POLL_MANY: {
+        process_poll_fd_t *fds = (process_poll_fd_t *)(uintptr_t)r->rdi;
+        uint32_t count = (uint32_t)r->rsi;
+        int64_t timeout_ms = (int64_t)r->rdx;
+        process_t *proc = process_current();
+        uint32_t ready_count = 0;
+        uint64_t start = 0;
+        int rc;
+
+        if (timeout_ms < -1) {
+            return (uint64_t)-EINVAL;
+        }
+        if (count == 0 || count > PROCESS_POLL_MAX_FDS) {
+            return (uint64_t)-EINVAL;
+        }
+        if (!user_range_ok(fds, sizeof(process_poll_fd_t) * count)) {
+            return (uint64_t)-EFAULT;
+        }
+
+        rc = process_poll_many(proc, fds, count, &ready_count);
+        if (rc == -2) {
+            return (uint64_t)-EINVAL;
+        }
+        if (rc != 0) {
+            return (uint64_t)-EBADF;
+        }
+        if (ready_count != 0 || timeout_ms == 0) {
+            return ready_count;
+        }
+
+        if (!process_has_runnable_other_than(proc)) {
+            start = time_ms();
+            do {
+                __asm__ volatile("sti\n\thlt\n\tcli");
+                rc = process_poll_many(proc, fds, count, &ready_count);
+                if (rc == -2) {
+                    return (uint64_t)-EINVAL;
+                }
+                if (rc != 0) {
+                    return (uint64_t)-EBADF;
+                }
+                if (ready_count != 0) {
+                    return ready_count;
+                }
+            } while (timeout_ms == -1 ||
+                     (time_ms() - start) < (uint64_t)timeout_ms);
+            return 0;
+        }
+
+        if (process_begin_poll_many_wait(proc, (uintptr_t)fds, count, timeout_ms) != 0) {
+            return (uint64_t)-EIO;
+        }
+        return 0;
+    }
+    case SYS_SPAWN: {
+        const char *path = (const char *)(uintptr_t)r->rdi;
+        process_t *proc = process_current();
+        if (!path)
+            return (uint64_t)-EFAULT;
+        char kpath[PROCESS_CWD_CAP];
+        if (copy_resolved_user_path(proc, path, kpath, sizeof(kpath)) != 0)
+            return (uint64_t)-EFAULT;
+        uint64_t pid = 0;
+        int rc = user_spawn_from_vfs(kpath, r, &pid);
+        if (rc != 0)
+            return (uint64_t)-ENOENT;
+        return pid;
+    }
+    case SYS_SPAWN_WITH_STDIO: {
+        const char *path = (const char *)(uintptr_t)r->rdi;
+        int stdin_fd = (int)r->rsi;
+        int stdout_fd = (int)r->rdx;
+        int stderr_fd = (int)r->r10;
+        process_t *proc = process_current();
+        if (!path)
+            return (uint64_t)-EFAULT;
+        char kpath[PROCESS_CWD_CAP];
+        if (copy_resolved_user_path(proc, path, kpath, sizeof(kpath)) != 0)
+            return (uint64_t)-EFAULT;
+        uint64_t pid = 0;
+        int rc = user_spawn_with_stdio_from_vfs(kpath, r, &pid,
+                                                stdin_fd, stdout_fd, stderr_fd);
+        if (rc != 0)
+            return (uint64_t)-EBADF;
+        return pid;
+    }
+    case SYS_WAIT: {
+        uint32_t pid = (uint32_t)r->rdi;
+        int *status_ptr = (int *)(uintptr_t)r->rsi;
+        int status = 0;
+        process_t *proc = process_current();
+        if (pid == 0)
+            return (uint64_t)-EINVAL;
+        if (status_ptr && !user_range_ok(status_ptr, sizeof(int)))
+            return (uint64_t)-EFAULT;
+        int rc = process_wait(proc, pid, &status);
+        if (rc < 0)
+            return (uint64_t)-ENOENT;
+        if (rc == 0) {
+            if (status_ptr)
+                *status_ptr = status;
+            return pid;
+        }
+        if (process_begin_wait(proc, pid, (uintptr_t)status_ptr) != 0)
+            return (uint64_t)-EINVAL;
+        return 0;
+    }
+    case SYS_GETPID: {
+        process_t *proc = process_current();
+        return proc ? proc->pid : 0;
+    }
+    case SYS_YIELD:
+        return 0;
+    case SYS_SLEEP: {
+        uint32_t ms = (uint32_t)r->rdi;
+        process_t *proc = process_current();
+        if (ms == 0)
+            return 0;
+        /* If we are the only runnable process, busy-wait with hlt */
+        if (!process_has_runnable_other_than(proc)) {
+            uint64_t start = time_ms();
+            while ((time_ms() - start) < (uint64_t)ms) {
+                __asm__ volatile("sti\n\thlt\n\tcli");
+            }
+            return 0;
+        }
+        /* Otherwise put the process to sleep; the scheduler will wake it */
+        process_begin_sleep(proc, ms);
+        return 0;
+    }
+    case SYS_TIME_MS:
+        return (uint64_t)time_ms();
+    case SYS_TTY_SET_COLOR:
+        tty_set_color((unsigned char)(r->rdi & 0xFF), (unsigned char)(r->rsi & 0xFF));
+        return 0;
+    case SYS_PIPE: {
+        int *fds = (int *)(uintptr_t)r->rdi;
+        process_t *proc = process_current();
+        int read_handle = -1;
+        int write_handle = -1;
+        if (!fds || !user_range_ok(fds, sizeof(int) * 2))
+            return (uint64_t)-EFAULT;
+        int rc = process_handle_create_pipe(proc, &read_handle, &write_handle);
+        if (rc == PROCESS_RESOURCE_NO_HANDLE_SLOT)
+            return (uint64_t)-EMFILE;
+        if (rc != 0)
+            return (uint64_t)-EIO;
+        fds[0] = read_handle + 3;
+        fds[1] = write_handle + 3;
+        return 0;
+    }
+    case SYS_HANDLE_SET_INHERIT: {
+        int fd = (int)r->rdi;
+        int inherit = (int)r->rsi;
+        process_t *proc = process_current();
+        if (process_fd_set_inherit(proc, fd, inherit != 0) != 0)
+            return (uint64_t)-EBADF;
+        return 0;
+    }
+    case SYS_DUP: {
+        process_t *proc = process_current();
+        int fd = (int)r->rdi;
+        int rc = process_dup_fd(proc, fd);
+        if (rc == -1)
+            return (uint64_t)-EBADF;
+        if (rc == -2)
+            return (uint64_t)-EMFILE;
+        return (uint64_t)rc;
+    }
+    case SYS_DUP2: {
+        process_t *proc = process_current();
+        int src_fd = (int)r->rdi;
+        int dst_fd = (int)r->rsi;
+        int rc = process_dup2_fd(proc, src_fd, dst_fd);
+        if (rc < 0)
+            return (uint64_t)-EBADF;
+        return (uint64_t)rc;
+    }
+    case SYS_DUP3: {
+        process_t *proc = process_current();
+        int src_fd = (int)r->rdi;
+        int dst_fd = (int)r->rsi;
+        uint32_t flags = (uint32_t)r->rdx;
+        int rc = process_dup3_fd(proc, src_fd, dst_fd, flags);
+        if (rc == -1)
+            return (uint64_t)-EBADF;
+        if (rc == -2)
+            return (uint64_t)-EINVAL;
+        return (uint64_t)rc;
+    }
+    case SYS_SET_PRIORITY: {
+        int prio = (int)r->rdi;
+        process_t *proc = process_current();
+        if (prio < PROCESS_PRIO_IDLE || prio > PROCESS_PRIO_RT)
+            return (uint64_t)-EINVAL;
+        process_set_priority(proc, (uint8_t)prio);
+        return 0;
+    }
+    case SYS_STAT: {
+        const char *path = (const char *)(uintptr_t)r->rdi;
+        hydrogen_stat_t *buf = (hydrogen_stat_t *)(uintptr_t)r->rsi;
+        process_t *proc = process_current();
+        char kpath[PROCESS_CWD_CAP];
+        if (!path)
+            return (uint64_t)-EFAULT;
+        if (copy_resolved_user_path(proc, path, kpath, sizeof(kpath)) != 0)
+            return (uint64_t)-EFAULT;
+        if (!buf || !user_range_ok(buf, sizeof(hydrogen_stat_t)))
+            return (uint64_t)-EFAULT;
+        if (!vfs_is_ready())
+            return (uint64_t)-ENOENT;
+        hydrogen_stat_t kst;
+        if (vfs_stat_full(kpath, &kst) != 0)
+            return (uint64_t)-ENOENT;
+        *buf = kst;
+        return 0;
+    }
+    case SYS_FSTAT: {
+        int fd = (int)r->rdi;
+        hydrogen_stat_t *buf = (hydrogen_stat_t *)(uintptr_t)r->rsi;
+        process_t *proc = process_current();
+        if (!buf || !user_range_ok(buf, sizeof(hydrogen_stat_t)))
+            return (uint64_t)-EFAULT;
+        if (!vfs_is_ready())
+            return (uint64_t)-ENOENT;
+        if (fd < 3)
+            return (uint64_t)-EBADF;
+        int handle = fd - 3;
+        if (handle < 0 || handle >= PROCESS_MAX_HANDLE)
+            return (uint64_t)-EBADF;
+        process_handle_entry_t *he = &proc->handles[handle];
+        if (!he->used || he->type != PROCESS_HANDLE_FILE)
+            return (uint64_t)-EBADF;
+        const char *fpath = he->resource.file->path;
+        hydrogen_stat_t kst;
+        if (vfs_stat_full(fpath, &kst) != 0)
+            return (uint64_t)-ENOENT;
+        *buf = kst;
+        return 0;
+    }
+    case SYS_READDIR: {
+        const char *path = (const char *)(uintptr_t)r->rdi;
+        int pos = (int)r->rsi;
+        hydrogen_dirent_t *buf = (hydrogen_dirent_t *)(uintptr_t)r->rdx;
+        process_t *proc = process_current();
+        char kpath[PROCESS_CWD_CAP];
+        if (!path)
+            return (uint64_t)-EFAULT;
+        if (copy_resolved_user_path(proc, path, kpath, sizeof(kpath)) != 0)
+            return (uint64_t)-EFAULT;
+        if (!buf || !user_range_ok(buf, sizeof(hydrogen_dirent_t)))
+            return (uint64_t)-EFAULT;
+        if (!vfs_is_ready())
+            return (uint64_t)-ENOENT;
+        hydrogen_dirent_t kd;
+        int rc = vfs_readdir(kpath, &pos, &kd);
+        if (rc < 0)
+            return (uint64_t)-ENOENT;
+        if (rc == 0)
+            return 0; /* end of directory */
+        *buf = kd;
+        return 1;
+    }
+    case SYS_GETCWD: {
+        char *buf = (char *)(uintptr_t)r->rdi;
+        size_t size = (size_t)r->rsi;
+        if (!buf || size == 0)
+            return (uint64_t)-EINVAL;
+        if (!user_range_ok(buf, size))
+            return (uint64_t)-EFAULT;
+        process_t *proc = process_current();
+        size_t cwd_len = k_strlen(proc->cwd) + 1;
+        if (cwd_len > size)
+            return (uint64_t)-ERANGE;
+        for (size_t i = 0; i < cwd_len; i++)
+            buf[i] = proc->cwd[i];
+        return 0;
+    }
+    case SYS_CHDIR: {
+        const char *path = (const char *)(uintptr_t)r->rdi;
+        process_t *proc = process_current();
+        if (!path)
+            return (uint64_t)-EFAULT;
+        char newcwd[PROCESS_CWD_CAP];
+        if (copy_resolved_user_path(proc, path, newcwd, sizeof(newcwd)) != 0)
+            return (uint64_t)-EFAULT;
+        if (!vfs_is_ready())
+            return (uint64_t)-ENOENT;
+        vfs_stat_t st;
+        if (vfs_stat(newcwd, &st) != 0)
+            return (uint64_t)-ENOENT;
+        if (st.type != 2)
+            return (uint64_t)-ENOTDIR;
+        for (size_t i = 0; i < sizeof(proc->cwd); ++i) {
+            proc->cwd[i] = newcwd[i];
+            if (newcwd[i] == 0) {
+                break;
+            }
+        }
+        proc->cwd[sizeof(proc->cwd) - 1] = 0;
+        return 0;
+    }
+    case SYS_MKDIR: {
+        const char *path = (const char *)(uintptr_t)r->rdi;
+        process_t *proc = process_current();
+        if (!path)
+            return (uint64_t)-EFAULT;
+        char kpath[PROCESS_CWD_CAP];
+        if (copy_resolved_user_path(proc, path, kpath, sizeof(kpath)) != 0)
+            return (uint64_t)-EFAULT;
+        if (!vfs_is_ready())
+            return (uint64_t)-EIO;
+        int rc = vfs_mkdir(kpath);
+        if (rc == -17)
+            return (uint64_t)-EEXIST;
+        if (rc != 0)
+            return (uint64_t)-EIO;
+        return 0;
+    }
+    case SYS_UNLINK: {
+        const char *path = (const char *)(uintptr_t)r->rdi;
+        process_t *proc = process_current();
+        if (!path)
+            return (uint64_t)-EFAULT;
+        char kpath[PROCESS_CWD_CAP];
+        if (copy_resolved_user_path(proc, path, kpath, sizeof(kpath)) != 0)
+            return (uint64_t)-EFAULT;
+        if (!vfs_is_ready())
+            return (uint64_t)-EIO;
+        int rc = vfs_unlink(kpath);
+        if (rc == -2)
+            return (uint64_t)-ENOENT;
+        if (rc != 0)
+            return (uint64_t)-EIO;
+        return 0;
+    }
+    case SYS_RENAME: {
+        const char *old_path = (const char *)(uintptr_t)r->rdi;
+        const char *new_path = (const char *)(uintptr_t)r->rsi;
+        process_t *proc = process_current();
+        if (!old_path || !new_path)
+            return (uint64_t)-EFAULT;
+        char kold[PROCESS_CWD_CAP];
+        char knew[PROCESS_CWD_CAP];
+        if (copy_resolved_user_path(proc, old_path, kold, sizeof(kold)) != 0)
+            return (uint64_t)-EFAULT;
+        if (copy_resolved_user_path(proc, new_path, knew, sizeof(knew)) != 0)
+            return (uint64_t)-EFAULT;
+        if (!vfs_is_ready())
+            return (uint64_t)-EIO;
+        int rc = vfs_rename(kold, knew);
+        if (rc == -2)
+            return (uint64_t)-ENOENT;
+        if (rc != 0)
+            return (uint64_t)-EIO;
+        return 0;
+    }
+    case SYS_WRITEF: {
+        const char *path = (const char *)(uintptr_t)r->rdi;
+        const uint8_t *data = (const uint8_t *)(uintptr_t)r->rsi;
+        uint32_t size = (uint32_t)r->rdx;
+        process_t *proc = process_current();
+        if (!path)
+            return (uint64_t)-EFAULT;
+        char kpath[PROCESS_CWD_CAP];
+        if (copy_resolved_user_path(proc, path, kpath, sizeof(kpath)) != 0)
+            return (uint64_t)-EFAULT;
+        if (size > 0 && !user_range_ok(data, size))
+            return (uint64_t)-EFAULT;
+        if (!vfs_is_ready())
+            return (uint64_t)-EIO;
+        int rc = vfs_write_file(kpath, data, size);
+        if (rc == -17)
+            return (uint64_t)-EEXIST;
+        if (rc != 0)
+            return (uint64_t)-EIO;
+        return 0;
+    }
+    case SYS_MMAP: {
+        uintptr_t addr = (uintptr_t)r->rdi;
+        size_t len = (size_t)r->rsi;
+        /* Simple anonymous mapping (brk-like) */
+        if (len == 0) return (uintptr_t)-EINVAL;
+        len = (len + 4095) & ~4095ULL;
+        process_t *proc = process_current();
+        if (addr == 0) {
+            /* Find free spot in user address space (very simple: use brk) */
+            addr = proc->brk;
+            proc->brk += len;
+        }
+        for (uintptr_t a = addr; a < addr + len; a += 4096) {
+            uintptr_t phys = pmm_alloc_page();
+            if (!phys) return (uintptr_t)-ENOMEM;
+            paging_map_region(phys, a, 4096, PAGE_USER | PAGE_RW);
+        }
+        return addr;
+    }
+    case SYS_MUNMAP: {
+        uintptr_t addr = (uintptr_t)r->rdi;
+        size_t len = (size_t)r->rsi;
+        if (len == 0) return (uint64_t)-EINVAL;
+        len = (len + 4095) & ~4095ULL;
+        paging_unmap_region(addr, len);
+        return 0;
+    }
+    default:
+        return (uint64_t)-1;
+    }
+}

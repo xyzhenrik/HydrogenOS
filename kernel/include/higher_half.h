@@ -1,0 +1,3 @@
+#pragma once
+
+#define KERNEL_VMA_BASE 0xFFFF800000000000ULL
