@@ -64,6 +64,7 @@
 #define SYS_LINK 63
 #define SYS_SYMLINK 64
 #define SYS_READLINK 65
+#define SYS_TRUNCATE 80
 
 #define PRIO_IDLE   0
 #define PRIO_NORMAL 1
@@ -299,6 +300,12 @@ static inline long sys_symlink(const char *target, const char *link_path) {
    number of bytes copied or -errno (-22 EINVAL if path is not a symlink). */
 static inline long sys_readlink(const char *path, char *buf, unsigned long cap) {
     return syscall3(SYS_READLINK, (long)path, (long)buf, (long)cap);
+}
+
+/* Shrinks or grows the file at path to length bytes; growth leaves a hole that
+   reads as zero. Returns 0 or -errno (-27 EFBIG beyond 2 GiB - 1). */
+static inline long sys_truncate(const char *path, unsigned long length) {
+    return syscall2(SYS_TRUNCATE, (long)path, (long)length);
 }
 
 static inline long sys_writef(const char *path, const void *data, unsigned long size) {

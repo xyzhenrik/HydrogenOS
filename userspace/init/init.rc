@@ -43,4 +43,5 @@ service udptest oneshot /udptest 100 restart=on-failure stdout=capture "UDP PASS
 service faulttest oneshot /faulttest 100 restart=on-failure stdout=capture "FAULT PASS\n" bootprobe
 service schedtest oneshot /schedtest 100 restart=on-failure stdout=capture "SCHED PASS\n" bootprobe
 service sigtest oneshot /sigtest 100 restart=on-failure stdout=capture "SIG PASS\n" bootprobe
-service desktopdemo daemon /desktopdemo 100 restart=always stderr=syslog login pkgtest bootprobe handoffcheck stdiocheck stdiobadbind dupcheck handlelimitcheck fileoffsetcheck seekcheck pollcheck logcollector pipeconsumer stdionullcheck fstest desktoptest pollwaitcheck pollmanycheck dupfallbackcheck rtctest proctest dirtest mmaptest powercheck nettest shelltest cwdcheck libctest linktest logtest mprotecttest udptest faulttest schedtest sigtest
+service iotest oneshot /iotest 100 restart=on-failure stdout=capture "IO PASS\n" bootprobe
+service desktopdemo daemon /desktopdemo 100 restart=always stderr=syslog login pkgtest bootprobe handoffcheck stdiocheck stdiobadbind dupcheck handlelimitcheck fileoffsetcheck seekcheck pollcheck logcollector pipeconsumer stdionullcheck fstest desktoptest pollwaitcheck pollmanycheck dupfallbackcheck rtctest proctest dirtest mmaptest powercheck nettest shelltest cwdcheck libctest linktest logtest mprotecttest udptest faulttest schedtest sigtest iotest

@@ -215,18 +215,13 @@ static int virtio_blk_write_sectors(uint32_t lba, uint8_t count, void *buffer) {
     kfree(req);
     kfree(status);
 
-    /* Writeback-safe path: flush after a successful write when the device
-       exposes a writeback cache or supports flush. */
-    if (result == 0 && (g_vblk_flush_supported ||
-                        (g_vblk.device_cfg && g_vblk.device_cfg->writeback))) {
-        (void)virtio_blk_flush();
-    }
-
     return result;
 }
 
 int virtio_blk_flush(void) {
     if (!g_vblk_present) return -1;
+    /* A FLUSH request is only legal once the feature has been negotiated. */
+    if (!g_vblk_flush_supported) return 0;
 
     virtio_blk_req_t *req = (virtio_blk_req_t *)kalloc(sizeof(virtio_blk_req_t));
     uint8_t *status = (uint8_t *)kalloc(1);

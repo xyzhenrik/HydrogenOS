@@ -447,6 +447,61 @@ int ramfs_write_file(const char *path, const uint8_t *data, uint32_t size) {
     return ramfs_create(path, data, size);
 }
 
+/* Only runtime-created files are writable; initrd and built-in entries are not. */
+static int dyn_file_lookup(const char *path, ramfs_dyn_entry_t **out) {
+    if (!ready || !path) return -EINVAL;
+    const char *name = strip_slash(path);
+    if (!name || name[0] == 0) return -EISDIR;
+    ramfs_dyn_entry_t *e = dyn_find(name);
+    if (!e) {
+        vfs_stat_t st;
+        return ramfs_stat(path, &st) == 0 ? -EROFS : -ENOENT;
+    }
+    if (e->type != 1) return -EISDIR;
+    *out = e;
+    return 0;
+}
+
+/* Bytes beyond the old size read as zero. */
+static int dyn_resize(ramfs_dyn_entry_t *e, uint32_t new_size) {
+    if (new_size == e->size) return 0;
+    uint8_t *buf = 0;
+    if (new_size > 0) {
+        buf = (uint8_t *)kalloc(new_size);
+        if (!buf) return -ENOMEM;
+        uint32_t keep = e->size < new_size ? e->size : new_size;
+        for (uint32_t i = 0; i < keep; ++i) buf[i] = e->data[i];
+        for (uint32_t i = keep; i < new_size; ++i) buf[i] = 0;
+    }
+    if (e->data) kfree(e->data);
+    e->data = buf;
+    e->size = new_size;
+    return 0;
+}
+
+int ramfs_write_at(const char *path, uint32_t offset, const uint8_t *data, uint32_t size) {
+    if (size > 0 && !data) return -EINVAL;
+    ramfs_dyn_entry_t *e = 0;
+    int rc = dyn_file_lookup(path, &e);
+    if (rc != 0) return rc;
+    if (size == 0) return 0;
+    if (size > UINT32_MAX - offset) return -EFBIG;
+    uint32_t end = offset + size;
+    if (end > e->size) {
+        rc = dyn_resize(e, end);
+        if (rc != 0) return rc;
+    }
+    for (uint32_t i = 0; i < size; ++i) e->data[offset + i] = data[i];
+    return 0;
+}
+
+int ramfs_truncate(const char *path, uint32_t size) {
+    ramfs_dyn_entry_t *e = 0;
+    int rc = dyn_file_lookup(path, &e);
+    if (rc != 0) return rc;
+    return dyn_resize(e, size);
+}
+
 int ramfs_unlink(const char *path) {
     if (!ready || !path) return -1;
     const char *name = strip_slash(path);

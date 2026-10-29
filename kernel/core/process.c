@@ -2200,6 +2200,7 @@ regs_t *process_schedule(regs_t *r) {
         }
     }
 
+    vfs_writeback_tick();
     process_update_timed_waits();
 
     uint64_t *active_pml4 = prev->pml4;
@@ -2254,6 +2255,7 @@ regs_t *process_schedule(regs_t *r) {
         }
         /* sti directly followed by hlt cannot lose a wakeup interrupt. */
         __asm__ volatile("sti\n\thlt\n\tcli");
+        vfs_writeback_tick();
         process_update_timed_waits();
     }
 }

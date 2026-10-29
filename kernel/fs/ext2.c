@@ -15,6 +15,11 @@
  * below need no locking. Metadata updates are ordered so that an I/O error
  * in the middle of an operation can leak blocks or inodes but never leaves
  * a directory entry pointing at an unallocated or uninitialised inode.
+ *
+ * Namespace operations and whole-file writes return only after the block
+ * cache has been synced. Positioned writes and truncation are write-back:
+ * they are durable once the cache's periodic flush, ext2_sync() or an
+ * unmount/power-off has run.
  */
 
 #define EXT2_SUPER_MAGIC          0xEF53
@@ -27,6 +32,8 @@
 #define EXT2_NDIR_BLOCKS          12
 #define EXT2_NAME_LEN             255
 #define EXT2_LINK_MAX             32000
+/* i_size is 32 bit; the large-file high word in i_dir_acl is not used. */
+#define EXT2_FILE_SIZE_MAX        0x7FFFFFFFu
 /* Targets up to the size of i_block[] live in the inode itself. */
 #define EXT2_FAST_SYMLINK_MAX     60
 
@@ -347,6 +354,10 @@ static int alloc_block(uint32_t goal_group, uint32_t *out_blk) {
         if (rc != 0) return rc;
         uint32_t n = group_block_count(g);
         for (uint32_t i = 0; i < n; ++i) {
+            if (i % 8 == 0 && bitmap_buf[i / 8] == 0xFF) {
+                i += 7;
+                continue;
+            }
             uint8_t bit = (uint8_t)(1u << (i % 8));
             if (bitmap_buf[i / 8] & bit) continue;
             bitmap_buf[i / 8] |= bit;
@@ -555,6 +566,90 @@ static int free_indirect(uint32_t blk, uint32_t level) {
         if (rc != 0) return rc;
     }
     return free_block(blk);
+}
+
+/* Free the part of the tree below indirect block blk that maps logical
+   blocks at or beyond keep. base is the logical index of the first data block
+   the tree covers. *empty tells the caller that nothing is left below blk, so
+   blk itself can go too. Every freed block, indirect ones included, is added
+   to *freed. */
+static int trim_indirect(uint32_t blk, uint32_t level, uint32_t base, uint32_t keep,
+                         uint32_t *freed, int *empty) {
+    uint32_t *table = indirect_buf[level - 1];
+    int rc = read_block(blk, table);
+    if (rc != 0) return rc;
+    uint32_t ptrs = block_size / 4;
+    uint32_t span = 1;
+    for (uint32_t l = 1; l < level; ++l) span *= ptrs;
+
+    int kept = 0;
+    int changed = 0;
+    for (uint32_t i = 0; i < ptrs && rc == 0; ++i) {
+        uint32_t child = table[i];
+        if (!child) continue;
+        uint32_t child_base = base + i * span;
+        if (child_base + span <= keep) {
+            kept = 1;
+            continue;
+        }
+        if (level > 1) {
+            int child_empty = 0;
+            rc = trim_indirect(child, level - 1, child_base, keep, freed, &child_empty);
+            if (rc != 0) break;
+            if (!child_empty) {
+                kept = 1;
+                continue;
+            }
+        }
+        rc = free_block(child);
+        if (rc != 0) break;
+        (*freed)++;
+        table[i] = 0;
+        changed = 1;
+    }
+    /* A failed pass still persists the pointers it has already released. */
+    if (changed && (kept || rc != 0)) {
+        int wr = write_block(blk, table);
+        if (rc == 0) rc = wr;
+    }
+    *empty = rc == 0 && !kept;
+    return rc;
+}
+
+/* Release every data and indirect block that maps logical block keep or
+   later and adjust i_blocks. The size is left to the caller. */
+static int inode_trim_blocks(ext2_inode_t *ino, uint32_t keep) {
+    uint32_t freed = 0;
+    int rc = 0;
+    for (uint32_t i = keep; i < EXT2_NDIR_BLOCKS && rc == 0; ++i) {
+        if (!ino->i_block[i]) continue;
+        rc = free_block(ino->i_block[i]);
+        if (rc != 0) break;
+        ino->i_block[i] = 0;
+        freed++;
+    }
+    uint32_t ptrs = block_size / 4;
+    uint32_t base = EXT2_NDIR_BLOCKS;
+    uint32_t span = ptrs;
+    for (uint32_t level = 1; level <= 3 && rc == 0; ++level) {
+        uint32_t slot = EXT2_NDIR_BLOCKS - 1 + level;
+        if (ino->i_block[slot] && base + span > keep) {
+            int empty = 0;
+            rc = trim_indirect(ino->i_block[slot], level, base, keep, &freed, &empty);
+            if (rc == 0 && empty) {
+                rc = free_block(ino->i_block[slot]);
+                if (rc == 0) {
+                    ino->i_block[slot] = 0;
+                    freed++;
+                }
+            }
+        }
+        base += span;
+        if (level < 3) span *= ptrs;
+    }
+    uint32_t sectors = freed * sectors_per_block;
+    ino->i_blocks = ino->i_blocks > sectors ? ino->i_blocks - sectors : 0;
+    return rc;
 }
 
 /* Device nodes and fast symlinks keep payload, not block numbers, in i_block. */
@@ -1184,6 +1279,111 @@ int ext2_write_file(const char *path, const uint8_t *data, uint32_t size) {
         return sync_result(rc);
     }
     return sync_result(write_inode(ino_num, &ino));
+}
+
+int ext2_write_at(const char *path, uint32_t offset, const uint8_t *data, uint32_t size) {
+    int rc = write_check(path);
+    if (rc != 0) return rc;
+    if (size > 0 && !data) return -EINVAL;
+    uint32_t ino_num = 0;
+    ext2_inode_t ino;
+    rc = resolve_path(path, &ino_num, &ino);
+    if (rc != 0) return rc;
+    if (is_dir(&ino)) return -EISDIR;
+    if (!is_file(&ino)) return -EINVAL;
+    if (size == 0) return 0;
+    if (offset > EXT2_FILE_SIZE_MAX || size > EXT2_FILE_SIZE_MAX - offset) return -EFBIG;
+
+    uint32_t goal = group_of_inode(ino_num);
+    uint32_t pos = offset;
+    const uint8_t *src = data;
+    uint32_t remaining = size;
+    while (remaining > 0) {
+        uint32_t lb = pos / block_size;
+        uint32_t block_off = pos % block_size;
+        uint32_t take = block_size - block_off;
+        if (take > remaining) take = remaining;
+
+        uint32_t blk = 0;
+        rc = inode_get_block(&ino, lb, &blk);
+        if (rc != 0) break;
+        int fresh = (blk == 0);
+        if (fresh) {
+            rc = inode_map_new_block(&ino, goal, lb, &blk);
+            if (rc != 0) break;
+        }
+        if (take == block_size) {
+            rc = write_block(blk, src);
+        } else {
+            if (fresh) {
+                buf_zero(block_buf, block_size);
+            } else {
+                rc = read_block(blk, block_buf);
+                if (rc != 0) break;
+            }
+            buf_copy(block_buf + block_off, src, take);
+            rc = write_block(blk, block_buf);
+        }
+        if (rc != 0) break;
+        pos += take;
+        src += take;
+        remaining -= take;
+    }
+
+    /* Blocks mapped so far stay referenced by the inode even if the write
+       stopped early, so the inode is written in every case. */
+    if (pos > offset) {
+        if (pos > ino.i_size) ino.i_size = pos;
+        ino.i_mtime = ino.i_ctime = fs_timestamp();
+    }
+    int inode_rc = write_inode(ino_num, &ino);
+    return rc != 0 ? rc : inode_rc;
+}
+
+/* Bytes past the end of file inside the last block must read as zero once
+   the file grows again. */
+static int zero_block_tail(const ext2_inode_t *ino, uint32_t size) {
+    uint32_t tail = size % block_size;
+    if (tail == 0) return 0;
+    uint32_t blk = 0;
+    int rc = inode_get_block(ino, size / block_size, &blk);
+    if (rc != 0 || !blk) return rc;
+    rc = read_block(blk, block_buf);
+    if (rc != 0) return rc;
+    buf_zero(block_buf + tail, block_size - tail);
+    return write_block(blk, block_buf);
+}
+
+int ext2_truncate(const char *path, uint32_t size) {
+    int rc = write_check(path);
+    if (rc != 0) return rc;
+    if (size > EXT2_FILE_SIZE_MAX) return -EFBIG;
+    uint32_t ino_num = 0;
+    ext2_inode_t ino;
+    rc = resolve_path(path, &ino_num, &ino);
+    if (rc != 0) return rc;
+    if (is_dir(&ino)) return -EISDIR;
+    if (!is_file(&ino)) return -EINVAL;
+    if (size == ino.i_size) return 0;
+
+    /* Growing only moves i_size: the new range is a hole that reads as zero. */
+    if (size < ino.i_size) {
+        rc = inode_trim_blocks(&ino, (size + block_size - 1) / block_size);
+        if (rc == 0) {
+            ino.i_size = size;
+            rc = zero_block_tail(&ino, size);
+        }
+    } else {
+        ino.i_size = size;
+    }
+    ino.i_mtime = ino.i_ctime = fs_timestamp();
+    int inode_rc = write_inode(ino_num, &ino);
+    return rc != 0 ? rc : inode_rc;
+}
+
+int ext2_sync(void) {
+    if (!mounted) return -EINVAL;
+    return block_cache_sync() == 0 ? 0 : -EIO;
 }
 
 int ext2_mkdir(const char *path) {
