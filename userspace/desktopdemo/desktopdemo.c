@@ -2,6 +2,7 @@
 #include "compositor.h"
 #include "icons.h"
 #include "syscall.h"
+#include "wallclock.h"
 
 extern void comp_text_render(Window *win, int x, int y, const char *text, uint32_t color);
 
@@ -10,6 +11,8 @@ extern void comp_text_render(Window *win, int x, int y, const char *text, uint32
 #define LINE_H    16
 #define TASKBAR_H 56
 #define MAX_APPS  8
+/* Width of TIME_FORMAT_SHORT ("Thu 29 Oct 14:05") in 8px glyphs. */
+#define CLOCK_W   (16 * 8)
 
 #define COL_ACCENT    0x00306090u
 #define COL_WIN       0x00101820u
@@ -299,15 +302,14 @@ static void draw_icon_files(Window *win, int x, int y, int s) { blit_icon(win, x
 static void draw_icon_settings(Window *win, int x, int y, int s) { blit_icon(win, x, y, icon_settings, s); }
 
 static void draw_clock(Window *win, int right_x, int y) {
-    unsigned long secs = time_ms() / 1000;
-    int hh = (int)((secs / 3600) % 24);
-    int mm = (int)((secs / 60) % 60);
-    char buf[8];
-    buf[0] = (char)('0' + hh / 10); buf[1] = (char)('0' + hh % 10);
-    buf[2] = ':';
-    buf[3] = (char)('0' + mm / 10); buf[4] = (char)('0' + mm % 10);
-    buf[5] = 0;
-    comp_text_render(win, right_x - 5 * 8, y, buf, COL_TEXT);
+    char buf[32];
+    CivilTime now;
+    if (wallclock_now(&now, 0, 0) != 0 ||
+        time_format(buf, sizeof(buf), TIME_FORMAT_SHORT, &now) < 0) {
+        unsigned long minutes = time_ms() / 60000;
+        snprintf(buf, sizeof(buf), "up %02lu:%02lu", minutes / 60, minutes % 60);
+    }
+    comp_text_render(win, right_x - (int)strlen(buf) * 8, y, buf, COL_TEXT);
 }
 
 /* ---------------- taskbar ---------------- */
@@ -463,7 +465,7 @@ static void term_execute(App *a) {
 
     if (!cmd[0]) return;
     if (str_eq(cmd, "help")) {
-        term_puts(a, "Commands: help version uptime time ls [path] cat <path> pwd cd <path>");
+        term_puts(a, "Commands: help version uptime time date ls [path] cat <path> pwd cd <path>");
         term_puts(a, "  mkdir rm touch mv cp echo clear run <path> edit [path] files");
     } else if (str_eq(cmd, "version")) {
         term_puts(a, "HydrogenOS desktop v0");
@@ -481,6 +483,14 @@ static void term_execute(App *a) {
         append_num(line, &z, (int)time_ms());
         line[z] = 0;
         term_puts(a, line);
+    } else if (str_eq(cmd, "date")) {
+        char line[48];
+        CivilTime now;
+        if (wallclock_now(&now, 0, 0) == 0 &&
+            time_format(line, sizeof(line), TIME_FORMAT_LONG, &now) > 0)
+            term_puts(a, line);
+        else
+            term_puts(a, "date: wall clock unavailable");
     } else if (str_eq(cmd, "pwd")) {
         char cwd[128];
         if (getcwd(cwd, sizeof(cwd))) term_puts(a, cwd); else term_puts(a, "pwd: failed");
@@ -1254,10 +1264,10 @@ int main(void) {
         unsigned long now_sec = time_ms() / 1000;
         if (now_sec != g_last_sec) {
             g_last_sec = now_sec;
-            fill_rect(g_bg, SW - 16 - 5 * 8 - 2, SH - TASKBAR_H + 16, 5 * 8 + 4, 20,
+            fill_rect(g_bg, SW - 16 - CLOCK_W - 2, SH - TASKBAR_H + 16, CLOCK_W + 4, 20,
                       COL_TASKBAR);
             draw_clock(g_bg, SW - 16, SH - TASKBAR_H + 20);
-            comp_damage_rect(g_bg, SW - 16 - 5 * 8 - 2, SH - TASKBAR_H + 16, 5 * 8 + 4, 20);
+            comp_damage_rect(g_bg, SW - 16 - CLOCK_W - 2, SH - TASKBAR_H + 16, CLOCK_W + 4, 20);
             dirty = 1;
         }
 
