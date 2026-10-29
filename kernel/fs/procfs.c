@@ -188,6 +188,8 @@ static const char *state_name(const process_info_t *info) {
         return "poll";
     case PROCESS_SLEEPING:
         return "sleeping";
+    case PROCESS_BLOCKED_KERNEL:
+        return "kernel-wait";
     }
     return "unknown";
 }
