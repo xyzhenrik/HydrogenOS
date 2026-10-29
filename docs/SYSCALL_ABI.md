@@ -82,16 +82,36 @@ Beispiel: `-2` entspricht `ENOENT`.
 | 21 | sys_poll | `int fd, uint32_t events` | Sofortige Readiness-Abfrage fuer einen Handle |
 | 22 | sys_poll_wait | `int fd, uint32_t events, int64_t timeout_ms` | Blockierend auf Handle-Readiness warten |
 | 23 | sys_poll_many | `struct poll_fd* fds, uint32_t count, int64_t timeout_ms` | Mehrere FDs gleichzeitig pollen/warten |
+| 52 | sys_spawn_args | `const char* path, const char* const* argv, const char* const* envp, int stdin_fd, int stdout_fd, int stderr_fd` | Prozess mit argv/envp und explizitem Child-stdio starten |
+| 53 | sys_try_wait | `int pid, int* status` | Nicht blockierend pruefen, ob ein direkter Child-Prozess beendet ist |
 
 > Weitere Syscalls werden fortlaufend ergaenzt. Neue Syscalls erhalten **neue Nummern**; bestehende Nummern werden nie umgebogen.
 > Aktuell implementiert: `sys_exit`, `sys_write`, `sys_read`, `sys_open`, `sys_close`, `sys_lseek`, `sys_spawn`, `sys_spawn_with_stdio`, `sys_wait`, `sys_getpid`, `sys_yield`, `sys_sleep`, `sys_time_ms`, `sys_tty_set_color`, `sys_pipe`, `sys_handle_set_inherit`, `sys_dup`, `sys_dup2`, `sys_dup3`, `sys_poll`, `sys_poll_wait`, `sys_poll_many` (und ein undokumentiertes `sys_putchar` fuer Debug-Ausgaben).
 > Der aktuelle Kernel behandelt `sys_wait` als blockierendes Warten auf einen direkten Child-Prozess; unbekannte oder fremde PIDs liefern `-ENOENT`.
+
+### sys_open Flags
+- `OPEN_READ (1<<0)`, `OPEN_WRITE (1<<1)`, `OPEN_CREATE (1<<2)`, `OPEN_TRUNCATE (1<<3)`, `OPEN_APPEND (1<<4)`.
+- `flags = 0` bleibt aus Kompatibilitaet gleichbedeutend mit `OPEN_READ`.
+- Mindestens `OPEN_READ` oder `OPEN_WRITE` muss gesetzt sein; `OPEN_CREATE`, `OPEN_TRUNCATE` und `OPEN_APPEND` verlangen `OPEN_WRITE`. Unbekannte Bits oder ungueltige Kombinationen liefern `-EINVAL`.
+- Ohne `OPEN_CREATE` liefert eine fehlende Datei `-ENOENT`; scheitert Anlegen oder Kuerzen, kommt `-EIO`. Die Datei wird erst veraendert, wenn Handle-Slot und Kernel-Ressourcen gesichert sind.
+- `sys_write` auf beschreibbare Dateihandles schreibt ab dem gemeinsamen Dateioffset (mit `OPEN_APPEND` immer am aktuellen Dateiende) und verlaengert die Datei bei Bedarf; Luecken lesen sich als Null-Bytes. Dateisystemfehler liefern `-EIO`.
+- Die VFS-Backends ersetzen derzeit nur ganze Dateien; ein positioniertes Schreiben ist deshalb intern ein Read-Modify-Write der kompletten Datei.
+
+### sys_spawn_args
+- Wie `sys_spawn_with_stdio` (gleiche stdio-Steuerwerte `-1/-2/-3`), zusaetzlich mit NULL-terminierten `argv`- und `envp`-Vektoren; beide duerfen `NULL` sein.
+- Der Kernel kopiert alle Strings und legt sie oben auf den initialen User-Stack des Childs. Beim Eintritt gilt `RDI = argc`, `RSI = argv`, `RDX = envp` (SysV-kompatibel, `crt0` reicht sie unveraendert an `main(int argc, char **argv, char **envp)` weiter). Prozesse ohne argv starten mit `argc = 0`, `argv = envp = NULL`.
+- Grenzen: hoechstens 64 Eintraege (argv + envp zusammen) und 3072 Bytes Stringdaten inklusive Terminatoren, sonst `-E2BIG (7)`. Ungueltige Pointer liefern `-EFAULT`, nicht ladbare Programme `-ENOENT`, unzulaessige stdio-Bindings `-EBADF`.
+
+### sys_try_wait
+- Liefert die PID und schreibt den Exit-Status nach `*status` (optional), wenn der Child-Prozess bereits beendet war, und raeumt ihn dabei wie `sys_wait` ab.
+- Liefert `0`, solange der Child-Prozess noch laeuft; unbekannte oder fremde PIDs liefern `-ENOENT`.
 
 ## Error Codes (Subset)
 Diese errno-Werte sind als Startmenge vorgesehen:
 - `EPERM (1)`
 - `ENOENT (2)`
 - `EIO (5)`
+- `E2BIG (7)`
 - `EBADF (9)`
 - `ENOMEM (12)`
 - `EACCES (13)`

@@ -23,4 +23,5 @@ service teereader_b oneshot /teereader_b 100 restart=on-failure stdin=tee teebus
 service pipeproducer oneshot /pipeproducer 100 restart=on-failure stdout=channel bootseq bootprobe handoffcheck stdiocheck stdiobadbind logcollector teereader_b
 service pipeconsumer oneshot /pipeconsumer 100 restart=on-failure stdin=channel bootseq stdout=capture "pipeconsumer: channel ok\n" bootprobe handoffcheck stdiocheck stdiobadbind logcollector pipeproducer
 service stdionullcheck oneshot /stdionullcheck 100 restart=on-failure stdin=null stdout=null stderr=null bootprobe handoffcheck stdiocheck stdiobadbind pipeconsumer
-service desktopdemo daemon /desktopdemo 100 restart=always login pkgtest bootprobe handoffcheck stdiocheck stdiobadbind dupcheck handlelimitcheck fileoffsetcheck seekcheck pollcheck logcollector pipeconsumer stdionullcheck fstest desktoptest
+service shelltest oneshot /shelltest 100 restart=on-failure stdout=capture "SHELL PASS\n" bootprobe
+service desktopdemo daemon /desktopdemo 100 restart=always login pkgtest bootprobe handoffcheck stdiocheck stdiobadbind dupcheck handlelimitcheck fileoffsetcheck seekcheck pollcheck logcollector pipeconsumer stdionullcheck fstest desktoptest shelltest

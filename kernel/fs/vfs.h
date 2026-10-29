@@ -33,3 +33,5 @@ int vfs_mkdir(const char *path);
 int vfs_unlink(const char *path);
 int vfs_rename(const char *old_path, const char *new_path);
 int vfs_write_file(const char *path, const uint8_t *data, uint32_t size);
+int vfs_write_file_at(const char *path, uint32_t offset, const uint8_t *data,
+                      uint32_t size);

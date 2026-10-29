@@ -45,6 +45,8 @@
 #define SYS_FB_CLEAR 42
 #define SYS_SYSINFO 43
 #define SYS_SET_LAYOUT 44
+#define SYS_SPAWN_ARGS 52
+#define SYS_TRY_WAIT 53
 
 #define PRIO_IDLE   0
 #define PRIO_NORMAL 1
@@ -61,6 +63,12 @@
 #define SEEK_SET 0
 #define SEEK_CUR 1
 #define SEEK_END 2
+
+#define OPEN_READ     (1u << 0)
+#define OPEN_WRITE    (1u << 1)
+#define OPEN_CREATE   (1u << 2)
+#define OPEN_TRUNCATE (1u << 3)
+#define OPEN_APPEND   (1u << 4)
 
 #define POLL_READ  (1u << 0)
 #define POLL_WRITE (1u << 1)
@@ -298,4 +306,15 @@ static inline long sys_sysinfo(sysinfo_t *out) {
 
 static inline long sys_set_layout(int layout) {
     return syscall1(SYS_SET_LAYOUT, layout);
+}
+
+static inline long sys_spawn_args(const char *path, const char *const *argv,
+                                  const char *const *envp, int stdin_fd,
+                                  int stdout_fd, int stderr_fd) {
+    return syscall6(SYS_SPAWN_ARGS, (long)path, (long)argv, (long)envp,
+                    (long)stdin_fd, (long)stdout_fd, (long)stderr_fd);
+}
+
+static inline long sys_try_wait(int pid, int *status) {
+    return syscall2(SYS_TRY_WAIT, (long)pid, (long)status);
 }

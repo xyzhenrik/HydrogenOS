@@ -47,6 +47,8 @@
 #define SYS_FB_CLEAR 42
 #define SYS_SYSINFO 43
 #define SYS_SET_LAYOUT 44
+#define SYS_SPAWN_ARGS 52
+#define SYS_TRY_WAIT 53
 #define SYS_PUTCHAR 255
 
 uint64_t syscall_handle(regs_t *r);

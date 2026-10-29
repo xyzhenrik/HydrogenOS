@@ -17,6 +17,7 @@ void fb_console_clear(void);
 #include "pmm.h"
 #include "mm/pmm.h"
 #include "process.h"
+#include "kheap.h"
 #include "user_exec.h"
 #include "tty.h"
 #include "stat.h"
@@ -67,6 +68,54 @@ static size_t k_strlen(const char *s) {
     size_t n = 0;
     while (s[n]) n++;
     return n;
+}
+
+/* Appends a NULL-terminated user string vector to args; returns 0 or -errno. */
+static int copy_user_string_vector(const char *const *uvec, spawn_args_t *args,
+                                   uint32_t *out_count) {
+    uint32_t count = 0;
+    *out_count = 0;
+    if (!uvec)
+        return 0;
+    for (;;) {
+        if (!user_range_ok(&uvec[count], sizeof(uvec[count])))
+            return -EFAULT;
+        const char *ustr = uvec[count];
+        if (!ustr)
+            break;
+        if (args->argc + args->envc + count >= SPAWN_ARGS_MAX_ENTRIES)
+            return -E2BIG;
+        for (size_t i = 0;; ++i) {
+            if (!user_range_ok(ustr + i, 1))
+                return -EFAULT;
+            if (args->bytes >= SPAWN_ARGS_MAX_BYTES)
+                return -E2BIG;
+            char c = ustr[i];
+            args->strings[args->bytes++] = c;
+            if (c == 0)
+                break;
+        }
+        count++;
+    }
+    *out_count = count;
+    return 0;
+}
+
+static int copy_user_spawn_args(const char *const *uargv,
+                                const char *const *uenvp, spawn_args_t *args) {
+    uint32_t count = 0;
+    args->argc = 0;
+    args->envc = 0;
+    args->bytes = 0;
+    int rc = copy_user_string_vector(uargv, args, &count);
+    if (rc != 0)
+        return rc;
+    args->argc = count;
+    rc = copy_user_string_vector(uenvp, args, &count);
+    if (rc != 0)
+        return rc;
+    args->envc = count;
+    return 0;
 }
 
 static int copy_resolved_user_path(process_t *proc, const char *uptr,
@@ -239,6 +288,8 @@ uint64_t syscall_handle(regs_t *r) {
         }
         if (rc == -2)
             return (uint64_t)-EPIPE;
+        if (rc == PROCESS_RESOURCE_IO_ERROR)
+            return (uint64_t)-EIO;
         if (rc != 0)
             return (uint64_t)-EBADF;
         return wrote;
@@ -277,6 +328,10 @@ uint64_t syscall_handle(regs_t *r) {
     }
     case SYS_OPEN: {
         const char *path = (const char *)(uintptr_t)r->rdi;
+        uint32_t flags = (uint32_t)r->rsi;
+        /* Flags 0 predates the OPEN_* flags and keeps meaning read-only. */
+        if (flags == 0)
+            flags = PROCESS_OPEN_READ;
         if (!path)
             return (uint64_t)-EFAULT;
         if (!vfs_is_ready())
@@ -285,9 +340,15 @@ uint64_t syscall_handle(regs_t *r) {
         char kpath[PROCESS_HANDLE_PATH_CAP];
         if (copy_resolved_user_path(proc, path, kpath, sizeof(kpath)) != 0)
             return (uint64_t)-EFAULT;
-        int handle = process_handle_open_file(proc, kpath);
+        int handle = process_handle_open_file(proc, kpath, flags);
         if (handle == PROCESS_RESOURCE_NO_HANDLE_SLOT)
             return (uint64_t)-EMFILE;
+        if (handle == PROCESS_RESOURCE_INVALID)
+            return (uint64_t)-EINVAL;
+        if (handle == PROCESS_RESOURCE_IO_ERROR)
+            return (uint64_t)-EIO;
+        if (handle == PROCESS_RESOURCE_NO_KERNEL_RESOURCE)
+            return (uint64_t)-ENOMEM;
         if (handle < 0)
             return (uint64_t)-ENOENT;
         return (uint64_t)(handle + 3);
@@ -459,6 +520,55 @@ uint64_t syscall_handle(regs_t *r) {
                                                 stdin_fd, stdout_fd, stderr_fd);
         if (rc != 0)
             return (uint64_t)-EBADF;
+        return pid;
+    }
+    case SYS_SPAWN_ARGS: {
+        const char *path = (const char *)(uintptr_t)r->rdi;
+        const char *const *argv = (const char *const *)(uintptr_t)r->rsi;
+        const char *const *envp = (const char *const *)(uintptr_t)r->rdx;
+        int stdin_fd = (int)r->r10;
+        int stdout_fd = (int)r->r8;
+        int stderr_fd = (int)r->r9;
+        process_t *proc = process_current();
+        if (!path)
+            return (uint64_t)-EFAULT;
+        char kpath[PROCESS_CWD_CAP];
+        if (copy_resolved_user_path(proc, path, kpath, sizeof(kpath)) != 0)
+            return (uint64_t)-EFAULT;
+        spawn_args_t *args = (spawn_args_t *)kalloc(sizeof(spawn_args_t));
+        if (!args)
+            return (uint64_t)-ENOMEM;
+        int rc = copy_user_spawn_args(argv, envp, args);
+        if (rc != 0) {
+            kfree(args);
+            return (uint64_t)(int64_t)rc;
+        }
+        uint64_t pid = 0;
+        rc = user_spawn_args_from_vfs(kpath, args, &pid, stdin_fd, stdout_fd,
+                                      stderr_fd);
+        kfree(args);
+        if (rc == USER_SPAWN_ERR_STDIO)
+            return (uint64_t)-EBADF;
+        if (rc != 0)
+            return (uint64_t)-ENOENT;
+        return pid;
+    }
+    case SYS_TRY_WAIT: {
+        uint32_t pid = (uint32_t)r->rdi;
+        int *status_ptr = (int *)(uintptr_t)r->rsi;
+        int status = 0;
+        process_t *proc = process_current();
+        if (pid == 0)
+            return (uint64_t)-EINVAL;
+        if (status_ptr && !user_range_ok(status_ptr, sizeof(int)))
+            return (uint64_t)-EFAULT;
+        int rc = process_wait(proc, pid, &status);
+        if (rc < 0)
+            return (uint64_t)-ENOENT;
+        if (rc > 0)
+            return 0;
+        if (status_ptr)
+            *status_ptr = status;
         return pid;
     }
     case SYS_WAIT: {

@@ -16,6 +16,18 @@ enum {
     PROCESS_HANDLE_FLAG_WRITE = 1u << 2,
 };
 
+/* Mirrors the OPEN_* flags of the sys_open ABI. */
+enum {
+    PROCESS_OPEN_READ = 1u << 0,
+    PROCESS_OPEN_WRITE = 1u << 1,
+    PROCESS_OPEN_CREATE = 1u << 2,
+    PROCESS_OPEN_TRUNCATE = 1u << 3,
+    PROCESS_OPEN_APPEND = 1u << 4,
+    PROCESS_OPEN_KNOWN_FLAGS = PROCESS_OPEN_READ | PROCESS_OPEN_WRITE |
+                               PROCESS_OPEN_CREATE | PROCESS_OPEN_TRUNCATE |
+                               PROCESS_OPEN_APPEND,
+};
+
 enum {
     PROCESS_DUP3_INHERIT = 1u << 0,
     PROCESS_DUP3_CLOSE_ON_SPAWN = 1u << 1,
@@ -59,6 +71,8 @@ enum {
     PROCESS_RESOURCE_ERR = -1,
     PROCESS_RESOURCE_NO_HANDLE_SLOT = -2,
     PROCESS_RESOURCE_NO_KERNEL_RESOURCE = -3,
+    PROCESS_RESOURCE_IO_ERROR = -4,
+    PROCESS_RESOURCE_INVALID = -5,
 };
 
 enum {
@@ -71,6 +85,7 @@ enum {
 typedef struct process_file_handle {
     uint32_t refs;
     uint32_t offset;
+    uint32_t open_flags;
     char path[PROCESS_HANDLE_PATH_CAP];
 } process_file_handle_t;
 
@@ -139,7 +154,7 @@ int process_begin_wait(process_t *waiter, uint32_t pid, uintptr_t status_ptr);
 void process_set_frame(process_t *p, const regs_t *frame);
 int process_resolve_path(const process_t *p, const char *path, char *out,
                          uint32_t out_sz);
-int process_handle_open_file(process_t *p, const char *path);
+int process_handle_open_file(process_t *p, const char *path, uint32_t flags);
 int process_handle_create_pipe(process_t *p, int *out_read_handle,
                                int *out_write_handle);
 int process_dup_fd(process_t *p, int src_fd);
@@ -181,3 +196,6 @@ void process_set_priority(process_t *p, uint8_t prio);
 void process_begin_sleep(process_t *p, uint32_t ms);
 void process_wake_sleepers(void);
 regs_t *process_schedule(regs_t *r);
+/* Non-zero while process_schedule waits for an interrupt with nothing
+ * runnable; interrupt handlers must not reschedule then. */
+int process_scheduler_idle(void);
