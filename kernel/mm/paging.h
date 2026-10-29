@@ -31,6 +31,9 @@ int paging_user_map_page(uint64_t *pml4, uintptr_t virt, uintptr_t phys,
  */
 void paging_user_protect_range(uint64_t *pml4, uintptr_t virt, size_t size_bytes,
                                uint64_t flags);
+/* Whether any page of the range is a PROT_NONE mapping of `pml4`. */
+int paging_user_range_has_prot_none(const uint64_t *pml4, uintptr_t virt,
+                                    size_t size_bytes);
 /* Unmap user pages in a range, free their frames and prune empty PTs/PDs. */
 void paging_user_unmap_range(uint64_t *pml4, uintptr_t virt, size_t size_bytes);
 

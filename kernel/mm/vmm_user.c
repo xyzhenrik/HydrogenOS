@@ -8,8 +8,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* Bounds kernel-heap use per process; adjacent regions merge, so real
- * workloads stay far below this. */
+/* Bounds kernel-heap use per process; adjacent regions with equal protection
+ * merge, but every guard page keeps its neighbours apart, so a process holds
+ * at most about half this many guarded large allocations. */
 #define VMM_USER_MAX_REGIONS 4096u
 #define VMM_USER_PROT_MASK \
     (VMM_USER_PROT_READ | VMM_USER_PROT_WRITE | VMM_USER_PROT_EXEC)

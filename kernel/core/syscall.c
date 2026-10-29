@@ -49,6 +49,10 @@ static int user_range_ok(const void *ptr, size_t len) {
     uintptr_t end = start + len - 1;
     if (end < start) return 0;
     if (end >= (uintptr_t)KERNEL_VMA_BASE) return 0;
+    /* Kernel accesses ignore page rights (CR0.WP is off), so guard pages must
+     * be refused here or a syscall buffer could run straight through them. */
+    if (paging_user_range_has_prot_none(paging_current_pml4(), start, len))
+        return 0;
     return 1;
 }
 

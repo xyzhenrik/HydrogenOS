@@ -435,6 +435,31 @@ void paging_user_protect_range(uint64_t *pml4_root, uintptr_t virt,
     }
 }
 
+int paging_user_range_has_prot_none(const uint64_t *pml4_root, uintptr_t virt,
+                                    size_t size_bytes) {
+    if (!pml4_root || size_bytes == 0 || virt >= PAGING_USER_TOP)
+        return 0;
+    uintptr_t end = virt + size_bytes;
+    if (end < virt || end > PAGING_USER_TOP)
+        end = PAGING_USER_TOP;
+
+    for (uintptr_t addr = virt & ~0xFFFULL; addr < end; addr += 0x1000) {
+        uint64_t pml4e = pml4_root[(addr >> 39) & 0x1FF];
+        if (!user_table_entry(pml4e))
+            continue;
+        uint64_t pdpte = user_table_at(pml4e)[(addr >> 30) & 0x1FF];
+        if (!user_table_entry(pdpte))
+            continue;
+        uint64_t pde = user_table_at(pdpte)[(addr >> 21) & 0x1FF];
+        if (!user_table_entry(pde))
+            continue;
+        uint64_t pte = user_table_at(pde)[(addr >> 12) & 0x1FF];
+        if ((pte & PAGE_PRESENT) && (pte & PAGE_PROT_NONE))
+            return 1;
+    }
+    return 0;
+}
+
 void paging_user_unmap_range(uint64_t *pml4_root, uintptr_t virt,
                              size_t size_bytes) {
     if (!pml4_root || pml4_root == kernel_pml4_tbl || size_bytes == 0)

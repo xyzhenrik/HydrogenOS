@@ -199,9 +199,13 @@ static void *large_alloc(size_t request) {
     BlockHeader *b = (BlockHeader *)map_pages(length + MALLOC_PAGE_SIZE);
     if (!b)
         return 0;
-    /* Without the guard the page just stays accessible; free() unmaps it
-     * either way. */
-    (void)sys_mprotect((uint8_t *)b + length, MALLOC_PAGE_SIZE, MMAP_PROT_NONE, 0);
+    /* The guard splits the mapping, which needs one more kernel region
+     * descriptor; when that is exhausted the request fails like any other
+     * out-of-memory case rather than handing out an unguarded mapping. */
+    if (sys_mprotect((uint8_t *)b + length, MALLOC_PAGE_SIZE, MMAP_PROT_NONE, 0) != 0) {
+        (void)sys_munmap(b, length + MALLOC_PAGE_SIZE);
+        return 0;
+    }
     b->prev_size = 0;
     b->size_flags = length | BLOCK_USED | BLOCK_MAPPED;
     return block_payload(b);

@@ -9,11 +9,14 @@
  * Without arguments it checks the syscall in-process and then re-spawns
  * itself once per fault case. Every fault case performs one forbidden access
  * and must be killed by the kernel (PROCESS_EXIT_FAULTED); a child that
- * survives the access exits with status 0 and fails the test.
+ * survives the access exits with status 0 and fails the test. The guard
+ * cases come in pairs: the "-edge" child touches the last legal byte and must
+ * survive, so the following child can only die because of the guard page.
  */
 
 #define PAGE_SIZE       4096ul
 #define RC_ENOMEM       (-12l)
+#define RC_EFAULT       (-14l)
 #define RC_EACCES       (-13l)
 #define RC_EINVAL       (-22l)
 #define PROT_RW         (MMAP_PROT_READ | MMAP_PROT_WRITE)
@@ -21,6 +24,11 @@
 #define EXIT_FAULTED    139
 #define SPLIT_PAGES     4200ul
 #define LARGE_REQUEST   (256ul * 1024ul)
+/* malloc prefixes each large mapping with a 16-byte header and rounds the
+ * total up to whole pages; the guard page follows. */
+#define MALLOC_HEADER   16ul
+/* Lowest page of the user stack, as set up by the process loader. */
+#define STACK_BOTTOM    0x80100000ul
 
 static const unsigned char ret_42[] = { 0xB8, 0x2A, 0x00, 0x00, 0x00, 0xC3 };
 
@@ -198,15 +206,30 @@ static int check_split_limit(void) {
     return 0;
 }
 
-/* Bounded only by the compiler's view; the real limit is the stack guard. */
-static volatile int recursion_limit = 1 << 20;
-
-static __attribute__((noinline)) int deep_recursion(int depth) {
-    volatile char frame[1024];
-    if (depth >= recursion_limit)
-        return 0;
-    frame[0] = (char)depth;
-    return deep_recursion(depth + 1) + frame[0];
+/* Syscalls act for the kernel, which ignores page rights; they must still
+ * refuse buffers that touch a PROT_NONE page instead of writing into it. */
+static int check_kernel_access(void) {
+    unsigned char *p = map_pages(2, PROT_RW);
+    if (!p || sys_mprotect(p + PAGE_SIZE, PAGE_SIZE, MMAP_PROT_NONE, 0) != 0)
+        return fail("map kernel access");
+    int fds[2];
+    if (sys_pipe(fds) != 0)
+        return fail("pipe");
+    char msg[16] = "0123456789abcdef";
+    if (write(fds[1], msg, sizeof(msg)) != (long)sizeof(msg))
+        return fail("pipe write");
+    unsigned char *straddle = p + PAGE_SIZE - 8;
+    if (read(fds[0], straddle, sizeof(msg)) != RC_EFAULT)
+        return fail("read into guard accepted");
+    if (write(fds[1], straddle, sizeof(msg)) != RC_EFAULT)
+        return fail("write from guard accepted");
+    if (read(fds[0], p + PAGE_SIZE - sizeof(msg), sizeof(msg)) != (long)sizeof(msg))
+        return fail("read below guard rejected");
+    sys_close(fds[0]);
+    sys_close(fds[1]);
+    if (sys_munmap(p, 2 * PAGE_SIZE) != 0)
+        return fail("kernel access cleanup");
+    return 0;
 }
 
 /* Performs one forbidden access and returns if the kernel allowed it. */
@@ -243,21 +266,28 @@ static int fault_case(const char *name) {
             sys_mprotect(p, PAGE_SIZE, MMAP_PROT_READ, 0) != 0)
             return 2;
         ((int (*)(void))(uintptr_t)p)();
-    } else if (name_is(name, "malloc-guard")) {
+    } else if (name_is(name, "malloc-edge") || name_is(name, "malloc-guard")) {
         p = (unsigned char *)malloc(LARGE_REQUEST);
         if (!p)
             return 2;
-        for (unsigned long i = 0; i < LARGE_REQUEST + 2 * PAGE_SIZE; i += 512)
-            p[i] = 1;
-    } else if (name_is(name, "stack-guard")) {
-        deep_recursion(0);
+        unsigned char *mapping = (unsigned char *)((uintptr_t)p & ~(PAGE_SIZE - 1));
+        unsigned char *guard = mapping +
+            ((LARGE_REQUEST + MALLOC_HEADER + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1));
+        ((volatile unsigned char *)guard)[-1] = 1;
+        if (name_is(name, "malloc-guard"))
+            ((volatile unsigned char *)guard)[PAGE_SIZE - 1] = 1;
+    } else if (name_is(name, "stack-edge") || name_is(name, "stack-guard")) {
+        volatile unsigned char *bottom = (volatile unsigned char *)STACK_BOTTOM;
+        bottom[0] = 1;
+        if (name_is(name, "stack-guard"))
+            bottom[-1] = 1;
     } else {
         return 4;
     }
     return 0;
 }
 
-static int run_fault_child(const char *name) {
+static int run_child(const char *name, int expected_status) {
     const char *argv[] = { "/mprotecttest", name, 0 };
     long pid = spawn_args("/mprotecttest", argv, 0, SPAWN_STDIO_NULL,
                           SPAWN_STDIO_NULL, SPAWN_STDIO_NULL);
@@ -266,8 +296,8 @@ static int run_fault_child(const char *name) {
     int status = -1;
     if (wait_pid((int)pid, &status) != pid)
         return fail("wait fault child");
-    if (status != EXIT_FAULTED) {
-        write(1, "MPROTECT FAIL: not killed: ", 27);
+    if (status != expected_status) {
+        write(1, "MPROTECT FAIL: unexpected status: ", 34);
         write(1, name, strlen(name));
         write(1, "\n", 1);
         return 1;
@@ -280,8 +310,10 @@ static int check_faults(void) {
         "write-readonly", "read-none", "write-none", "exec-data",
         "exec-dropped", "malloc-guard", "stack-guard",
     };
+    if (run_child("malloc-edge", 0) != 0 || run_child("stack-edge", 0) != 0)
+        return 1;
     for (unsigned i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
-        if (run_fault_child(cases[i]) != 0)
+        if (run_child(cases[i], EXIT_FAULTED) != 0)
             return 1;
     }
     return 0;
@@ -292,7 +324,8 @@ int main(int argc, char **argv) {
         return fault_case(argv[1]);
 
     if (check_errors() || check_roundtrip() || check_none_mapping() ||
-        check_exec() || check_split_limit() || check_faults())
+        check_exec() || check_kernel_access() ||
+        check_split_limit() || check_faults())
         return 1;
     write(1, "MPROTECT PASS\n", 14);
     return 0;
