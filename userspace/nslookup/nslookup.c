@@ -50,11 +50,11 @@ int main(int argc, char **argv) {
     char text[16];
 
     if (argc < 2 || argc > 3) {
-        fprintf(2, "usage: nslookup <host> [server]\n");
+        dprintf(2, "usage: nslookup <host> [server]\n");
         return 2;
     }
     if (argc == 3 && parse_ipv4(argv[2], &server) != 0) {
-        fprintf(2, "nslookup: invalid server address '%s'\n", argv[2]);
+        dprintf(2, "nslookup: invalid server address '%s'\n", argv[2]);
         return 2;
     }
 
@@ -62,7 +62,7 @@ int main(int argc, char **argv) {
     format_ipv4(text, sizeof(text), server);
     printf("Server:  %s\n", text);
     if (rc != 0) {
-        fprintf(2, "nslookup: %s: %s\n", argv[1], dns_error_text(rc));
+        dprintf(2, "nslookup: %s: %s\n", argv[1], dns_error_text(rc));
         return 1;
     }
 

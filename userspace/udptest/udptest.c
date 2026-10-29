@@ -55,7 +55,7 @@
 static unsigned int own_address;
 
 static int fail(const char *what, long value) {
-    fprintf(2, "udptest: FAIL %s (%ld)\n", what, value);
+    dprintf(2, "udptest: FAIL %s (%ld)\n", what, value);
     return 1;
 }
 
@@ -513,7 +513,7 @@ static int check_dns_wire(void) {
 
     switch (rc) {
     case 0:
-        fprintf(2, "udptest: example.com is %u.%u.%u.%u\n", address >> 24,
+        dprintf(2, "udptest: example.com is %u.%u.%u.%u\n", address >> 24,
                 (address >> 16) & 0xFF, (address >> 8) & 0xFF, address & 0xFF);
         return 0;
     case DNS_ERR_TIMEOUT:
@@ -521,11 +521,11 @@ static int check_dns_wire(void) {
     case DNS_ERR_SERVFAIL:
     case DNS_ERR_NO_ADDRESS:
     case DNS_ERR_TRUNCATED:
-        fprintf(2, "udptest: resolver answered: %s\n", dns_error_text(rc));
+        dprintf(2, "udptest: resolver answered: %s\n", dns_error_text(rc));
         return 0;
     default:
         if (network_unavailable(rc)) {
-            fprintf(2, "udptest: no usable network: %s\n", dns_error_text(rc));
+            dprintf(2, "udptest: no usable network: %s\n", dns_error_text(rc));
             return 0;
         }
         return fail("dns query", rc);
