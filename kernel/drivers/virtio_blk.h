@@ -66,3 +66,4 @@ int virtio_blk_present(void);
 uint64_t virtio_blk_capacity(void);
 int virtio_blk_read(uint32_t lba, uint8_t count, void *buffer);
 int virtio_blk_write(uint32_t lba, uint8_t count, void *buffer);
+int virtio_blk_flush(void);

@@ -11,6 +11,8 @@ static volatile uint8_t tail = 0;
 static struct mouse_packet last_pkt = {0, 0, 0};
 static int mouse_x = 0;
 static int mouse_y = 0;
+static int wheel_delta = 0;
+static int four_byte_mode = 0;
 static int bounds_w = 0;
 static int bounds_h = 0;
 
@@ -52,6 +54,12 @@ int mouse_get_pos(int *x, int *y) {
 
 uint8_t mouse_get_buttons(void) { return last_pkt.buttons; }
 
+int mouse_take_wheel(void) {
+    int w = wheel_delta;
+    wheel_delta = 0;
+    return w;
+}
+
 static inline void mouse_wait_write(void) {
     for (int i = 0; i < 100000; ++i) {
         if ((inb(0x64) & 0x02) == 0) return;
@@ -82,40 +90,59 @@ static uint8_t packet_cycle = 0;
 static uint8_t packet_bytes[3];
 
 static void mouse_handle_byte(uint8_t data) {
-    switch (packet_cycle) {
-        case 0:
-            if (data & 0x08) { // always set
-                packet_bytes[0] = data;
-                packet_cycle = 1;
-            }
-            break;
-        case 1:
-            packet_bytes[1] = data;
-            packet_cycle = 2;
-            break;
-        case 2: {
-            packet_bytes[2] = data;
-            packet_cycle = 0;
-            int8_t dx = (int8_t)packet_bytes[1];
-            int8_t dy = (int8_t)packet_bytes[2];
-            // PS/2 reports Y negative upwards; we keep dy as-is (positive up)
-            struct mouse_packet p = {
-                .dx = dx,
-                .dy = dy,
-                .buttons = (uint8_t)(packet_bytes[0] & 0x07),
-            };
-            buffer_put(p);
-            // update absolute position if bounds set
-            if (bounds_w && bounds_h) {
-                mouse_x += dx;
-                mouse_y -= dy; // PS/2 dy positive means up
-                if (mouse_x < 0) mouse_x = 0;
-                if (mouse_y < 0) mouse_y = 0;
-                if (mouse_x >= bounds_w) mouse_x = bounds_w - 1;
-                if (mouse_y >= bounds_h) mouse_y = bounds_h - 1;
-            }
-            break;
+    if (four_byte_mode && packet_cycle == 3) {
+        packet_bytes[3] = data;
+        packet_cycle = 0;
+        wheel_delta += (int8_t)(packet_bytes[3] << 4) >> 4;
+        int8_t dx = (int8_t)packet_bytes[1];
+        int8_t dy = (int8_t)packet_bytes[2];
+        struct mouse_packet p = { .dx = dx, .dy = dy,
+                                  .buttons = (uint8_t)(packet_bytes[0] & 0x07) };
+        buffer_put(p);
+        if (bounds_w && bounds_h) {
+            mouse_x += dx;
+            mouse_y -= dy;
+            if (mouse_x < 0) mouse_x = 0;
+            if (mouse_y < 0) mouse_y = 0;
+            if (mouse_x >= bounds_w) mouse_x = bounds_w - 1;
+            if (mouse_y >= bounds_h) mouse_y = bounds_h - 1;
         }
+        return;
+    }
+    if (packet_cycle == 0) {
+        if (data & 0x08) { /* sync byte */
+            packet_bytes[0] = data;
+            packet_cycle = 1;
+        }
+        return;
+    }
+    if (packet_cycle == 1) {
+        packet_bytes[1] = data;
+        packet_cycle = 2;
+        return;
+    }
+    if (four_byte_mode && packet_cycle == 2) {
+        packet_bytes[2] = data;
+        packet_cycle = 3;
+        return;
+    }
+    packet_bytes[2] = data;
+    packet_cycle = 0;
+    int8_t dx = (int8_t)packet_bytes[1];
+    int8_t dy = (int8_t)packet_bytes[2];
+    struct mouse_packet p = {
+        .dx = dx,
+        .dy = dy,
+        .buttons = (uint8_t)(packet_bytes[0] & 0x07),
+    };
+    buffer_put(p);
+    if (bounds_w && bounds_h) {
+        mouse_x += dx;
+        mouse_y -= dy;
+        if (mouse_x < 0) mouse_x = 0;
+        if (mouse_y < 0) mouse_y = 0;
+        if (mouse_x >= bounds_w) mouse_x = bounds_w - 1;
+        if (mouse_y >= bounds_h) mouse_y = bounds_h - 1;
     }
 }
 
@@ -156,8 +183,20 @@ void mouse_init(void) {
     mouse_wait_write();
     outb(0x60, status);
 
-    // Set defaults and enable streaming
-    mouse_set_sample_defaults();
+    // Reset, then try IntelliMouse (4-byte packets with wheel).
+    mouse_write(0xF6);
+    mouse_write(0xF3); mouse_write(200);
+    mouse_write(0xF3); mouse_write(100);
+    mouse_write(0xF3); mouse_write(80);
+    mouse_write(0xF2);
+    {
+        uint8_t id = 0;
+        for (int i = 0; i < 100000; ++i) {
+            if (inb(0x64) & 0x01) { id = inb(0x60); break; }
+        }
+        four_byte_mode = (id == 3) ? 1 : 0;
+    }
+    mouse_write(0xF4); // enable streaming
 
     // Reset buffers
     head = tail = 0;

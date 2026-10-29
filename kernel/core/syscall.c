@@ -1,11 +1,21 @@
 #include "syscall.h"
 
 #include "console.h"
+#include "framebuffer.h"
+#include "mouse.h"
+#include "keyboard.h"
+
+int fb_console_blit(int x, int y, int w, int h, const unsigned int *src);
+int fb_console_blit_strided(int x, int y, int w, int h, const unsigned int *src, int src_stride_bytes);
+void fb_console_set_cursor_visible(int visible);
+void fb_console_clear(void);
 #include "core/time.h"
 #include "fs/vfs.h"
+#include "fs/ext2.h"
 #include "higher_half.h"
 #include "paging.h"
 #include "pmm.h"
+#include "mm/pmm.h"
 #include "process.h"
 #include "user_exec.h"
 #include "tty.h"
@@ -17,6 +27,7 @@
 
 #include "errno.h"
 
+static process_t *bootstrap_proc = 0;
 static uintptr_t user_return_rip = 0;
 static uintptr_t user_return_rsp = 0;
 
@@ -70,6 +81,10 @@ static int copy_resolved_user_path(process_t *proc, const char *uptr,
     return 0;
 }
 
+void syscall_set_bootstrap(process_t *proc) {
+    bootstrap_proc = proc;
+}
+
 void syscall_set_user_return(uintptr_t rip, uintptr_t rsp) {
     user_return_rip = rip;
     user_return_rsp = rsp;
@@ -94,11 +109,102 @@ uint64_t syscall_handle(regs_t *r) {
     switch (r->rax) {
     case SYS_EXIT: {
         process_t *exiting = process_current();
+        int is_bootstrap = (exiting == bootstrap_proc);
         process_mark_exited(exiting, (int)r->rdi);
-        if (!process_has_runnable_other_than(exiting)) {
+        if (is_bootstrap && !process_has_runnable_other_than(exiting)) {
+            bootstrap_proc = 0;
             user_return_to_kernel(r, r->rdi);
             process_destroy(exiting);
         }
+        return 0;
+    }
+    case SYS_SET_LAYOUT: {
+        keyboard_set_layout((int)r->rdi);
+        return (uint64_t)keyboard_get_layout();
+    }
+    case SYS_SYSINFO: {
+        uint32_t *o = (uint32_t *)(uintptr_t)r->rdi;
+        if (!o || !user_range_ok(o, sizeof(uint32_t) * 9))
+            return (uint64_t)-EFAULT;
+        ext2_info_t ei;
+        int ext2_root = (ext2_is_mounted() && ext2_info(&ei) == 0);
+        o[0] = ext2_root ? 1u : 2u;
+        o[1] = ext2_root ? ei.block_size : 4096u;
+        o[2] = ext2_root ? ei.blocks : 0u;
+        o[3] = ext2_root ? ei.free_blocks : 0u;
+        o[4] = ext2_root ? ei.inodes : 0u;
+        o[5] = ext2_root ? ei.free_inodes : 0u;
+        o[6] = (uint32_t)pmm_free_page_count();
+        o[7] = 4096u;
+        o[8] = (uint32_t)pmm_total_page_count();
+        return 0;
+    }
+    case SYS_FB_CLEAR: {
+        fb_console_clear();
+        return 0;
+    }
+    case SYS_CONSOLE_CURSOR: {
+        fb_console_set_cursor_visible((int)r->rdi);
+        return 0;
+    }
+    case SYS_FB_BLIT_STRIDED: {
+        int x = (int)r->rdi;
+        int y = (int)r->rsi;
+        int w = (int)r->rdx;
+        int h = (int)r->r10;
+        const uint32_t *src = (const uint32_t *)(uintptr_t)r->r8;
+        int stride = (int)r->r9;
+        if (w <= 0 || h <= 0 || stride <= 0)
+            return (uint64_t)-EINVAL;
+        if (!src || !user_range_ok(src, (size_t)stride * (size_t)h))
+            return (uint64_t)-EFAULT;
+        if (!framebuffer.addr || framebuffer.bpp != 32)
+            return (uint64_t)-EIO;
+        if (fb_console_blit_strided(x, y, w, h, src, stride) != 0)
+            return (uint64_t)-EIO;
+        return 0;
+    }
+    case SYS_KBD_READ: {
+        int c = keyboard_read_char();
+        return (uint64_t)(int64_t)c;
+    }
+    case SYS_MOUSE_STATE: {
+        int *out = (int *)(uintptr_t)r->rdi;
+        if (!out || !user_range_ok(out, sizeof(int) * 4))
+            return (uint64_t)-EFAULT;
+        mouse_poll();
+        int mx = 0, my = 0;
+        mouse_get_pos(&mx, &my);
+        out[0] = mx;
+        out[1] = my;
+        out[2] = (int)mouse_get_buttons();
+        out[3] = mouse_take_wheel();
+        return 0;
+    }
+    case SYS_FB_INFO: {
+        uint32_t *info = (uint32_t *)(uintptr_t)r->rdi;
+        if (!info || !user_range_ok(info, sizeof(uint32_t) * 4))
+            return (uint64_t)-EFAULT;
+        info[0] = framebuffer.width;
+        info[1] = framebuffer.height;
+        info[2] = framebuffer.pitch;
+        info[3] = framebuffer.bpp;
+        return 0;
+    }
+    case SYS_FB_BLIT: {
+        int x = (int)r->rdi;
+        int y = (int)r->rsi;
+        int w = (int)r->rdx;
+        int h = (int)r->r10;
+        const uint32_t *src = (const uint32_t *)(uintptr_t)r->r8;
+        if (w <= 0 || h <= 0)
+            return (uint64_t)-EINVAL;
+        if (!src || !user_range_ok(src, (size_t)w * (size_t)h * sizeof(uint32_t)))
+            return (uint64_t)-EFAULT;
+        if (!framebuffer.addr || framebuffer.bpp != 32)
+            return (uint64_t)-EIO;
+        if (fb_console_blit(x, y, w, h, src) != 0)
+            return (uint64_t)-EIO;
         return 0;
     }
     case SYS_PUTCHAR:

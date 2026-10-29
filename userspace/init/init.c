@@ -3,6 +3,7 @@
 typedef enum init_service_type {
     INIT_SERVICE_ONESHOT = 0,
     INIT_SERVICE_SUPERVISED = 1,
+    INIT_SERVICE_DAEMON = 2,
 } init_service_type_t;
 
 typedef enum init_restart_policy {
@@ -22,14 +23,14 @@ typedef enum init_stdio_mode {
 } init_stdio_mode_t;
 
 enum {
-    INIT_MAX_SERVICES = 20,
-    INIT_MAX_CHANNELS = 8,
-    INIT_MAX_TEES = 8,
-    INIT_MAX_LOGSINKS = 8,
+    INIT_MAX_SERVICES = 48,
+    INIT_MAX_CHANNELS = 16,
+    INIT_MAX_TEES = 16,
+    INIT_MAX_LOGSINKS = 16,
     INIT_NAME_CAP = 32,
     INIT_PATH_CAP = 64,
     INIT_CHANNEL_NAME_CAP = 32,
-    INIT_CONFIG_CAP = 4096,
+    INIT_CONFIG_CAP = 16384,
     INIT_STDIO_TEXT_CAP = 128,
     INIT_STREAM_CAP = 512,
 };
@@ -1012,11 +1013,15 @@ static int parse_service_type(const char *token, init_service_type_t *out) {
         *out = INIT_SERVICE_SUPERVISED;
         return 0;
     }
+    if (str_eq(token, "daemon")) {
+        *out = INIT_SERVICE_DAEMON;
+        return 0;
+    }
     return -1;
 }
 
 static init_restart_policy_t default_restart_policy(init_service_type_t type) {
-    if (type == INIT_SERVICE_SUPERVISED) {
+    if (type == INIT_SERVICE_SUPERVISED || type == INIT_SERVICE_DAEMON) {
         return INIT_RESTART_ALWAYS;
     }
     return INIT_RESTART_ON_FAILURE;
@@ -1519,7 +1524,7 @@ static int parse_service_config(init_service_table_t *table, char *buf) {
 static int load_service_table_from_text(init_service_table_t *table,
                                         const char *text,
                                         const char *source_label) {
-    char buf[INIT_CONFIG_CAP];
+    static char buf[INIT_CONFIG_CAP];
     if (!table || !text) {
         return -1;
     }
@@ -1538,7 +1543,7 @@ static int load_service_table_from_text(init_service_table_t *table,
 }
 
 static int load_service_table(init_service_table_t *table) {
-    char buf[INIT_CONFIG_CAP];
+    static char buf[INIT_CONFIG_CAP];
     long fd;
     long got;
     if (!table) {
@@ -1749,7 +1754,7 @@ static int run_service(init_service_table_t *table, const init_service_t *svc) {
 }
 
 int main(void) {
-    init_service_table_t table;
+    static init_service_table_t table;
     unsigned long ready_mask = 0;
 
     if (load_service_table(&table) != 0) {
@@ -1757,6 +1762,7 @@ int main(void) {
         return 1;
     }
     write(1, "init: entering service startup\n", 31);
+    unsigned long daemon_count = 0;
     for (unsigned long i = 0; i < table.count; ++i) {
         const init_service_t *svc = &table.services[i];
         if ((ready_mask & svc->deps_mask) != svc->deps_mask) {
@@ -1764,11 +1770,30 @@ int main(void) {
             return 1;
         }
         write_service_prefix(svc, " start\n");
+        if (svc->type == INIT_SERVICE_DAEMON) {
+            init_service_runtime_t rt;
+            runtime_reset(&rt);
+            long pid = spawn_with_runtime(&table, svc, &rt);
+            if (pid < 0) {
+                write_service_prefix(svc, " spawn failed\n");
+                return 1;
+            }
+            write_service_prefix(svc, " started as daemon\n");
+            daemon_count++;
+            ready_mask |= svc->provides_mask;
+            continue;
+        }
         if (run_service(&table, svc) != 0) {
             write_service_prefix(svc, " failed permanently\n");
             return 1;
         }
         ready_mask |= svc->provides_mask;
+    }
+    if (daemon_count > 0) {
+        /* Keep the session alive; daemons own the console/framebuffer. */
+        for (;;) {
+            sleep_ms(1000);
+        }
     }
     return 0;
 }

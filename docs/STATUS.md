@@ -143,3 +143,133 @@
 1. Rechte-/Referenzmodell fuer Handles/Pipes weiter ausbauen; Read-/Write-Blocking, selektive Vererbung, close-on-spawn, EOF/Broken-Pipe und Console-Fallback-`dup` sind jetzt vorhanden.
 2. `init` von der aktuellen einfachen `/init.rc` in Richtung reichhaltigere Dienstdefinitionen und spaeter echte TTY-/Pipe-Topologien erweitern; Channels koennen jetzt einen Reader und mehrere Writer, `tee` und `logsink` sind als Userspace-Schicht dazugekommen, aber mehrere Live-Reader, Pipesets und freiere Graphen fehlen noch.
 3. Virtio-Treiberbasis fuer QEMU (`virtio-blk`, `virtio-gpu`, `virtio-input`) angehen.
+
+## Desktop v0 (2026-10-23)
+
+- Kernel graphics: double-buffered framebuffer (`fb_back_buffer`/`fb_flip`), software 2D renderer (`renderer2d`), PSF2 font parser, `stb_truetype` wrapper (`ttf`), virtio-gpu modern driver with display-info/scanout plumbing and framebuffer integration (VGA fallback).
+- Virtio hardening: `virtio_blk` interrupt-driven completion with descriptor reuse and flush; writeback `block_cache`; `virtio_input` keyboard driver wired into `kernel/arch/x86_64/keyboard.c`; MSI/MSI-X helpers and basic LAPIC/IOAPIC support.
+- Critical fixes discovered while booting the full `init.rc`:
+  - LAPIC LINT0 must be programmed as `ExtINT`; masking it silently disables legacy PIT IRQs.
+  - A non-bootstrap process exiting as the only runnable task no longer jumps to the kernel shell.
+  - Process handles are released at exit time so pipe EOF/HUP wakes blocked pollers.
+  - `handlelimitcheck` now probes the real 64-slot handle table instead of assuming 8 slots.
+  - `INIT_MAX_SERVICES` raised to 48 and large init buffers moved to static storage; `init.rc` grew beyond the old limits.
+- Userspace desktop: `compositor` (window list, Z-order, focus, damage, render/event loop, ready banner), `hydrogen_window` client library, `input_router`, widget toolkit (Label/Button/TextInput/Container), flex layout, theme tokens, window decorations, taskbar with clock, Spotlight-style launcher, file-manager grid, desktop background.
+- Verification programs: `fstest` (mkdir/write/stat/read/rename/unlink) and `desktoptest` (compositor + widgets + layout + theme + taskbar + launcher + filemanager).
+- `init` now supports `daemon` services: they are spawned once and the init loop stays alive, so compositor, desktop demo and shell run concurrently.
+- `tools/boot_smoke.sh` asserts `FSTEST PASS`, `DESKTOPTEST PASS`, the compositor ready banner and `FRAME CHECKSUM:`.
+- Boot smoke passes locally (with grub extracted from the Arch package because `grub-mkrescue` is not installed system-wide). Known gap: `pollwaitcheck`/`pollmanycheck` are temporarily not part of `init.rc` because the spawn-with-stdio pipe writer reference is not counted before the child writes; they need a proper handle-refcount fix before being re-enabled.
+
+### Desktop v0 follow-up: visible framebuffer + keyboard (2026-10-23)
+
+- Multiboot1 header now requests a linear 1024x768x32 video mode. The video
+  fields must sit after the five unused a.out-kludge fields; placing them right
+  after the checksum makes GRUB report `unsupported graphical mode type`.
+- Added `SYS_FB_INFO` (36) and `SYS_FB_BLIT` (37). `sys_fb_blit` writes into the
+  framebuffer console's shadow buffer via `fb_console_blit` and presents it, so
+  userspace frames are not overwritten by the console's own back buffer.
+- `comp_present()` blits the compositor front buffer to the framebuffer.
+  `desktopdemo` renders a full-screen gradient, title, a sample window with
+  title bar/traffic-light buttons and a taskbar, then presents.
+- Keyboard fix: `process_console_fallback_read` no longer executes
+  `sti; hlt; cli` inside the read syscall. That let IRQs arrive with a kernel
+  frame; the scheduler then returned to a corrupt user RIP (invalid opcode at
+  0x303). Console reads now return immediately and the shell retries with
+  `yield_cpu()`, so key IRQs are handled in user context.
+- Verified: PS/2 key injection produces shell input (`help` output) with no
+  panic, and the desktop frame is visible in the QEMU GTK window.
+
+### Shell-app + mouse (2026-10-23)
+
+- `desktopdemo` is now a real desktop session: full-screen background, taskbar,
+  a `Terminal` window and a mouse cursor. The terminal is the shell as an app
+  (line editor, scrollback, `help/time/ls/cat/pwd/cd/mkdir/rm/touch/mv/cp/echo/
+  clear`) rendered through the compositor instead of the raw console.
+- New syscalls:
+  - `SYS_KBD_READ` (39): non-blocking keyboard read for windowed apps.
+  - `SYS_MOUSE_STATE` (38): returns absolute PS/2 mouse position and buttons
+    after polling the mouse controller.
+- PS/2 mouse works via IRQ12; the desktop polls `SYS_MOUSE_STATE`, redraws and
+  draws an arrow cursor into the compositor front buffer before presenting.
+- Removed the console `shell` and the separate `compositor` daemons from
+  `init.rc`; `desktopdemo` is the single desktop daemon.
+- Verified: `help` typed into the windowed terminal renders the command list;
+  QEMU `mouse_move` moves the on-screen cursor. Boot smoke still passes.
+
+### Desktop v1: window manager, editor, taskbar, resolutions (2026-10-23)
+
+- Window manager in `desktopdemo`: windows can be focused, raised, dragged by
+  the title bar, minimized/restored from the taskbar and maximized via the
+  green button. Traffic-light buttons: red = minimize/close, yellow = minimize,
+  green = maximize/restore.
+- Taskbar (KDE-ish): vector OS hexagon logo, terminal icon, editor icon, running
+  indicators and a live clock. Clicking an icon restores or minimizes the app.
+- Terminal is a window app with line editor, scrollback and commands:
+  `help version uptime time ls cat pwd cd mkdir rm touch mv cp echo clear
+  run <path> edit [path] mouse`.
+- Text editor window: type, newline, backspace, `Ctrl+S` saves `/notes.txt`,
+  `Ctrl+O` loads it, `Ctrl+N` clears. `edit [path]` opens a file in the editor.
+- Performance: input now damages only the terminal prompt line and presents
+  only the damaged rectangles (`SYS_FB_BLIT_STRIDED`, `comp_present_damage`)
+  instead of repainting the full screen. The kernel text cursor is hidden and
+  the console is cleared before the desktop presents, removing the old shell
+  residue at the bottom.
+- Resolution: the multiboot video request is parameterized. Default
+  `GFXMODE ?= 1920x1080x32`; build 2K with
+  `make ARCH=x86_64 GFXMODE=2560x1440x32 build iso`. The desktop queries the
+  real framebuffer size (`SYS_FB_INFO`) and scales window geometry.
+- Kernel heap raised to 32 MiB so the framebuffer console back buffer fits at
+  1080p/2K.
+- Verified: full boot smoke PASS at 1920x1080; 2K renders; mouse move/click,
+  minimize/restore and editor typing work in QEMU.
+
+## Full desktop roadmap pass (2026-10-23)
+
+**Desktop shell**
+- Start menu from the OS logo with Terminal, Editor, Files, Settings, About.
+- Files app lists the mounted filesystem; activating a file opens it in the
+  editor. Multiple terminal instances, real close (red button destroys the
+  window/instance), minimize/restore, maximize, title-bar drag and corner
+  resize.
+
+**Persistence**
+- Full ext2 read/write: block and inode bitmap allocation, direct and single
+  indirect blocks, sparse-hole reads, mkdir/unlink/rename, inode/dir-count
+  bookkeeping. `e2fsck -fn` is clean after guest writes.
+- The build stages `fsroot` + all userspace ELFs + `init.rc` into
+  `build/x86_64/disk.img`; the kernel mounts it as `/` over virtio-blk, with
+  RAMFS as the boot fallback. Boot smoke attaches the disk.
+- Persistence verified end-to-end: free-text write in the guest, power off,
+  `debugfs -R "cat /persist.txt"` -> `hello`, reboot, `cat persist.txt` ->
+  `hello`.
+- `df`, `free`, `mount`, `write <path> <text>` terminal commands.
+
+**System shell**
+- Settings app: background/theme toggle, keyboard layout (DE/US), resolution
+  and version display.
+- `DesktopTheme` tokens drive all desktop colors (`COL_*` now resolve to theme
+  fields); dark/light presets.
+- Real icons: `userspace/lib/icons.h` generated from Iconify MDI SVGs (32x32
+  ARGB) and alpha-blended in the taskbar, start menu and About entry.
+
+**Comfort/stability**
+- IntelliMouse 4-byte packets + wheel field in `SYS_MOUSE_STATE`; terminal and
+  editor scroll offsets respond to the wheel.
+- Click-to-focus/raise, arrow cursor and a dedicated resize-cursor shape over
+  the bottom-right corner.
+- `comp_present_damage` merges overlapping/adjacent damage rects and presents
+  only those regions via `SYS_FB_BLIT_STRIDED`.
+- DE/US keyboard tables selected at runtime through `SYS_SET_LAYOUT`.
+
+**Users / packaging**
+- `/etc/passwd` installed on the disk; `login` reads it and bootstraps the
+  session (`login: root`, `LOGIN PASS`).
+- `.hpkg` format (magic `HPK1`, count, name/length/size/data entries) with
+  create, parse, install/extract and remove; `pkgtest` boots it end-to-end and
+  prints `PKG PASS`.
+
+**Verification**
+- `make ARCH=x86_64 build` OK; `ARCH=x86_64 tools/boot_smoke.sh` PASS
+  (FSTEST, DESKTOPTEST, LOGIN, PKG, compositor and frame checksum checks).
+- 2K build (`GFXMODE=2560x1440x32`) boots and renders the desktop with the same
+  markers; 1080p is the default.

@@ -357,7 +357,7 @@ int vfs_mkdir(const char *path) {
     const vfs_mount_t *m = mount_for_path(path, &sub);
     if (!m) return -1;
     if (m->fs == VFS_FS_RAMFS) return ramfs_mkdir(sub);
-    /* ext2 write not supported */
+    if (m->fs == VFS_FS_EXT2) return ext2_mkdir(sub);
     return -1;
 }
 
@@ -367,6 +367,7 @@ int vfs_unlink(const char *path) {
     const vfs_mount_t *m = mount_for_path(path, &sub);
     if (!m) return -1;
     if (m->fs == VFS_FS_RAMFS) return ramfs_unlink(sub);
+    if (m->fs == VFS_FS_EXT2) return ext2_unlink(sub);
     return -1;
 }
 
@@ -379,6 +380,7 @@ int vfs_rename(const char *old_path, const char *new_path) {
     /* Both paths must be on the same filesystem */
     if (!mo || !mn || mo != mn) return -1;
     if (mo->fs == VFS_FS_RAMFS) return ramfs_rename(old_sub, new_sub);
+    if (mo->fs == VFS_FS_EXT2) return ext2_rename(old_sub, new_sub);
     return -1;
 }
 
@@ -388,5 +390,6 @@ int vfs_write_file(const char *path, const uint8_t *data, uint32_t size) {
     const vfs_mount_t *m = mount_for_path(path, &sub);
     if (!m) return -1;
     if (m->fs == VFS_FS_RAMFS) return ramfs_write_file(sub, data, size);
+    if (m->fs == VFS_FS_EXT2) return ext2_write_file(sub, data, size);
     return -1;
 }

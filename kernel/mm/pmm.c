@@ -136,3 +136,14 @@ uintptr_t pmm_first_free_frame(void) {
   }
   return (uintptr_t)-1;
 }
+
+size_t pmm_free_page_count(void) {
+  size_t n = 0;
+  for (size_t i = 0; i < PMM_MAX_PAGES; ++i)
+    if (!test_bit(i)) n++;
+  return n;
+}
+
+size_t pmm_total_page_count(void) {
+  return PMM_MAX_PAGES;
+}

@@ -153,10 +153,10 @@ static int process_console_fallback_read(uint8_t *out, uint32_t out_sz,
     while (*out_len < out_sz) {
         int c = process_console_take_char();
         if (c < 0) {
-            if (*out_len > 0)
-                return 0;
-            __asm__ volatile("sti\n\thlt\n\tcli");
-            continue;
+            /* Do not sleep with interrupts enabled inside the syscall:
+               the IRQ frame would be a kernel frame and can corrupt the
+               user return path. Return to user mode and let the caller retry. */
+            return 0;
         }
         out[(*out_len)++] = (uint8_t)c;
         if (c == '\n')
@@ -947,6 +947,10 @@ void process_mark_exited(process_t *p, int status) {
     if (!p || p == &kernel_proc) return;
     p->alive = 0;
     p->state = PROCESS_RUNNABLE;
+
+    /* Close this process's handles at exit time (not just at reap time) so
+       pipe EOF/HUP propagates and processes blocked in poll/write wake up. */
+    process_handles_release(p);
 
     if (process_list) {
         process_t *it = process_list;

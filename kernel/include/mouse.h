@@ -16,4 +16,5 @@ struct mouse_packet mouse_peek_last(void);
 void mouse_set_bounds(int width, int height);
 int mouse_get_pos(int *x, int *y); // returns 1 if valid
 uint8_t mouse_get_buttons(void);
+int mouse_take_wheel(void);
 void mouse_poll(void);             // liest Mausdaten ohne IRQ

@@ -12,6 +12,7 @@
 #include "gdt.h"
 #include "higher_half.h"
 #include "idt.h"
+#include "arch/x86_64/apic.h"
 #include "io.h"
 #include "isr.h"
 #include "keyboard.h"
@@ -158,6 +159,8 @@ static void cmd_elfload(void) {
   }
 }
 
+extern void syscall_set_bootstrap(process_t *proc);
+
 static void user_return_trampoline(uint64_t status) {
   process_t *exited = process_current();
   __asm__ volatile("mov $0x10, %%ax\n"
@@ -261,6 +264,7 @@ static int run_user_elf(const uint8_t *elf, size_t elf_size) {
   }
   kputs("Entering user mode (ELF + sys_write)...\n");
   process_set_current(proc);
+  syscall_set_bootstrap(proc);
   paging_switch(proc->pml4);
   syscall_set_user_return((uintptr_t)user_return_trampoline,
                           (uintptr_t)&stack_top64 - 16);
@@ -494,7 +498,7 @@ void kmain64(uint64_t magic, uint64_t multiboot_info_addr) {
 
   pmm_init((uintptr_t)multiboot_info_addr);
 
-  int heap_pages = 1024; // 4 MiB
+  int heap_pages = 8192; // 32 MiB (framebuffer console at 1080p/2K)
   uintptr_t heap_phys = pmm_alloc_contiguous((size_t)heap_pages);
   if (!heap_phys) {
     kputs("heap alloc failed\n");
@@ -514,7 +518,7 @@ void kmain64(uint64_t magic, uint64_t multiboot_info_addr) {
 
   idt_install();
   isr_install();
-  gdt_init();
+  lapic_init();  gdt_init();
   syscall_arch_init();
   pic_remap(0x20, 0x28);
   pit_init(100);
@@ -530,6 +534,9 @@ void kmain64(uint64_t magic, uint64_t multiboot_info_addr) {
   block_cache_init();
   initrd_setup((uintptr_t)multiboot_info_addr);
   vfs_init();
+  serial_write("[VFS] root: ");
+  serial_write(vfs_root_name());
+  serial_write("\n");
   if (fb_ok == 0) {
     mouse_set_bounds((int)framebuffer.width, (int)framebuffer.height);
   } else {

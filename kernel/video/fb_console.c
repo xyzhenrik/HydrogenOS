@@ -1,3 +1,4 @@
+#include "fb_console.h"
 #include "framebuffer.h"
 #include "font8x16.h"
 #include "kheap.h"
@@ -11,6 +12,7 @@ static uint32_t cursor_row = 0;
 static uint32_t *backbuf = NULL;
 static uint32_t cursor_color = 0x00FFFFFF;
 static int mouse_overlay_enabled = 0;
+static int cursor_visible = 1;
 static const uint32_t CHAR_W = 8;
 static const uint32_t CHAR_H = 16;
 static uint32_t cols = 0;
@@ -40,13 +42,58 @@ int fb_console_init(void) {
     return 0;
 }
 
+
+int fb_console_blit(int x, int y, int w, int h, const unsigned int *src) {
+    if (!backbuf || !src) return -1;
+    if (w <= 0 || h <= 0) return -1;
+    int fw = (int)framebuffer.width;
+    int fh = (int)framebuffer.height;
+    for (int dy = 0; dy < h; ++dy) {
+        int sy = y + dy;
+        if (sy < 0 || sy >= fh) continue;
+        const unsigned int *srow = src + (size_t)dy * (size_t)w;
+        unsigned int *drow = (unsigned int *)((uint8_t *)backbuf + (size_t)sy * framebuffer.pitch);
+        for (int dx = 0; dx < w; ++dx) {
+            int sx = x + dx;
+            if (sx < 0 || sx >= fw) continue;
+            drow[sx] = srow[dx];
+        }
+    }
+    fb_console_present();
+    return 0;
+}
+
+void fb_console_set_cursor_visible(int visible) {
+    cursor_visible = visible ? 1 : 0;
+}
+
+int fb_console_blit_strided(int x, int y, int w, int h,
+                            const unsigned int *src, int src_stride_bytes) {
+    if (!backbuf || !src || w <= 0 || h <= 0) return -1;
+    int fw = (int)framebuffer.width;
+    int fh = (int)framebuffer.height;
+    for (int dy = 0; dy < h; ++dy) {
+        int sy = y + dy;
+        if (sy < 0 || sy >= fh) continue;
+        const unsigned int *srow = (const unsigned int *)((const unsigned char *)src + (size_t)dy * (size_t)src_stride_bytes);
+        unsigned int *drow = (unsigned int *)((uint8_t *)backbuf + (size_t)sy * framebuffer.pitch);
+        for (int dx = 0; dx < w; ++dx) {
+            int sx = x + dx;
+            if (sx < 0 || sx >= fw) continue;
+            drow[sx] = srow[dx];
+        }
+    }
+    fb_console_present();
+    return 0;
+}
+
 void fb_console_present(void) {
     if (!backbuf || !framebuffer.addr) return;
     uint32_t fb_size = framebuffer.pitch * framebuffer.height;
     uint32_t *dst = (uint32_t *)framebuffer.addr;
     uint32_t words = fb_size / 4;
     for (uint32_t i = 0; i < words; ++i) dst[i] = backbuf[i];
-    draw_text_cursor();
+    if (cursor_visible) draw_text_cursor();
     draw_mouse_overlay();
 }
 

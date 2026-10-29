@@ -1,4 +1,5 @@
 #include "isr.h"
+#include "apic.h"
 #include "console.h"
 #include "core/time.h"
 #include "keyboard.h"
@@ -47,6 +48,16 @@ static const char *exception_messages[] = {
 };
 
 static uint64_t irq0_ticks = 0;
+
+/*
+ * IRQs are still delivered through the 8259 PIC, but the LAPIC is already
+ * enabled. Acknowledge both controllers so the handler stays correct once the
+ * IOAPIC takes over delivery; a spurious LAPIC/PIC EOI is a no-op.
+ */
+static void irq_eoi(uint8_t irq) {
+    pic_send_eoi(irq);
+    lapic_eoi();
+}
 
 regs_t *isr_handler(regs_t *r) {
     if (r->int_no == 128) {
@@ -97,7 +108,7 @@ regs_t *isr_handler(regs_t *r) {
                 regs_t *next = process_schedule(r);
                 if (next != r) {
                     paging_switch(process_current()->pml4);
-                    pic_send_eoi(irq);
+                    irq_eoi(irq);
                     return next;
                 }
             }
@@ -108,7 +119,7 @@ regs_t *isr_handler(regs_t *r) {
         } else if (irq == 12) {
             mouse_handle_irq();
         }
-        pic_send_eoi(irq);
+        irq_eoi(irq);
     }
 
     return r;

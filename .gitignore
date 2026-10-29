@@ -1,0 +1,14 @@
+# Build output (objects, ELFs, initrd, ISO, disk images, logs)
+/build/
+
+# Local secrets
+.env
+.env.*
+
+# Per-user Claude Code settings
+.claude/settings.local.json
+
+# Editor / OS noise
+*.swp
+*~
+.DS_Store

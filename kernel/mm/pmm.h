@@ -8,3 +8,5 @@ uintptr_t pmm_alloc_page(void);
 uintptr_t pmm_alloc_contiguous(size_t pages);
 void pmm_free_page(uintptr_t addr);
 uintptr_t pmm_first_free_frame(void);
+size_t pmm_free_page_count(void);
+size_t pmm_total_page_count(void);

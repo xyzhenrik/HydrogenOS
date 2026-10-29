@@ -1,7 +1,18 @@
+#ifndef GFX_WIDTH
+#define GFX_WIDTH 1920
+#endif
+#ifndef GFX_HEIGHT
+#define GFX_HEIGHT 1080
+#endif
+#ifndef GFX_DEPTH
+#define GFX_DEPTH 32
+#endif
+
 /* Multiboot1 header and entry for x86_64 long mode */
 .set ALIGN,    1<<0
 .set MEMINFO,  1<<1
-.set FLAGS,    ALIGN | MEMINFO
+.set VIDEO,    1<<2
+.set FLAGS,    ALIGN | MEMINFO | VIDEO
 .set MAGIC,    0x1BADB002
 .set CHECKSUM, -(MAGIC + FLAGS)
 
@@ -10,6 +21,17 @@
     .long MAGIC
     .long FLAGS
     .long CHECKSUM
+    /* a.out kludge fields (unused, but video fields follow them). */
+    .long 0
+    .long 0
+    .long 0
+    .long 0
+    .long 0
+    /* Multiboot1 video request: linear graphics 1920x1080x32. */
+    .long 0
+    .long GFX_WIDTH
+    .long GFX_HEIGHT
+    .long GFX_DEPTH
 
     .section .text.boot, "ax"
     .code32

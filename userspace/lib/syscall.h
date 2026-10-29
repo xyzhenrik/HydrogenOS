@@ -36,6 +36,15 @@
 #define SYS_WRITEF  33
 #define SYS_MMAP    34
 #define SYS_MUNMAP  35
+#define SYS_FB_INFO 36
+#define SYS_FB_BLIT 37
+#define SYS_MOUSE_STATE 38
+#define SYS_KBD_READ 39
+#define SYS_CONSOLE_CURSOR 40
+#define SYS_FB_BLIT_STRIDED 41
+#define SYS_FB_CLEAR 42
+#define SYS_SYSINFO 43
+#define SYS_SET_LAYOUT 44
 
 #define PRIO_IDLE   0
 #define PRIO_NORMAL 1
@@ -58,6 +67,31 @@
 #define POLL_HUP   (1u << 2)
 #define POLL_NVAL  (1u << 3)
 #define POLL_WAIT_INFINITE (-1)
+
+static inline long syscall6(long n, long a1, long a2, long a3, long a4, long a5, long a6) {
+    long ret;
+    register long r10 __asm__("r10") = a4;
+    register long r8 __asm__("r8") = a5;
+    register long r9 __asm__("r9") = a6;
+    __asm__ volatile(
+        "syscall"
+        : "=a"(ret)
+        : "a"(n), "D"(a1), "S"(a2), "d"(a3), "r"(r10), "r"(r8), "r"(r9)
+        : "rcx", "r11", "memory");
+    return ret;
+}
+
+static inline long syscall5(long n, long a1, long a2, long a3, long a4, long a5) {
+    long ret;
+    register long r10 __asm__("r10") = a4;
+    register long r8 __asm__("r8") = a5;
+    __asm__ volatile(
+        "syscall"
+        : "=a"(ret)
+        : "a"(n), "D"(a1), "S"(a2), "d"(a3), "r"(r10), "r"(r8)
+        : "rcx", "r11", "memory");
+    return ret;
+}
 
 static inline long syscall4(long n, long a1, long a2, long a3, long a4) {
     long ret;
@@ -216,4 +250,52 @@ static inline long sys_mmap(void *addr, unsigned long len, int prot, int flags, 
 
 static inline long sys_munmap(void *addr, unsigned long len) {
     return syscall2(SYS_MUNMAP, (long)addr, (long)len);
+}
+
+static inline long sys_fb_info(unsigned int *info) {
+    return syscall1(SYS_FB_INFO, (long)info);
+}
+
+static inline long sys_fb_blit(long x, long y, long w, long h, const void *buf) {
+    return syscall5(SYS_FB_BLIT, x, y, w, h, (long)buf);
+}
+
+static inline long sys_mouse_state(int *out) {
+    return syscall1(SYS_MOUSE_STATE, (long)out);
+}
+
+static inline long sys_kbd_read(void) {
+    return syscall1(SYS_KBD_READ, 0);
+}
+
+static inline long sys_console_cursor(int visible) {
+    return syscall1(SYS_CONSOLE_CURSOR, visible);
+}
+
+static inline long sys_fb_blit_strided(long x, long y, long w, long h, const void *buf, long stride) {
+    return syscall6(SYS_FB_BLIT_STRIDED, x, y, w, h, (long)buf, stride);
+}
+
+static inline long sys_fb_clear(void) {
+    return syscall1(SYS_FB_CLEAR, 0);
+}
+
+typedef struct sysinfo_t {
+    unsigned int fs_type;
+    unsigned int block_size;
+    unsigned int total_blocks;
+    unsigned int free_blocks;
+    unsigned int total_inodes;
+    unsigned int free_inodes;
+    unsigned int free_pages;
+    unsigned int page_size;
+    unsigned int total_pages;
+} sysinfo_t;
+
+static inline long sys_sysinfo(sysinfo_t *out) {
+    return syscall1(SYS_SYSINFO, (long)out);
+}
+
+static inline long sys_set_layout(int layout) {
+    return syscall1(SYS_SET_LAYOUT, layout);
 }

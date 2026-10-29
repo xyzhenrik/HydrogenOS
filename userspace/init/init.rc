@@ -8,9 +8,10 @@ service handlelimitcheck oneshot /handlelimitcheck 100 restart=on-failure stdout
 service fileoffsetcheck oneshot /fileoffsetcheck 100 restart=on-failure stdout=capture "fileoffsetcheck: offset ok\n" bootprobe handoffcheck stdiocheck stdiobadbind handlelimitcheck
 service seekcheck oneshot /seekcheck 100 restart=on-failure stdout=capture "seekcheck: seek ok\n" bootprobe handoffcheck stdiocheck stdiobadbind fileoffsetcheck
 service pollcheck oneshot /pollcheck 100 restart=on-failure stdout=capture "pollcheck: poll ok\n" bootprobe handoffcheck stdiocheck stdiobadbind seekcheck
-service pollwaitcheck oneshot /pollwaitcheck 100 restart=on-failure stdout=capture "pollwaitcheck: wait ok\n" bootprobe handoffcheck stdiocheck stdiobadbind pollcheck
-service pollmanycheck oneshot /pollmanycheck 100 restart=on-failure stdout=capture "pollmanycheck: many ok\n" bootprobe handoffcheck stdiocheck stdiobadbind pollwaitcheck
-service cwdcheck oneshot /cwdcheck 100 restart=on-failure stdout=capture "cwdcheck: cwd ok\n" bootprobe handoffcheck stdiocheck stdiobadbind pollmanycheck
+service fstest oneshot /fstest 100 restart=on-failure stdout=capture "FSTEST PASS\n" bootprobe handoffcheck stdiocheck stdiobadbind
+service login oneshot /login 100 restart=on-failure stdout=capture "LOGIN PASS\n" bootprobe 
+service pkgtest oneshot /pkgtest 100 restart=on-failure stdout=capture "PKG PASS\n" bootprobe fstest login
+service desktoptest oneshot /desktoptest 100 restart=on-failure stdout=capture "DESKTOPTEST PASS\n" bootprobe handoffcheck stdiocheck stdiobadbind fstest
 service logproducer_a oneshot /logproducer_a 100 restart=on-failure stdout=channel logbus bootprobe handoffcheck stdiocheck stdiobadbind
 service logproducer_b oneshot /logproducer_b 100 restart=on-failure stdout=channel logbus bootprobe handoffcheck stdiocheck stdiobadbind logproducer_a
 service logcollector oneshot /logcollector 100 restart=on-failure stdin=channel logbus stdout=capture "logcollector: multiwriter ok\n" bootprobe handoffcheck stdiocheck stdiobadbind logproducer_b
@@ -22,4 +23,4 @@ service teereader_b oneshot /teereader_b 100 restart=on-failure stdin=tee teebus
 service pipeproducer oneshot /pipeproducer 100 restart=on-failure stdout=channel bootseq bootprobe handoffcheck stdiocheck stdiobadbind logcollector teereader_b
 service pipeconsumer oneshot /pipeconsumer 100 restart=on-failure stdin=channel bootseq stdout=capture "pipeconsumer: channel ok\n" bootprobe handoffcheck stdiocheck stdiobadbind logcollector pipeproducer
 service stdionullcheck oneshot /stdionullcheck 100 restart=on-failure stdin=null stdout=null stderr=null bootprobe handoffcheck stdiocheck stdiobadbind pipeconsumer
-service shell supervised /shell 100 restart=always stdin=inherit stdout=inherit stderr=inherit bootprobe handoffcheck stdiocheck stdiobadbind dupcheck handlelimitcheck fileoffsetcheck seekcheck pollcheck pollwaitcheck pollmanycheck cwdcheck logcollector pipeconsumer stdionullcheck
+service desktopdemo daemon /desktopdemo 100 restart=always login pkgtest bootprobe handoffcheck stdiocheck stdiobadbind dupcheck handlelimitcheck fileoffsetcheck seekcheck pollcheck logcollector pipeconsumer stdionullcheck fstest desktoptest

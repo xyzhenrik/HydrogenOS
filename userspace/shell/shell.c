@@ -1,4 +1,5 @@
 #include "mini_libc.h"
+#include "syscall.h"
 
 enum {
   TTY_COLOR_BLACK = 0,
@@ -132,6 +133,7 @@ static int read_char_blocking(char *out) {
     if (n > 0) {
       return 1;
     }
+    yield_cpu();
   }
 }
 
@@ -330,7 +332,8 @@ static int read_line(char *buf, int cap) {
 
 static void cmd_help(void) {
   write_info("Commands: ");
-  write_str("help, time, sleep [ms], cat <path>, echo <text>, pipe [text], "
+  write_str("help, time, sleep [ms], cat <path>, ls [path], mkdir <path>, rm <path>, "
+            "touch <path>, mv <src> <dst>, cp <src> <dst>, echo <text>, pipe [text], "
             "piperun [text], pipenoinherit [text], pipeblock [text], pipefull, "
             "pipebroken, pipeeof, pollpipe, pollwaitpipe, pollmanypipe, run "
             "<path>, cd <path>, pwd, exit\n");
@@ -895,6 +898,127 @@ static void cmd_cat(const char *path) {
   close(fd);
 }
 
+static void cmd_ls(const char *path) {
+  const char *target = (path && *path) ? path : ".";
+  int pos = 0;
+  dirent_t de;
+  while (readdir_pos(target, pos, &de) == 1) {
+    if (de.d_type == 4) {
+      write_info(de.d_name);
+      write_str("/\n");
+    } else {
+      write_str(de.d_name);
+      write_str("\n");
+    }
+    ++pos;
+  }
+}
+
+static void cmd_mkdir(const char *path) {
+  if (!path || !*path) {
+    write_error("usage: mkdir <path>\n");
+    return;
+  }
+  if (sys_mkdir(path) != 0) {
+    write_error("mkdir: failed\n");
+    return;
+  }
+  write_success("mkdir: ok\n");
+}
+
+static void cmd_rm(const char *path) {
+  if (!path || !*path) {
+    write_error("usage: rm <path>\n");
+    return;
+  }
+  if (sys_unlink(path) != 0) {
+    write_error("rm: failed\n");
+    return;
+  }
+  write_success("rm: ok\n");
+}
+
+static void cmd_touch(const char *path) {
+  if (!path || !*path) {
+    write_error("usage: touch <path>\n");
+    return;
+  }
+  /* create empty file if not exists; overwrite allowed */
+  if (sys_writef(path, "", 0) != 0) {
+    write_error("touch: failed\n");
+    return;
+  }
+  write_success("touch: ok\n");
+}
+
+static void cmd_mv(const char *arg) {
+  char src[128];
+  char dst[128];
+  /* split arg into two tokens */
+  const char *p = arg;
+  if (!arg || !*arg) {
+    write_error("usage: mv <src> <dst>\n");
+    return;
+  }
+  int i = 0;
+  while (*p && *p != ' ' && *p != '\t' && i < 127) src[i++] = *p++;
+  src[i] = 0;
+  p = skip_ws((char *)p);
+  i = 0;
+  while (*p && *p != ' ' && *p != '\t' && i < 127) dst[i++] = *p++;
+  dst[i] = 0;
+  if (!src[0] || !dst[0]) {
+    write_error("usage: mv <src> <dst>\n");
+    return;
+  }
+  if (sys_rename(src, dst) != 0) {
+    write_error("mv: failed\n");
+    return;
+  }
+  write_success("mv: ok\n");
+}
+
+static void cmd_cp(const char *arg) {
+  char src[128];
+  char dst[128];
+  const char *p = arg;
+  if (!arg || !*arg) {
+    write_error("usage: cp <src> <dst>\n");
+    return;
+  }
+  int i = 0;
+  while (*p && *p != ' ' && *p != '\t' && i < 127) src[i++] = *p++;
+  src[i] = 0;
+  p = skip_ws((char *)p);
+  i = 0;
+  while (*p && *p != ' ' && *p != '\t' && i < 127) dst[i++] = *p++;
+  dst[i] = 0;
+  if (!src[0] || !dst[0]) {
+    write_error("usage: cp <src> <dst>\n");
+    return;
+  }
+  int fd = (int)open(src, 0);
+  if (fd < 0) {
+    write_error("cp: open src failed\n");
+    return;
+  }
+  char buf[256];
+  long n;
+  char data[4096];
+  int data_len = 0;
+  while ((n = read(fd, buf, sizeof(buf))) > 0) {
+    for (long k = 0; k < n && data_len < (int)sizeof(data) - 1; ++k) {
+      data[data_len++] = buf[k];
+    }
+  }
+  close(fd);
+  if (sys_writef(dst, data, (unsigned long)data_len) != 0) {
+    write_error("cp: write dst failed\n");
+    return;
+  }
+  write_success("cp: ok\n");
+}
+
 static void cmd_run(const char *path) {
   if (!path || !*path) {
     write_error("usage: run <path>\n");
@@ -1020,6 +1144,18 @@ int main(void) {
       cmd_sleep(arg);
     } else if (str_eq(cmd, "cat")) {
       cmd_cat(arg);
+    } else if (str_eq(cmd, "ls")) {
+      cmd_ls(arg);
+    } else if (str_eq(cmd, "mkdir")) {
+      cmd_mkdir(arg);
+    } else if (str_eq(cmd, "rm")) {
+      cmd_rm(arg);
+    } else if (str_eq(cmd, "touch")) {
+      cmd_touch(arg);
+    } else if (str_eq(cmd, "mv")) {
+      cmd_mv(arg);
+    } else if (str_eq(cmd, "cp")) {
+      cmd_cp(arg);
     } else if (str_eq(cmd, "echo")) {
       cmd_echo(arg);
     } else if (str_eq(cmd, "pipe")) {

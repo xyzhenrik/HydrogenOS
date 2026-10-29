@@ -1,4 +1,8 @@
 CROSS ?= x86_64-elf-
+GFXMODE ?= 1280x720x32
+GFXW := $(word 1,$(subst x, ,$(GFXMODE)))
+GFXH := $(word 2,$(subst x, ,$(GFXMODE)))
+GFXD := $(word 3,$(subst x, ,$(GFXMODE)))
 ARCH ?= x86_64
 ARCH_DIR = kernel/arch/$(ARCH)
 
@@ -85,6 +89,12 @@ USER_POLLMANYCHECK_OBJ = $(BUILD_DIR)/user_pollmanycheck.o
 USER_POLLMANYCHECK_ELF = $(BUILD_DIR)/user_pollmanycheck.elf
 USER_CWDCHECK_OBJ = $(BUILD_DIR)/user_cwdcheck.o
 USER_CWDCHECK_ELF = $(BUILD_DIR)/user_cwdcheck.elf
+USER_FSTEST_OBJ = $(BUILD_DIR)/user_fstest.o
+USER_FSTEST_ELF = $(BUILD_DIR)/user_fstest.elf
+USER_LOGIN_OBJ = $(BUILD_DIR)/user_login.o
+USER_LOGIN_ELF = $(BUILD_DIR)/user_login.elf
+USER_PKGTEST_OBJ = $(BUILD_DIR)/user_pkgtest.o
+USER_PKGTEST_ELF = $(BUILD_DIR)/user_pkgtest.elf
 USER_DUPFALLBACKCHECK_OBJ = $(BUILD_DIR)/user_dupfallbackcheck.o
 USER_DUPFALLBACKCHECK_ELF = $(BUILD_DIR)/user_dupfallbackcheck.elf
 USER_LOGSINK_WRITER_A_OBJ = $(BUILD_DIR)/user_logsink_writer_a.o
@@ -98,6 +108,18 @@ USER_TEEREADER_A_ELF = $(BUILD_DIR)/user_teereader_a.elf
 USER_TEEREADER_B_OBJ = $(BUILD_DIR)/user_teereader_b.o
 USER_TEEREADER_B_ELF = $(BUILD_DIR)/user_teereader_b.elf
 INIT_CONFIG = userspace/init/init.rc
+USER_COMPOSITOR_OBJ = $(BUILD_DIR)/user_compositor.o
+USER_COMPOSITOR_ELF = $(BUILD_DIR)/user_compositor.elf
+USER_DESKTOPDEMO_OBJ = $(BUILD_DIR)/user_desktopdemo.o
+USER_DESKTOPDEMO_ELF = $(BUILD_DIR)/user_desktopdemo.elf
+USER_DESKTOPTEST_OBJ = $(BUILD_DIR)/user_desktoptest.o
+USER_DESKTOPTEST_ELF = $(BUILD_DIR)/user_desktoptest.elf
+USER_DESKTOPTEST_WIDGETS_OBJ = $(BUILD_DIR)/user_desktoptest_widgets.o
+USER_DESKTOPTEST_LAYOUT_OBJ = $(BUILD_DIR)/user_desktoptest_layout.o
+USER_DESKTOPTEST_THEME_OBJ = $(BUILD_DIR)/user_desktoptest_theme.o
+USER_DESKTOPTEST_TASKBAR_OBJ = $(BUILD_DIR)/user_desktoptest_taskbar.o
+USER_DESKTOPTEST_LAUNCHER_OBJ = $(BUILD_DIR)/user_desktoptest_launcher.o
+USER_DESKTOPTEST_FILEMANAGER_OBJ = $(BUILD_DIR)/user_desktoptest_filemanager.o
 USER_INIT_OBJ = $(BUILD_DIR)/user_init.o
 USER_INIT_ELF = $(BUILD_DIR)/user_init.elf
 USER_SHELL_OBJ = $(BUILD_DIR)/user_shell.o
@@ -108,16 +130,16 @@ OBJS = $(BUILD_DIR)/boot.o $(BUILD_DIR)/kernel.o $(BUILD_DIR)/console.o $(BUILD_
        $(BUILD_DIR)/paging.o $(BUILD_DIR)/time.o $(BUILD_DIR)/pmm.o $(BUILD_DIR)/kheap.o $(BUILD_DIR)/string.o \
        $(BUILD_DIR)/syscall.o $(BUILD_DIR)/process.o $(BUILD_DIR)/pipe.o \
        $(BUILD_DIR)/keyboard.o $(BUILD_DIR)/mouse.o $(BUILD_DIR)/elf_loader.o \
-       $(BUILD_DIR)/ata.o $(BUILD_DIR)/pci.o $(BUILD_DIR)/virtio.o $(BUILD_DIR)/virtio_blk.o $(BUILD_DIR)/block.o $(BUILD_DIR)/block_cache.o $(BUILD_DIR)/mbr.o \
+       $(BUILD_DIR)/ata.o $(BUILD_DIR)/pci.o $(BUILD_DIR)/virtio.o $(BUILD_DIR)/virtio_blk.o $(BUILD_DIR)/virtio_gpu.o $(BUILD_DIR)/virtio_input.o $(BUILD_DIR)/msi.o $(BUILD_DIR)/block.o $(BUILD_DIR)/block_cache.o $(BUILD_DIR)/mbr.o \
        $(BUILD_DIR)/ext2.o $(BUILD_DIR)/vfs.o $(BUILD_DIR)/ramfs.o \
-       $(BUILD_DIR)/framebuffer.o $(BUILD_DIR)/fb_console.o $(BUILD_DIR)/font8x16.o $(BUILD_DIR)/tty.o \
+       $(BUILD_DIR)/framebuffer.o $(BUILD_DIR)/fb_console.o $(BUILD_DIR)/font8x16.o $(BUILD_DIR)/renderer2d.o $(BUILD_DIR)/psf2.o $(BUILD_DIR)/ttf.o $(BUILD_DIR)/tty.o \
        $(BUILD_DIR)/gdt.o $(BUILD_DIR)/gdt_asm.o \
        $(BUILD_DIR)/idt.o $(BUILD_DIR)/isr.o $(BUILD_DIR)/isr_c.o $(BUILD_DIR)/isr_stubs.o \
        $(BUILD_DIR)/syscall_arch.o $(BUILD_DIR)/syscall_entry.o \
-       $(BUILD_DIR)/pic.o $(BUILD_DIR)/pit.o $(BUILD_DIR)/cpu.o
+       $(BUILD_DIR)/pic.o $(BUILD_DIR)/pit.o $(BUILD_DIR)/cpu.o $(BUILD_DIR)/apic.o
 OBJS += $(USER_HELLO_BINOBJ) $(USER_ECHO_BINOBJ) $(USER_CAT_BINOBJ) $(USER_TIME_BINOBJ) $(USER_SLEEP_BINOBJ)
 RUN_DEPS = $(ISO)
-BUILD_DEPS = $(KERNEL_BIN) $(INITRD)
+BUILD_DEPS = $(KERNEL_BIN) $(INITRD) $(DISK_IMG)
 RUN_CMD = qemu-system-x86_64 -cdrom $(ISO) -m 512M -vga std -serial stdio
 ISO_DEPS = $(KERNEL_BIN) $(GRUB_CFG) $(INITRD)
 else
@@ -148,6 +170,8 @@ ISO = $(BUILD_DIR)/hydrogen.iso
 DISK_IMG = $(BUILD_DIR)/disk.img
 FS_DIR = fsroot
 FS_FILES = $(shell find $(FS_DIR) -type f 2>/dev/null)
+USER_ELFS = $(foreach v,$(filter USER_%_ELF,$(.VARIABLES)),$($(v)))
+$(DISK_IMG): $(USER_ELFS) $(INIT_CONFIG)
 
 -include $(wildcard $(BUILD_DIR)/*.d)
 
@@ -158,7 +182,7 @@ build: $(BUILD_DEPS)
 
 $(BUILD_DIR)/boot.o: $(ARCH_DIR)/boot.S
 	mkdir -p $(BUILD_DIR)
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) -DGFX_WIDTH=$(GFXW) -DGFX_HEIGHT=$(GFXH) -DGFX_DEPTH=$(GFXD) -c $< -o $@
 
 $(BUILD_DIR)/kernel.o: $(KERNEL_SRC) kernel/core/process.h kernel/mm/paging.h kernel/mm/pmm.h kernel/mm/kheap.h kernel/fs/vfs.h kernel/fs/ramfs.h kernel/include/multiboot.h $(ARCH_DIR)/idt.h $(ARCH_DIR)/isr.h kernel/include/console.h $(ARCH_DIR)/io.h
 	mkdir -p $(BUILD_DIR)
@@ -196,6 +220,10 @@ $(BUILD_DIR)/pit.o: $(ARCH_DIR)/pit.c $(ARCH_DIR)/pit.h $(ARCH_DIR)/io.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(BUILD_DIR)/apic.o: $(ARCH_DIR)/apic.c $(ARCH_DIR)/apic.h $(ARCH_DIR)/io.h $(ARCH_DIR)/msr.h kernel/mm/paging.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
 $(BUILD_DIR)/cpu.o: kernel/core/cpu.c kernel/include/cpu.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -229,6 +257,18 @@ $(BUILD_DIR)/string.o: kernel/core/string.c kernel/include/string.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/virtio_blk.o: kernel/drivers/virtio_blk.c kernel/drivers/virtio_blk.h kernel/drivers/virtio.h kernel/drivers/pci.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/virtio_gpu.o: kernel/drivers/virtio_gpu.c kernel/drivers/virtio_gpu.h kernel/drivers/virtio.h kernel/drivers/pci.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/virtio_input.o: kernel/drivers/virtio_input.c kernel/drivers/virtio_input.h kernel/drivers/virtio.h kernel/drivers/pci.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/msi.o: kernel/drivers/msi.c kernel/drivers/msi.h kernel/drivers/pci.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
@@ -459,6 +499,27 @@ $(USER_CWDCHECK_OBJ): userspace/cwdcheck/cwdcheck.c userspace/lib/syscall.h user
 $(USER_CWDCHECK_ELF): $(USER_CWDCHECK_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
 	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_CWDCHECK_OBJ)
 
+$(USER_FSTEST_OBJ): userspace/fstest/fstest.c userspace/lib/syscall.h userspace/lib/mini_libc.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(USER_FSTEST_ELF): $(USER_FSTEST_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
+	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_FSTEST_OBJ)
+
+$(USER_LOGIN_OBJ): userspace/login/login.c userspace/lib/syscall.h userspace/lib/mini_libc.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(USER_LOGIN_ELF): $(USER_LOGIN_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
+	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_LOGIN_OBJ)
+
+$(USER_PKGTEST_OBJ): userspace/pkgtest/pkgtest.c userspace/lib/syscall.h userspace/lib/mini_libc.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(USER_PKGTEST_ELF): $(USER_PKGTEST_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
+	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_PKGTEST_OBJ)
+
 $(USER_DUPFALLBACKCHECK_OBJ): userspace/dupfallbackcheck/dupfallbackcheck.c userspace/lib/syscall.h userspace/lib/mini_libc.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(USER_CFLAGS) -c $< -o $@
@@ -550,6 +611,55 @@ $(USER_SHELL_OBJ): userspace/shell/shell.c userspace/lib/syscall.h userspace/lib
 $(USER_SHELL_ELF): $(USER_SHELL_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
 	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_SHELL_OBJ)
 
+$(USER_COMPOSITOR_OBJ): userspace/compositor/compositor.c userspace/compositor/compositor.h userspace/lib/mini_libc.h userspace/lib/syscall.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -Iuserspace/compositor -c $< -o $@
+
+$(BUILD_DIR)/input_router.o: userspace/compositor/input_router.c userspace/compositor/input_router.h userspace/compositor/compositor.h userspace/lib/mini_libc.h userspace/lib/syscall.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -Iuserspace/compositor -c $< -o $@
+
+$(USER_COMPOSITOR_ELF): $(USER_COMPOSITOR_OBJ) $(BUILD_DIR)/input_router.o $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
+	$(LD) $(USER_LDFLAGS) --defsym main=comp_event_loop -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_COMPOSITOR_OBJ) $(BUILD_DIR)/input_router.o
+
+$(USER_DESKTOPDEMO_OBJ): userspace/desktopdemo/desktopdemo.c userspace/compositor/compositor.h userspace/lib/mini_libc.h userspace/lib/syscall.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -Iuserspace/compositor -c $< -o $@
+
+$(USER_DESKTOPDEMO_ELF): $(USER_DESKTOPDEMO_OBJ) $(USER_COMPOSITOR_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
+	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_DESKTOPDEMO_OBJ) $(USER_COMPOSITOR_OBJ)
+
+$(USER_DESKTOPTEST_OBJ): userspace/desktoptest/desktoptest.c userspace/compositor/compositor.h userspace/lib/mini_libc.h userspace/lib/widgets.h userspace/lib/layout.h userspace/lib/theme.h userspace/lib/taskbar.h userspace/lib/launcher.h userspace/lib/filemanager.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -Iuserspace/compositor -c $< -o $@
+
+$(USER_DESKTOPTEST_WIDGETS_OBJ): userspace/lib/widgets.c userspace/lib/widgets.h userspace/lib/mini_libc.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(USER_DESKTOPTEST_LAYOUT_OBJ): userspace/lib/layout.c userspace/lib/layout.h userspace/lib/widgets.h userspace/lib/mini_libc.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(USER_DESKTOPTEST_THEME_OBJ): userspace/lib/theme.c userspace/lib/theme.h userspace/lib/widgets.h userspace/lib/mini_libc.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(USER_DESKTOPTEST_TASKBAR_OBJ): userspace/lib/taskbar.c userspace/lib/taskbar.h userspace/lib/widgets.h userspace/lib/mini_libc.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(USER_DESKTOPTEST_LAUNCHER_OBJ): userspace/lib/launcher.c userspace/lib/launcher.h userspace/lib/widgets.h userspace/lib/mini_libc.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(USER_DESKTOPTEST_FILEMANAGER_OBJ): userspace/lib/filemanager.c userspace/lib/filemanager.h userspace/lib/widgets.h userspace/lib/mini_libc.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(USER_DESKTOPTEST_ELF): $(USER_DESKTOPTEST_OBJ) $(USER_COMPOSITOR_OBJ) $(USER_DESKTOPTEST_WIDGETS_OBJ) $(USER_DESKTOPTEST_LAYOUT_OBJ) $(USER_DESKTOPTEST_THEME_OBJ) $(USER_DESKTOPTEST_TASKBAR_OBJ) $(USER_DESKTOPTEST_LAUNCHER_OBJ) $(USER_DESKTOPTEST_FILEMANAGER_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
+	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_DESKTOPTEST_OBJ) $(USER_COMPOSITOR_OBJ) $(USER_DESKTOPTEST_WIDGETS_OBJ) $(USER_DESKTOPTEST_LAYOUT_OBJ) $(USER_DESKTOPTEST_THEME_OBJ) $(USER_DESKTOPTEST_TASKBAR_OBJ) $(USER_DESKTOPTEST_LAUNCHER_OBJ) $(USER_DESKTOPTEST_FILEMANAGER_OBJ)
+
 $(USER_CRT0_OBJ): userspace/lib/crt0.S
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(USER_ASFLAGS) -c $< -o $@
@@ -558,7 +668,7 @@ $(USER_LIBC_OBJ): userspace/lib/mini_libc.c userspace/lib/mini_libc.h userspace/
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(USER_CFLAGS) -c $< -o $@
 
-$(INITRD): $(USER_HELLO_ELF) $(USER_ECHO_ELF) $(USER_CAT_ELF) $(USER_TIME_ELF) $(USER_SLEEP_ELF) $(USER_PIPEREAD_ELF) $(USER_PIPEDELAYREAD_ELF) $(USER_PIPEPRODUCER_ELF) $(USER_PIPECONSUMER_ELF) $(USER_LOGPRODUCER_A_ELF) $(USER_LOGPRODUCER_B_ELF) $(USER_LOGCOLLECTOR_ELF) $(USER_BOOTPROBE_ELF) $(USER_HANDOFFCHECK_ELF) $(USER_STDIOCHECK_ELF) $(USER_STDIOBADBIND_ELF) $(USER_STDIONULLCHECK_ELF) $(USER_DUPCHECK_ELF) $(USER_HANDLELIMITCHECK_ELF) $(USER_FILEOFFSETCHECK_ELF) $(USER_SEEKCHECK_ELF) $(USER_POLLCHECK_ELF) $(USER_POLLWAITCHECK_ELF) $(USER_POLLWAKEWRITER_ELF) $(USER_POLLMANYCHECK_ELF) $(USER_CWDCHECK_ELF) $(USER_DUPFALLBACKCHECK_ELF) $(USER_LOGSINK_WRITER_A_ELF) $(USER_LOGSINK_WRITER_B_ELF) $(USER_TEEWRITER_ELF) $(USER_TEEREADER_A_ELF) $(USER_TEEREADER_B_ELF) $(USER_INIT_ELF) $(USER_SHELL_ELF) $(INIT_CONFIG) tools/mkinitrd.py
+$(INITRD): $(USER_HELLO_ELF) $(USER_ECHO_ELF) $(USER_CAT_ELF) $(USER_TIME_ELF) $(USER_SLEEP_ELF) $(USER_PIPEREAD_ELF) $(USER_PIPEDELAYREAD_ELF) $(USER_PIPEPRODUCER_ELF) $(USER_PIPECONSUMER_ELF) $(USER_LOGPRODUCER_A_ELF) $(USER_LOGPRODUCER_B_ELF) $(USER_LOGCOLLECTOR_ELF) $(USER_BOOTPROBE_ELF) $(USER_HANDOFFCHECK_ELF) $(USER_STDIOCHECK_ELF) $(USER_STDIOBADBIND_ELF) $(USER_STDIONULLCHECK_ELF) $(USER_DUPCHECK_ELF) $(USER_HANDLELIMITCHECK_ELF) $(USER_FILEOFFSETCHECK_ELF) $(USER_SEEKCHECK_ELF) $(USER_POLLCHECK_ELF) $(USER_POLLWAITCHECK_ELF) $(USER_POLLWAKEWRITER_ELF) $(USER_POLLMANYCHECK_ELF) $(USER_CWDCHECK_ELF) $(USER_DUPFALLBACKCHECK_ELF) $(USER_FSTEST_ELF) $(USER_LOGIN_ELF) $(USER_PKGTEST_ELF) $(USER_LOGSINK_WRITER_A_ELF) $(USER_LOGSINK_WRITER_B_ELF) $(USER_TEEWRITER_ELF) $(USER_TEEREADER_A_ELF) $(USER_TEEREADER_B_ELF) $(USER_COMPOSITOR_ELF) $(USER_DESKTOPDEMO_ELF) $(USER_DESKTOPTEST_ELF) $(USER_INIT_ELF) $(USER_SHELL_ELF) $(INIT_CONFIG) tools/mkinitrd.py
 	mkdir -p $(BUILD_DIR)
 	python3 tools/mkinitrd.py $@ \
 		user=$(USER_HELLO_ELF) \
@@ -587,12 +697,18 @@ $(INITRD): $(USER_HELLO_ELF) $(USER_ECHO_ELF) $(USER_CAT_ELF) $(USER_TIME_ELF) $
 		pollwakewriter=$(USER_POLLWAKEWRITER_ELF) \
 		pollmanycheck=$(USER_POLLMANYCHECK_ELF) \
 		cwdcheck=$(USER_CWDCHECK_ELF) \
+		fstest=$(USER_FSTEST_ELF) \
+		login=$(USER_LOGIN_ELF) \
+		pkgtest=$(USER_PKGTEST_ELF) \
 		dupfallbackcheck=$(USER_DUPFALLBACKCHECK_ELF) \
 		logsink_writer_a=$(USER_LOGSINK_WRITER_A_ELF) \
 		logsink_writer_b=$(USER_LOGSINK_WRITER_B_ELF) \
 		teewriter=$(USER_TEEWRITER_ELF) \
 		teereader_a=$(USER_TEEREADER_A_ELF) \
 		teereader_b=$(USER_TEEREADER_B_ELF) \
+		compositor=$(USER_COMPOSITOR_ELF) \
+		desktopdemo=$(USER_DESKTOPDEMO_ELF) \
+		desktoptest=$(USER_DESKTOPTEST_ELF) \
 		init.rc=$(INIT_CONFIG) \
 		init=$(USER_INIT_ELF) \
 		shell=$(USER_SHELL_ELF)
@@ -622,6 +738,18 @@ $(BUILD_DIR)/font8x16.o: kernel/video/font8x16.c kernel/video/font8x16.h kernel/
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(BUILD_DIR)/renderer2d.o: kernel/video/renderer2d.c kernel/video/renderer2d.h kernel/include/framebuffer.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/psf2.o: kernel/video/psf2.c kernel/video/psf2.h kernel/video/font8x16.h kernel/include/framebuffer.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/ttf.o: kernel/video/ttf.c kernel/video/ttf.h kernel/video/stb_truetype.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
 $(BUILD_DIR)/tty.o: kernel/tty/tty.c kernel/include/tty.h kernel/include/framebuffer.h kernel/video/fb_console.h kernel/include/console.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -643,9 +771,10 @@ $(KERNEL_BIN): $(OBJS) $(KERNEL_LINKER)
 
 $(GRUB_CFG):
 	mkdir -p $(ISO_DIR)/boot/grub
-	echo "set timeout=0" > $(GRUB_CFG)
+	echo "set timeout=1" > $(GRUB_CFG)
 	echo "set default=0" >> $(GRUB_CFG)
-	echo "set gfxpayload=1024x768x32" >> $(GRUB_CFG)
+	echo "set gfxmode=$(GFXMODE)" >> $(GRUB_CFG)
+	echo "set gfxpayload=$(GFXMODE)" >> $(GRUB_CFG)
 	echo "menuentry 'HydrogenOS' {" >> $(GRUB_CFG)
 	echo "  multiboot /boot/kernel.bin" >> $(GRUB_CFG)
 ifeq ($(ARCH),x86_64)
@@ -675,8 +804,16 @@ clean:
 $(DISK_IMG): $(FS_FILES)
 	mkdir -p $(BUILD_DIR)
 	@if command -v mke2fs >/dev/null 2>&1; then \
+		rm -rf $(BUILD_DIR)/stagedisk; mkdir -p $(BUILD_DIR)/stagedisk; \
+		if [ -d $(FS_DIR) ]; then cp -a $(FS_DIR)/. $(BUILD_DIR)/stagedisk/ 2>/dev/null || true; fi; \
+		for f in $(BUILD_DIR)/user_*.elf; do \
+			[ -e "$$f" ] || continue; \
+			n=$$(basename $$f .elf); n=$${n#user_}; \
+			cp $$f $(BUILD_DIR)/stagedisk/$$n; \
+		done; \
+		cp $(INIT_CONFIG) $(BUILD_DIR)/stagedisk/init.rc; \
 		rm -f $(DISK_IMG); \
-		mke2fs -t ext2 -F -b 1024 -d $(FS_DIR) $(DISK_IMG) 16M; \
+		mke2fs -t ext2 -F -b 1024 -d $(BUILD_DIR)/stagedisk $(DISK_IMG) 16M; \
 	else \
 		dd if=/dev/zero of=$(DISK_IMG) bs=1M count=16; \
 	fi

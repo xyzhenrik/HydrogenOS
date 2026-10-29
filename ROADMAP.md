@@ -11,17 +11,17 @@
 - [x] **1.** `PROCESS_MAX_HANDLE` 8 → 64 erhöhen (process.h + process.c anpassen, Tests)
 - [x] **2.** Gemeinsame `kernel/include/errno.h` — alle verstreuten `#define ENOENT 2` konsolidieren
 - [ ] **3.** `sys_mmap` / `sys_munmap` implementieren (Userspace-Heap-Erweiterung via `brk`-Semantik)
-- [ ] **4.** `sys_getcwd` / `sys_chdir` — VFS-Arbeitsverzeichnis pro Prozess
+- [x] **4.** `sys_getcwd` / `sys_chdir` — VFS-Arbeitsverzeichnis pro Prozess
 - [x] **5.** `sys_fstat` / `sys_stat` — Datei-Metadaten (size, type, mtime)
 - [x] **6.** `sys_readdir` — Verzeichnis-Iteration für `ls`-artige Tools
-- [ ] **7.** `sys_mkdir` / `sys_unlink` / `sys_rename` auf VFS-Ebene
+- [x] **7.** `sys_mkdir` / `sys_unlink` / `sys_rename` auf VFS-Ebene
 - [x] **8.** Scheduler: Prioritäts-Level (IDLE / NORMAL / RT) + sleep queue statt spin-sleep
 - [x] **9.** Kernel-Panic-Verbesserung: vollständiger Registerdump + RSP-Backtrace über Serial
 - [x] **10.** SMP-Vorbereitung: per-CPU-State-Struct (single CPU jetzt, SMP später)
 
 ### A2: VFS & Dateisystem
 - [ ] **11.** VFS: mkdir / rmdir / unlink / rename implementieren
-- [ ] **12.** ext2: Schreib-Support (Datei anlegen, Daten schreiben, Inode-Allokation)
+- [x] **12.** ext2: Schreib-Support (Datei anlegen, Daten schreiben, Inode-Allokation)
 - [ ] **13.** ext2: Verzeichnis anlegen
 - [ ] **14.** `/proc`-Stub-Filesystem (PID-Liste, `/proc/<pid>/status`)
 - [ ] **15.** Pfad-Cache / dcache (einfacher Hash, LRU eviction)
@@ -39,15 +39,15 @@
 - [x] **22.** PCI-Device-Registry (Vendor/Device-ID → Treiber-Binding-Table)
 - [x] **23.** PCI BAR-Mapping (MMIO-Regionen in Kernel-VMA mappen)
 - [x] **24.** Virtqueue-Implementierung (Split-Virtqueue, Descriptor-Ring, Available/Used-Ring)
-- [ ] **25.** `virtio-blk` — PCI-Probe, Virtqueue-Setup, Read/Write-Requests
-- [ ] **26.** `virtio-blk` in Block-Layer integrieren, Makefile + QEMU-Smoke-Test
-- [ ] **27.** `virtio-gpu` — Linear-Framebuffer-Modus (VIRTIO_GPU_CMD_SET_SCANOUT)
-- [ ] **28.** `virtio-gpu` in Framebuffer-Subsystem integrieren
-- [ ] **29.** `virtio-input` — Keyboard-Events via Virtio (EV_KEY Events)
-- [ ] **30.** `virtio-input` in Keyboard-Subsystem integrieren
-- [ ] **31.** APIC/LAPIC-Init (PIC-Ablösung für moderne IRQ-Routierung)
-- [ ] **32.** IOAPIC-Setup
-- [ ] **33.** MSI/MSI-X-Support für Virtio-PCI
+- [x] **25.** `virtio-blk` — PCI-Probe, Virtqueue-Setup, Read/Write-Requests
+- [x] **26.** `virtio-blk` in Block-Layer integrieren, Makefile + QEMU-Smoke-Test
+- [x] **27.** `virtio-gpu` — Linear-Framebuffer-Modus (VIRTIO_GPU_CMD_SET_SCANOUT)
+- [x] **28.** `virtio-gpu` in Framebuffer-Subsystem integrieren
+- [x] **29.** `virtio-input` — Keyboard-Events via Virtio (EV_KEY Events)
+- [x] **30.** `virtio-input` in Keyboard-Subsystem integrieren
+- [x] **31.** APIC/LAPIC-Init (PIC-Ablösung für moderne IRQ-Routierung)
+- [x] **32.** IOAPIC-Setup
+- [x] **33.** MSI/MSI-X-Support für Virtio-PCI
 - [ ] **34.** AHCI-Stub (PCI-Detect, kein Full-Driver — Real-HW-Pfad vorbereiten)
 - [ ] **35.** `virtio-net` — PCI-Probe + Loopback-Test
 - [ ] **36.** Einfacher Netzwerk-Stack-Stub (Ethernet-Frame-RX/TX)
@@ -77,8 +77,8 @@
 - [ ] **55.** Shell: Output-Redirection `>` / `>>`
 - [ ] **56.** Shell: Input-Redirection `<`
 - [ ] **57.** Shell: Hintergrund-Job `&` + `wait`
-- [ ] **58.** Shell: `ls`, `pwd`, `cd`, `mkdir`, `rm`, `touch`
-- [ ] **59.** Shell: `cp`, `mv`, `find` (minimal)
+- [x] **58.** Shell: `ls`, `pwd`, `cd`, `mkdir`, `rm`, `touch`
+- [x] **59.** Shell: `cp`, `mv`, `find` (minimal)
 - [ ] **60.** Shell: Environment-Variable-Expansion `$VAR` + `export`
 
 ---
@@ -116,8 +116,8 @@
 - [ ] **84.** Power-Management: sauberes Shutdown / Reboot via ACPI
 - [ ] **85.** Benutzer-Authentifizierung (`/etc/passwd`-Stil, `sys_getuid` / `sys_setuid`)
 - [ ] **86.** Datei-Permissions (Inode-Bits rwxrwxrwx, UID/GID, Kernel-Enforcement)
-- [ ] **87.** Paketformat `.hpkg` (tar + JSON-Manifest: name, version, deps, files)
-- [ ] **88.** Paketmanager-CLI `hpkg` (install / remove / list / update)
+- [x] **87.** Paketformat `.hpkg` (tar + JSON-Manifest: name, version, deps, files)
+- [~] **88.** Paketmanager-CLI `hpkg` (install / remove / list / update)
 - [ ] **89.** Paket-Repository-Metadaten-Format + lokales Repo-Tool
 - [ ] **90.** UEFI-Boot-Stub (EFI-Handoff → Kernel, neben BIOS/GRUB erhalten)
 - [ ] **91.** Boot-Splash-Screen (Framebuffer-Logo + Ladebalken)

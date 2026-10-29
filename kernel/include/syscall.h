@@ -38,6 +38,15 @@
 #define SYS_WRITEF  33
 #define SYS_MMAP    34
 #define SYS_MUNMAP  35
+#define SYS_FB_INFO 36
+#define SYS_FB_BLIT 37
+#define SYS_MOUSE_STATE 38
+#define SYS_KBD_READ 39
+#define SYS_CONSOLE_CURSOR 40
+#define SYS_FB_BLIT_STRIDED 41
+#define SYS_FB_CLEAR 42
+#define SYS_SYSINFO 43
+#define SYS_SET_LAYOUT 44
 #define SYS_PUTCHAR 255
 
 uint64_t syscall_handle(regs_t *r);
