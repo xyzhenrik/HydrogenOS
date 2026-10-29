@@ -5,6 +5,7 @@
 
 #define PAGE_SIZE 4096ul
 #define RC_EFAULT (-14l)
+#define RC_EINVAL (-22l)
 #define PROT_RW (MMAP_PROT_READ | MMAP_PROT_WRITE)
 #define SCRATCH_BYTES 256
 
@@ -160,6 +161,16 @@ static void check_page_boundaries(void) {
                  sys_sysinfo((sysinfo_t *)(fits + 1)));
     expect_fault("write crossing into hole", "page end",
                  sys_write(1, page_end - 8, BAD_LEN));
+    /* The last row of a strided blit ends after w pixels, not after a full
+       stride; a stride below the row width would read past the validated range. */
+    if (sys_fb_blit_strided(0, 0, 2, 2, page_end - 72, 64) == RC_EFAULT)
+        fail("strided blit ending at the page end rejected");
+    expect_fault("strided blit crossing into hole", "page end",
+                 sys_fb_blit_strided(0, 0, 2, 2, page_end - 68, 64));
+    if (sys_fb_blit_strided(0, 0, 1024, 1, page_end - 4, 4) != RC_EINVAL)
+        fail("strided blit with stride below row width");
+    if (sys_fb_blit_strided(0, 0, 1, 2, page_end - 12, 6) != RC_EINVAL)
+        fail("strided blit with unaligned stride");
 
     for (int i = 1; i <= 8; ++i)
         page_end[-i] = 'a';

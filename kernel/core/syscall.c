@@ -226,9 +226,12 @@ uint64_t syscall_handle(regs_t *r) {
         int h = (int)r->r10;
         const uint32_t *src = (const uint32_t *)(uintptr_t)r->r8;
         int stride = (int)r->r9;
-        if (w <= 0 || h <= 0 || stride <= 0)
+        if (w <= 0 || h <= 0 || stride <= 0 || (stride & 3) ||
+            stride / 4 < w)
             return (uint64_t)-EINVAL;
-        if (!user_range_ok(src, (size_t)stride * (size_t)h))
+        /* The last row is read only up to its w-th pixel, not its full stride. */
+        if (!user_range_ok(src, (size_t)stride * (size_t)(h - 1) +
+                                    (size_t)w * sizeof(uint32_t)))
             return (uint64_t)-EFAULT;
         if (!framebuffer.addr || framebuffer.bpp != 32)
             return (uint64_t)-EIO;
