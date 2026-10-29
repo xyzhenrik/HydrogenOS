@@ -2,10 +2,10 @@
 #include "compositor.h"
 #include "gfx_effects.h"
 #include "icons.h"
+#include "settings.h"
+#include "settings_ui.h"
 #include "syscall.h"
 #include "wallclock.h"
-
-extern void comp_text_render(Window *win, int x, int y, const char *text, uint32_t color);
 
 #define TITLE_H   30
 #define PAD       12
@@ -15,82 +15,36 @@ extern void comp_text_render(Window *win, int x, int y, const char *text, uint32
 /* Width of TIME_FORMAT_SHORT ("Thu 29 Oct 14:05") in 8px glyphs. */
 #define CLOCK_W   (16 * 8)
 
-#define COL_ACCENT    0x00306090u
-#define COL_WIN       0x00101820u
-#define COL_TITLE     0x00304050u
-#define COL_TITLE_F   0x00425870u
-#define COL_TEXT      0x00D0D8E0u
-#define COL_PROMPT    0x0060C060u
-#define COL_DIM       0x008090A0u
-#define COL_MENU      0x00202834u
-#define COL_MENU_HI   0x00384A60u
-#define COL_CLOSE     0x00E06060u
-#define COL_MIN       0x00E0B050u
-#define COL_MAX       0x0060C060u
-#define COL_EDIT_BG   0x00F0F3F6u
-#define COL_EDIT_FG   0x00203040u
 #define COL_INPUT     0x0080FF80u
 
-typedef struct DesktopTheme {
-    uint32_t bg_top, bg_bottom, taskbar, accent;
-    uint32_t win, title, title_focus, text, prompt, dim;
-    uint32_t menu, menu_hi, close, min, max, edit_bg, edit_fg;
-} DesktopTheme;
+/* The user's preferences and the palette derived from them. g_applied is what
+   the session currently shows, so a change is detected by diffing against it. */
+static Settings g_settings;
+static Settings g_applied;
+static SettingsPalette g_th;
+static int g_settings_save_failed;
 
-static const DesktopTheme g_theme_dark = {
-    0x00162030u, 0x000C121Cu, 0x001B222Cu, 0x00306090u,
-    0x00101820u, 0x00304050u, 0x00425870u, 0x00D0D8E0u, 0x0060C060u, 0x008090A0u,
-    0x00202834u, 0x00384A60u, 0x00E06060u, 0x00E0B050u, 0x0060C060u,
-    0x00F0F3F6u, 0x00203040u
-};
-
-static const DesktopTheme g_theme_light = {
-    0x00E8EEF4u, 0x00C8D4E0u, 0x00D0D8E0u, 0x004080C0u,
-    0x00101820u, 0x00304050u, 0x00425870u, 0x00D0D8E0u, 0x0060C060u, 0x008090A0u,
-    0x00202834u, 0x00384A60u, 0x00E06060u, 0x00E0B050u, 0x0060C060u,
-    0x00F0F3F6u, 0x00203040u
-};
-
-static DesktopTheme g_th;
-
-#undef COL_ACCENT
-#undef COL_WIN
-#undef COL_TITLE
-#undef COL_TITLE_F
-#undef COL_TEXT
-#undef COL_PROMPT
-#undef COL_DIM
-#undef COL_MENU
-#undef COL_MENU_HI
-#undef COL_CLOSE
-#undef COL_MIN
-#undef COL_MAX
-#undef COL_EDIT_BG
-#undef COL_EDIT_FG
-#define COL_ACCENT   (g_th.accent)
-#define COL_WIN      (g_th.win)
-#define COL_TITLE    (g_th.title)
-#define COL_TITLE_F  (g_th.title_focus)
-#define COL_TEXT     (g_th.text)
-#define COL_PROMPT   (g_th.prompt)
-#define COL_DIM      (g_th.dim)
-#define COL_MENU     (g_th.menu)
-#define COL_MENU_HI  (g_th.menu_hi)
-#define COL_CLOSE    (g_th.close)
-#define COL_MIN      (g_th.min)
-#define COL_MAX      (g_th.max)
-#define COL_EDIT_BG  (g_th.edit_bg)
-#define COL_EDIT_FG  (g_th.edit_fg)
-#define COL_BG_TOP   (g_th.bg_top)
-#define COL_BG_BOTTOM (g_th.bg_bottom)
-#define COL_TASKBAR  (g_th.taskbar)
-
-static int g_theme;
-
-static void apply_theme(int light) {
-    g_theme = light ? 1 : 0;
-    g_th = light ? g_theme_light : g_theme_dark;
-}
+#define COL_ACCENT    (g_th.accent)
+#define COL_WIN       (g_th.terminal_bg)
+#define COL_TITLE     (g_th.title)
+#define COL_TITLE_F   (g_th.title_focus)
+#define COL_TEXT      (g_th.title_text)
+#define COL_TERM_TEXT (g_th.terminal_text)
+#define COL_PROMPT    (g_th.terminal_prompt)
+#define COL_DIM       (g_th.terminal_dim)
+#define COL_MENU      (g_th.menu)
+#define COL_CLOSE     (g_th.close)
+#define COL_MIN       (g_th.minimize)
+#define COL_MAX       (g_th.maximize)
+#define COL_EDIT_BG   (g_th.document_bg)
+#define COL_EDIT_FG   (g_th.document_text)
+#define COL_SELECTION (g_th.document_selection)
+#define COL_BG_TOP    (g_th.wallpaper_top)
+#define COL_BG_BOTTOM (g_th.wallpaper_bottom)
+#define COL_TASKBAR   (g_th.taskbar)
+#define COL_CHROME_TEXT (g_th.chrome_text)
+#define COL_WALLPAPER_TEXT (g_th.wallpaper_text)
+#define COL_CHROME_DIM  (g_th.chrome_dim)
 
 enum { APP_TERM = 0, APP_EDIT, APP_FILES, APP_SETTINGS, APP_KIND_COUNT };
 
@@ -120,6 +74,8 @@ typedef struct App {
     /* files */
     char cwd[128];
     int sel;
+    /* settings */
+    SettingsUi settings_ui;
 } App;
 
 static App g_apps[MAX_APPS];
@@ -132,8 +88,6 @@ static int g_menu_open = 0;
 static int g_mx = -1, g_my = -1, g_btn = 0;
 static int g_prev_mx = -1, g_prev_my = -1;
 static unsigned long g_last_sec = 0;
-static int g_theme = 0;
-static int g_layout = 0; /* 0=DE, 1=US */
 
 static void draw_terminal(App *a);
 static void draw_editor(App *a);
@@ -297,7 +251,7 @@ static void draw_clock(Window *win, int right_x, int y) {
         unsigned long minutes = time_ms() / 60000;
         snprintf(buf, sizeof(buf), "up %02lu:%02lu", minutes / 60, minutes % 60);
     }
-    comp_text_render(win, right_x - (int)strlen(buf) * 8, y, buf, COL_TEXT);
+    comp_text_render(win, right_x - (int)strlen(buf) * 8, y, buf, COL_CHROME_TEXT);
 }
 
 /* ---------------- taskbar ---------------- */
@@ -323,13 +277,18 @@ static int app_is_running(int kind) {
     return 0;
 }
 
-/* The taskbar is its own glass window; surface alpha 0 is bare glass. */
+/* With glass on, the taskbar and the menu are glass windows whose surface
+   alpha 0 is bare glass; with glass off they are solid in their tint. */
 #define GLASS_CLEAR 0x00000000u
 #define GLASS_INK   0xFF000000u
 
+static uint32_t chrome_clear(uint32_t solid_tint) {
+    return g_settings.glass ? GLASS_CLEAR : solid_tint;
+}
+
 static void draw_taskbar(void) {
     int ty = SH - TASKBAR_H;
-    fill_rect(g_taskbar, 0, 0, SW, TASKBAR_H, GLASS_CLEAR);
+    fill_rect(g_taskbar, 0, 0, SW, TASKBAR_H, chrome_clear(COL_TASKBAR));
     draw_icon_os(g_taskbar, tb_logo_x(), tb_logo_y() - ty, 32);
     for (int k = 0; k < APP_KIND_COUNT; ++k) {
         draw_kind_icon(g_taskbar, k, tb_icon_x(k), tb_y() - ty, tb_icon_s());
@@ -339,18 +298,23 @@ static void draw_taskbar(void) {
     draw_clock(g_taskbar, SW - 16, 20);
 }
 
-static void style_glass(Window *win, uint32_t tint, int radius, int shadow) {
+static void style_chrome_window(Window *win, uint32_t tint, int radius, int shadow) {
     CompWindowStyle style;
-    comp_style_glass(&style);
-    style.glass_tint = tint;
+    if (g_settings.glass) {
+        comp_style_glass(&style);
+        style.glass_tint = tint;
+        style.glass_tint_alpha = g_th.glass_alpha;
+    } else {
+        comp_style_plain(&style);
+    }
     style.corner_radius = radius;
     style.shadow = shadow;
     comp_set_window_style(win, &style);
 }
 
 static void style_chrome(void) {
-    style_glass(g_taskbar, COL_TASKBAR, 0, 0);
-    style_glass(g_menu, COL_MENU, 12, 1);
+    style_chrome_window(g_taskbar, COL_TASKBAR, 0, 0);
+    style_chrome_window(g_menu, COL_MENU, 12, 1);
 }
 
 static void draw_background(void) {
@@ -366,7 +330,7 @@ static void draw_background(void) {
         uint32_t c = ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
         for (int x = 0; x < SW; ++x) px[y * SW + x] = c;
     }
-    comp_text_render(g_bg, 24, 20, "HydrogenOS Desktop v0", COL_TEXT);
+    comp_text_render(g_bg, 24, 20, "HydrogenOS Desktop v0", COL_WALLPAPER_TEXT);
     fill_rect(g_bg, 24, 42, 160, 2, COL_ACCENT);
     style_chrome();
     draw_taskbar();
@@ -393,15 +357,15 @@ static const char *menu_label(int i) {
 
 static void draw_menu(void) {
     Window *w = g_menu;
-    fill_rect(w, 0, 0, MENU_W, MENU_H, GLASS_CLEAR);
-    comp_text_render(w, 16, 10, "Applications", COL_DIM);
+    fill_rect(w, 0, 0, MENU_W, MENU_H, chrome_clear(COL_MENU));
+    comp_text_render(w, 16, 10, "Applications", COL_CHROME_DIM);
     for (int i = 0; i < 5; ++i) {
         int y = 34 + i * MENU_ROW;
         if (i < 4)
             draw_kind_icon(w, i, 16, y + 4, 32);
         else
             draw_icon_os(w, 16, y + 4, 32);
-        comp_text_render(w, 60, y + 12, menu_label(i), COL_TEXT);
+        comp_text_render(w, 60, y + 12, menu_label(i), COL_CHROME_TEXT);
     }
 }
 
@@ -733,7 +697,7 @@ static void draw_terminal(App *a) {
         char tmp[128]; int k = 0;
         while (a->scroll[i][k] && k < cols && k < 127) { tmp[k] = a->scroll[i][k]; ++k; }
         tmp[k] = 0;
-        comp_text_render(w, PAD, TITLE_H + PAD / 2 + (row + 1) * LINE_H, tmp, COL_TEXT);
+        comp_text_render(w, PAD, TITLE_H + PAD / 2 + (row + 1) * LINE_H, tmp, COL_TERM_TEXT);
     }
 }
 
@@ -782,14 +746,14 @@ static void draw_files(App *a) {
     int y0 = TITLE_H + 28;
     int show_dotdot = !str_eq(a->cwd, "/");
     if (show_dotdot) {
-        fill_rect(w, 0, y0 + row * 20, w->w, 20, a->sel == -2 ? COL_MENU_HI : COL_EDIT_BG);
+        fill_rect(w, 0, y0 + row * 20, w->w, 20, a->sel == -2 ? COL_SELECTION : COL_EDIT_BG);
         comp_text_render(w, PAD, y0 + row * 20 + 2, "../", COL_EDIT_FG);
         row++;
     }
     int pos = 0, idx = 0;
     dirent_t de;
     while (readdir_pos(a->cwd, pos, &de) == 1) {
-        uint32_t bgc = (a->sel == idx) ? COL_MENU_HI : COL_EDIT_BG;
+        uint32_t bgc = (a->sel == idx) ? COL_SELECTION : COL_EDIT_BG;
         fill_rect(w, 0, y0 + row * 20, w->w, 20, bgc);
         char label[300];
         int k = 0;
@@ -806,25 +770,9 @@ static void draw_files(App *a) {
 }
 
 static void draw_settings(App *a) {
-    Window *w = a->win;
-    fill_rect(w, 0, TITLE_H, w->w, w->h - TITLE_H, COL_EDIT_BG);
+    a->settings_ui.save_failed = g_settings_save_failed;
+    settings_ui_draw(&a->settings_ui, a->win);
     draw_titlebar(a);
-    comp_text_render(w, PAD, TITLE_H + 16, "Appearance", COL_EDIT_FG);
-    rounded_rect(w, PAD, TITLE_H + 44, w->w - 2 * PAD, 40, 6, COL_MENU_HI);
-    comp_text_render(w, PAD + 12, TITLE_H + 56,
-                     g_theme == 0 ? "Background: Dark (click)" : "Background: Light (click)",
-                     COL_EDIT_FG);
-    comp_text_render(w, PAD, TITLE_H + 110, "Keyboard layout", COL_EDIT_FG);
-    comp_text_render(w, PAD, TITLE_H + 136, g_layout == 0 ? "DE" : "US", COL_EDIT_FG);
-    {
-        char line[64]; int z = 0;
-        const char *pre = "Resolution: ";
-        while (pre[z]) { line[z] = pre[z]; ++z; }
-        append_num(line, &z, SW); line[z++] = 'x';
-        append_num(line, &z, SH); line[z] = 0;
-        comp_text_render(w, PAD, TITLE_H + 176, line, COL_EDIT_FG);
-    }
-    comp_text_render(w, PAD, TITLE_H + 202, "HydrogenOS Desktop v0", COL_DIM);
 }
 
 static void draw_app_content(App *a) {
@@ -929,6 +877,15 @@ static int find_free_slot(void) {
     return -1;
 }
 
+static uint32_t app_background(int kind) {
+    switch (kind) {
+    case APP_EDIT:
+    case APP_FILES: return COL_EDIT_BG;
+    case APP_SETTINGS: return g_th.surface;
+    default: return COL_WIN;
+    }
+}
+
 static int app_open_new(int kind) {
     int idx = find_free_slot();
     if (idx < 0) return -1;
@@ -940,7 +897,10 @@ static int app_open_new(int kind) {
     if (w > SW - 120) w = SW - 120;
     if (h < 420) h = 420;
     if (h > SH - TASKBAR_H - 80) h = SH - TASKBAR_H - 80;
-    if (kind == APP_FILES || kind == APP_SETTINGS) { w = 620; h = 460; }
+    if (kind == APP_FILES) { w = 620; h = 460; }
+    if (kind == APP_SETTINGS) { w = 700; h = 480; }
+    if (w > SW) w = SW;
+    if (h > SH - TASKBAR_H) h = SH - TASKBAR_H;
     int x = (SW - w) / 2 + (idx % 4) * 30 - 60;
     int y = (SH - TASKBAR_H - h) / 2 + (idx % 4) * 30 - 40;
     if (x < 0) x = 0;
@@ -952,7 +912,7 @@ static int app_open_new(int kind) {
     a->kind = kind;
     a->win = comp_create_window(x, y, w, h);
     if (!a->win) { a->used = 0; return -1; }
-    a->win->bg_color = (kind == APP_EDIT || kind == APP_FILES || kind == APP_SETTINGS) ? COL_EDIT_BG : COL_WIN;
+    a->win->bg_color = app_background(kind);
     style_app_window(a->win, 0);
 
     const char *t = "Terminal";
@@ -969,6 +929,8 @@ static int app_open_new(int kind) {
     } else if (kind == APP_FILES) {
         getcwd(a->cwd, sizeof(a->cwd));
         a->sel = 0;
+    } else if (kind == APP_SETTINGS) {
+        settings_ui_init(&a->settings_ui, &g_settings, &g_th, draw_icon_os, TITLE_H);
     }
 
     g_focus = idx;
@@ -978,6 +940,48 @@ static int app_open_new(int kind) {
     comp_damage_rect(g_bg, x, y, w, h);
     comp_damage_rect(g_bg, 0, SH - TASKBAR_H, SW, TASKBAR_H);
     return idx;
+}
+
+/* ---------------- settings ---------------- */
+
+static void redraw_session(void) {
+    draw_background();
+    draw_menu();
+    for (int i = 0; i < MAX_APPS; ++i) {
+        App *a = &g_apps[i];
+        if (!a->used || !a->win) continue;
+        a->win->bg_color = app_background(a->kind);
+        if (!a->minimized) draw_app_content(a);
+    }
+    comp_damage_all();
+}
+
+/* Makes the session show g_settings: keyboard layout, palette, materials and
+   every window; then persists the model. */
+static void apply_settings(void) {
+    unsigned int changed = settings_diff(&g_applied, &g_settings);
+    if (!changed) return;
+
+    if (changed & SETTINGS_CHANGED_LAYOUT) {
+        /* The kernel reports the layout it ended up with. */
+        long active = sys_set_layout(g_settings.layout);
+        if (active == SETTINGS_LAYOUT_DE || active == SETTINGS_LAYOUT_US)
+            g_settings.layout = (int)active;
+    }
+    g_settings_save_failed = settings_save(SETTINGS_PATH, &g_settings) != 0;
+    g_applied = g_settings;
+    settings_palette(&g_settings, &g_th);
+    redraw_session();
+}
+
+/* A missing or unreadable file keeps the defaults: that is the normal state
+   of a fresh installation. */
+static void settings_startup(void) {
+    settings_defaults(&g_settings);
+    settings_load(SETTINGS_PATH, &g_settings);
+    sys_set_layout(g_settings.layout);
+    g_applied = g_settings;
+    settings_palette(&g_settings, &g_th);
 }
 
 /* ---------------- hit testing ---------------- */
@@ -991,7 +995,11 @@ static void handle_menu_click(int mx, int my) {
         app_open_new(idx);
     } else if (idx == 4) {
         close_menu();
-        app_open_new(APP_SETTINGS);
+        int opened = app_open_new(APP_SETTINGS);
+        if (opened >= 0) {
+            settings_ui_select(&g_apps[opened].settings_ui, SETTINGS_SECTION_ABOUT);
+            draw_app_content(&g_apps[opened]);
+        }
     } else {
         close_menu();
     }
@@ -1106,23 +1114,14 @@ static void handle_press(int mx, int my) {
                 return;
             }
         } else if (a->kind == APP_SETTINGS) {
-            if (point_in_rect(lx, ly, PAD, TITLE_H + 44, w->w - 2 * PAD, 40)) {
-                apply_theme(!g_theme);
-                draw_background();
-                for (int ai = 0; ai < MAX_APPS; ++ai) {
-                    if (g_apps[ai].used && g_apps[ai].win && !g_apps[ai].minimized)
-                        draw_app_content(&g_apps[ai]);
-                }
-                comp_damage_all();
-                return;
-            }
-            if (point_in_rect(lx, ly, PAD, TITLE_H + 110, w->w - 2 * PAD, 40)) {
-                g_layout = !g_layout;
-                sys_set_layout(g_layout);
+            unsigned int result = settings_ui_click(&a->settings_ui, w, lx, ly);
+            if (result & SETTINGS_UI_CHANGED) {
+                apply_settings();
+            } else if (result & SETTINGS_UI_REDRAW) {
                 draw_app_content(a);
                 comp_damage_rect(g_bg, w->x, w->y, w->w, w->h);
-                return;
             }
+            return;
         }
         return;
     }
@@ -1147,8 +1146,10 @@ static void handle_drag(int mx, int my) {
         } else if (a->resizing) {
             int nw = mx - w->x;
             int nh = my - w->y;
-            if (nw < 320) nw = 320;
-            if (nh < 200) nh = 200;
+            int min_w = a->kind == APP_SETTINGS ? SETTINGS_UI_MIN_WIDTH : 320;
+            int min_h = a->kind == APP_SETTINGS ? SETTINGS_UI_MIN_HEIGHT : 200;
+            if (nw < min_w) nw = min_w;
+            if (nh < min_h) nh = min_h;
             if (w->x + nw > SW) nw = SW - w->x;
             if (w->y + nh > SH - TASKBAR_H) nh = SH - TASKBAR_H - w->y;
             if (nw == w->w && nh == w->h) continue;
@@ -1156,6 +1157,48 @@ static void handle_drag(int mx, int my) {
             draw_app_content(a);
         }
     }
+}
+
+/* Hover highlights follow the pointer over the topmost window only. */
+static void settings_track_pointer(int mx, int my) {
+    int under = -1;
+
+    for (int i = MAX_APPS - 1; i >= 0; --i) {
+        App *a = &g_apps[i];
+        if (a->used && !a->minimized && a->win && a->win->visible &&
+            point_in_rect(mx, my, a->win->x, a->win->y, a->win->w, a->win->h)) {
+            under = i;
+            break;
+        }
+    }
+    if (g_menu_open && point_in_rect(mx, my, menu_x(), menu_y(), MENU_W, MENU_H)) under = -1;
+
+    for (int i = 0; i < MAX_APPS; ++i) {
+        App *a = &g_apps[i];
+        if (!a->used || a->kind != APP_SETTINGS || a->minimized || !a->win) continue;
+        int lx = i == under ? mx - a->win->x : -1;
+        int ly = i == under ? my - a->win->y : -1;
+        if (settings_ui_hover(&a->settings_ui, a->win, lx, ly) & SETTINGS_UI_REDRAW) {
+            draw_app_content(a);
+            comp_damage_rect(g_bg, a->win->x, a->win->y, a->win->w, a->win->h);
+        }
+    }
+}
+
+/* Runs pending pings and live-value refreshes of the Settings windows. */
+static int settings_service_all(void) {
+    int redrawn = 0;
+
+    for (int i = 0; i < MAX_APPS; ++i) {
+        App *a = &g_apps[i];
+        if (!a->used || a->kind != APP_SETTINGS || a->minimized || !a->win) continue;
+        if (settings_ui_service(&a->settings_ui, time_ms()) & SETTINGS_UI_REDRAW) {
+            draw_app_content(a);
+            comp_damage_rect(g_bg, a->win->x, a->win->y, a->win->w, a->win->h);
+            redrawn = 1;
+        }
+    }
+    return redrawn;
 }
 
 static void handle_release(void) {
@@ -1189,7 +1232,7 @@ int main(void) {
         printf("desktop: comp_init failed\n");
         return 1;
     }
-    apply_theme(0);
+    settings_startup();
     g_bg = comp_create_window(0, 0, SW, SH);
     if (!g_bg || !g_bg->surface) return 1;
     g_bg->bg_color = COL_BG_TOP;
@@ -1218,7 +1261,7 @@ int main(void) {
     comp_present_damage();
 
     for (;;) {
-        int dirty = 0;
+        int dirty = settings_service_all();
 
         for (int guard = 0; guard < 64; ++guard) {
             long k = sys_kbd_read();
@@ -1250,7 +1293,12 @@ int main(void) {
         int m[4] = { 0, 0, 0, 0 };
         if (sys_mouse_state(m) == 0) {
             int nmx = m[0], nmy = m[1], nbtn = m[2] & 7;
-            if (nmx != g_mx || nmy != g_my) { g_mx = nmx; g_my = nmy; dirty = 1; }
+            if (nmx != g_mx || nmy != g_my) {
+                g_mx = nmx;
+                g_my = nmy;
+                dirty = 1;
+                settings_track_pointer(g_mx, g_my);
+            }
             int wheel = m[3];
             int press = (nbtn & 1) && !(g_btn & 1);
             int release = !(nbtn & 1) && (g_btn & 1);
@@ -1283,7 +1331,7 @@ int main(void) {
         unsigned long now_sec = time_ms() / 1000;
         if (now_sec != g_last_sec) {
             g_last_sec = now_sec;
-            fill_rect(g_taskbar, SW - 16 - CLOCK_W - 2, 16, CLOCK_W + 4, 20, GLASS_CLEAR);
+            fill_rect(g_taskbar, SW - 16 - CLOCK_W - 2, 16, CLOCK_W + 4, 20, chrome_clear(COL_TASKBAR));
             draw_clock(g_taskbar, SW - 16, 20);
             comp_damage_rect(g_bg, SW - 16 - CLOCK_W - 2, SH - TASKBAR_H + 16, CLOCK_W + 4, 20);
             dirty = 1;

@@ -1,6 +1,8 @@
 #include "mini_libc.h"
 #include "compositor.h"
 #include "gfx_effects.h"
+#include "settings.h"
+#include "settings_ui.h"
 #include "widgets.h"
 /* theme.h must precede layout.h: layout.h defines shorthand macros such as
    gap/space that collide with Theme field names. */
@@ -834,6 +836,789 @@ static const char *test_compositor_effects(void) {
     return 0;
 }
 
+/* ---------------- settings model, palette and Settings app ---------------- */
+
+#define SETTINGS_TEST_PATH "/settings_test.conf"
+#define SETTINGS_TEST_CANONICAL \
+    "# HydrogenOS desktop settings\ntheme=dark\naccent=blue\nglass=on\nlayout=de\n"
+
+static int text_equals(const char *a, const char *b) {
+    while (*a && *a == *b) {
+        ++a;
+        ++b;
+    }
+    return *a == *b;
+}
+
+static int settings_equal(const Settings *a, const Settings *b) {
+    return a->theme == b->theme && a->accent == b->accent &&
+           a->glass == b->glass && a->layout == b->layout;
+}
+
+static int luma(uint32_t rgb) {
+    return (int)((299u * ((rgb >> 16) & 0xFFu) + 587u * ((rgb >> 8) & 0xFFu) +
+                  114u * (rgb & 0xFFu)) / 1000u);
+}
+
+static int luma_distance(uint32_t a, uint32_t b) {
+    int distance = luma(a) - luma(b);
+    return distance < 0 ? -distance : distance;
+}
+
+static const char *test_settings_model(void) {
+    Settings settings;
+    Settings parsed;
+    char text[SETTINGS_TEXT_CAP];
+    int written;
+
+    settings_defaults(&settings);
+    if (!settings_valid(&settings) || settings.theme != SETTINGS_THEME_DARK ||
+        settings.glass != 1 || settings.layout != SETTINGS_LAYOUT_DE) {
+        return "settings defaults";
+    }
+    written = settings_serialize(&settings, text, sizeof(text));
+    if (written != (int)strlen(SETTINGS_TEST_CANONICAL) ||
+        !text_equals(text, SETTINGS_TEST_CANONICAL)) {
+        return "settings serialize";
+    }
+
+    for (int theme = 0; theme < 2; ++theme) {
+        for (int accent = 0; accent < SETTINGS_ACCENT_COUNT; ++accent) {
+            for (int glass = 0; glass < 2; ++glass) {
+                for (int layout = 0; layout < 2; ++layout) {
+                    settings.theme = theme;
+                    settings.accent = accent;
+                    settings.glass = glass;
+                    settings.layout = layout;
+                    written = settings_serialize(&settings, text, sizeof(text));
+                    if (written <= 0 || written >= (int)sizeof(text)) {
+                        return "settings serialize combo";
+                    }
+                    /* Start from the opposite of every field so a missing
+                       assignment cannot pass as a match. */
+                    parsed.theme = !theme;
+                    parsed.accent = (accent + 1) % SETTINGS_ACCENT_COUNT;
+                    parsed.glass = !glass;
+                    parsed.layout = !layout;
+                    if (settings_parse(&parsed, text, (size_t)written) != 4 ||
+                        !settings_equal(&settings, &parsed)) {
+                        return "settings round trip";
+                    }
+                }
+            }
+        }
+    }
+
+    settings.theme = SETTINGS_THEME_LIGHT;
+    settings.accent = 2;
+    settings.glass = 0;
+    settings.layout = SETTINGS_LAYOUT_US;
+    written = settings_serialize(&settings, text, sizeof(text));
+    if (written != (int)strlen(text) || settings_serialize(&settings, text, (size_t)written) != -1 ||
+        settings_serialize(&settings, text, (size_t)written + 1) != written) {
+        return "settings serialize bounds";
+    }
+    settings.accent = SETTINGS_ACCENT_COUNT;
+    if (settings_valid(&settings) || settings_serialize(&settings, text, sizeof(text)) != -1) {
+        return "settings serialize invalid";
+    }
+    return 0;
+}
+
+static const char *test_settings_parse(void) {
+    static const char messy[] =
+        "  THEME = Light \r\n# comment\n\nunknown=1\naccent=nonexistent\n"
+        "no equals sign\naccent=PINK\nglass=maybe\n\tlayout=us";
+    static const char duplicate[] = "theme=light\ntheme=dark\n";
+    Settings settings;
+
+    settings_defaults(&settings);
+    if (settings_parse(&settings, messy, strlen(messy)) != 3) {
+        return "settings parse count";
+    }
+    if (settings.theme != SETTINGS_THEME_LIGHT || settings.accent != 2 ||
+        settings.glass != 1 || settings.layout != SETTINGS_LAYOUT_US) {
+        return "settings parse tolerant";
+    }
+    settings_defaults(&settings);
+    if (settings_parse(&settings, duplicate, strlen(duplicate)) != 2 ||
+        settings.theme != SETTINGS_THEME_DARK) {
+        return "settings parse last wins";
+    }
+    settings_defaults(&settings);
+    if (settings_parse(&settings, "theme=light", 5) != 0 || settings.theme != SETTINGS_THEME_DARK) {
+        return "settings parse truncated";
+    }
+    if (settings_parse(&settings, "", 0) != 0 || settings_parse(0, "x", 1) != -1 ||
+        settings_parse(&settings, 0, 4) != -1) {
+        return "settings parse arguments";
+    }
+    if (!settings_valid(&settings)) {
+        return "settings parse stays valid";
+    }
+    return 0;
+}
+
+static const char *test_settings_diff(void) {
+    Settings before;
+    Settings after;
+
+    settings_defaults(&before);
+    after = before;
+    if (settings_diff(&before, &after) != 0) {
+        return "settings diff none";
+    }
+    after.theme = SETTINGS_THEME_LIGHT;
+    after.accent = 3;
+    if (settings_diff(&before, &after) != (SETTINGS_CHANGED_THEME | SETTINGS_CHANGED_ACCENT)) {
+        return "settings diff theme accent";
+    }
+    after = before;
+    after.glass = 0;
+    after.layout = SETTINGS_LAYOUT_US;
+    if (settings_diff(&before, &after) != (SETTINGS_CHANGED_GLASS | SETTINGS_CHANGED_LAYOUT)) {
+        return "settings diff glass layout";
+    }
+    return 0;
+}
+
+static const char *test_settings_palette(void) {
+    Settings settings;
+    SettingsPalette dark;
+    SettingsPalette light;
+    SettingsPalette other;
+
+    settings_defaults(&settings);
+    settings_palette(&settings, &dark);
+    settings.theme = SETTINGS_THEME_LIGHT;
+    settings_palette(&settings, &light);
+
+    if (dark.accent != settings_accent_color(0, SETTINGS_THEME_DARK) ||
+        light.accent != settings_accent_color(0, SETTINGS_THEME_LIGHT)) {
+        return "palette accent tokens";
+    }
+    if (luma(light.surface) <= luma(dark.surface) || luma(light.card) <= luma(dark.card) ||
+        luma(light.wallpaper_top) <= luma(dark.wallpaper_top) ||
+        luma(light.ink) >= luma(dark.ink) || luma(light.wallpaper_text) >= luma(dark.wallpaper_text)) {
+        return "palette theme switch";
+    }
+    if (luma_distance(dark.ink, dark.surface) < 150 || luma_distance(light.ink, light.surface) < 150 ||
+        luma_distance(dark.wallpaper_text, dark.wallpaper_bottom) < 100 ||
+        luma_distance(light.wallpaper_text, light.wallpaper_bottom) < 100 ||
+        luma_distance(dark.chrome_text, dark.taskbar) < 100 ||
+        luma_distance(light.chrome_text, light.taskbar) < 100) {
+        return "palette contrast";
+    }
+    if (luma(light.taskbar) > 80 || luma(light.menu) > 80 || light.glass_alpha < dark.glass_alpha) {
+        return "palette chrome stays dark";
+    }
+    if (dark.terminal_bg != light.terminal_bg || dark.title != light.title ||
+        dark.document_bg != light.document_bg) {
+        return "palette theme independent tokens";
+    }
+
+    for (int theme = 0; theme < 2; ++theme) {
+        for (int accent = 0; accent < SETTINGS_ACCENT_COUNT; ++accent) {
+            uint32_t color = settings_accent_color(accent, theme);
+
+            settings.theme = theme;
+            settings.accent = accent;
+            settings_palette(&settings, &other);
+            if (other.accent != color || luma_distance(other.on_accent, color) < 90) {
+                return "palette accent contrast";
+            }
+            for (int later = accent + 1; later < SETTINGS_ACCENT_COUNT; ++later) {
+                if (settings_accent_color(later, theme) == color) {
+                    return "palette accent unique";
+                }
+            }
+        }
+    }
+    if (settings_accent_name(0)[0] == '\0' || settings_accent_name(SETTINGS_ACCENT_COUNT)[0] != '\0') {
+        return "palette accent names";
+    }
+
+    settings.theme = 9;
+    settings_palette(&settings, &other);
+    if (other.surface != dark.surface || other.accent != dark.accent) {
+        return "palette invalid settings";
+    }
+    return 0;
+}
+
+static const char *test_settings_persistence(void) {
+    Settings saved;
+    Settings loaded;
+    char text[SETTINGS_TEXT_CAP];
+    long fd;
+    long got;
+    const char *failure = 0;
+
+    settings_defaults(&loaded);
+    if (settings_load("/settings_missing.conf", &loaded) >= 0) {
+        return "settings load missing";
+    }
+    settings_defaults(&saved);
+    if (!settings_equal(&saved, &loaded)) {
+        return "settings load missing untouched";
+    }
+
+    saved.theme = SETTINGS_THEME_LIGHT;
+    saved.accent = 4;
+    saved.glass = 0;
+    saved.layout = SETTINGS_LAYOUT_US;
+    if (settings_save(SETTINGS_TEST_PATH, &saved) != 0) {
+        return "settings save";
+    }
+    fd = open(SETTINGS_TEST_PATH, OPEN_READ);
+    got = fd < 0 ? -1 : read((int)fd, text, sizeof(text) - 1);
+    if (fd >= 0) {
+        close((int)fd);
+    }
+    if (got <= 0) {
+        failure = "settings file read";
+    } else {
+        text[got] = '\0';
+        if (!text_equals(text, "# HydrogenOS desktop settings\ntheme=light\naccent=orange\n"
+                               "glass=off\nlayout=us\n")) {
+            failure = "settings file content";
+        }
+    }
+
+    if (!failure) {
+        settings_defaults(&loaded);
+        if (settings_load(SETTINGS_TEST_PATH, &loaded) != 0 || !settings_equal(&saved, &loaded)) {
+            failure = "settings load";
+        }
+    }
+    if (!failure) {
+        static const char damaged[] = "garbage\nlayout=us\naccent=\n";
+
+        if (sys_writef(SETTINGS_TEST_PATH, damaged, sizeof(damaged) - 1) != 0) {
+            failure = "settings damaged write";
+        } else {
+            settings_defaults(&loaded);
+            if (settings_load(SETTINGS_TEST_PATH, &loaded) != 0 || loaded.layout != SETTINGS_LAYOUT_US ||
+                loaded.accent != 0 || !settings_valid(&loaded)) {
+                failure = "settings damaged load";
+            }
+        }
+    }
+    sys_unlink(SETTINGS_TEST_PATH);
+    return failure;
+}
+
+static const char *test_settings_info(void) {
+    static const char meminfo[] =
+        "MemTotal:       262144 kB\nMemFree:        200000 kB\nMemUsed:         62144 kB\n"
+        "PageSize:         4096 B\n";
+    static const unsigned char mac[6] = { 0x52, 0x54, 0x00, 0x12, 0x34, 0x56 };
+    unsigned long total;
+    unsigned long used;
+    unsigned long seconds;
+    SettingsInfo info;
+    char text[SETTINGS_INFO_TEXT_CAP];
+    char tiny[4];
+    char version_line[3 * 100];
+    size_t line_size = 0;
+
+    memset(&info, 0, sizeof(info));
+    if (settings_info_parse_meminfo(meminfo, strlen(meminfo), &total, &used) != 0 ||
+        total != 262144ul || used != 62144ul) {
+        return "info meminfo";
+    }
+    if (settings_info_parse_meminfo("MemTotal: 1 kB\n", 15, &total, &used) == 0 ||
+        settings_info_parse_meminfo("MemTotal:\nMemUsed: 5 kB\n", 24, &total, &used) == 0) {
+        return "info meminfo incomplete";
+    }
+    if (settings_info_parse_uptime("123.45\n", 7, &seconds) != 0 || seconds != 123ul ||
+        settings_info_parse_uptime("0.05\n", 5, &seconds) != 0 || seconds != 0ul ||
+        settings_info_parse_uptime("abc", 3, &seconds) == 0) {
+        return "info uptime";
+    }
+    if (settings_info_parse_version("HydrogenOS 0.3.0-dev x86_64\n", 28, &info) != 0 ||
+        !text_equals(info.os_name, "HydrogenOS") || !text_equals(info.os_version, "0.3.0-dev") ||
+        !text_equals(info.os_arch, "x86_64")) {
+        return "info version";
+    }
+    if (settings_info_parse_version("HydrogenOS\n", 11, &info) == 0) {
+        return "info version incomplete";
+    }
+    for (int word = 0; word < 3; ++word) {
+        memset(version_line + line_size, 'x', 99);
+        line_size += 99;
+        version_line[line_size++] = ' ';
+    }
+    if (settings_info_parse_version(version_line, line_size, &info) != 0 ||
+        strlen(info.os_name) != SETTINGS_INFO_TEXT_CAP - 1 ||
+        strlen(info.os_arch) != SETTINGS_INFO_TEXT_CAP - 1) {
+        return "info version truncation";
+    }
+
+    settings_info_format_ipv4(text, sizeof(text), NET_IPV4_ADDR(10, 0, 2, 15));
+    if (!text_equals(text, "10.0.2.15")) {
+        return "info ipv4";
+    }
+    settings_info_format_mac(text, sizeof(text), mac);
+    if (!text_equals(text, "52:54:00:12:34:56")) {
+        return "info mac";
+    }
+    settings_info_format_size(text, sizeof(text), 512ul);
+    if (!text_equals(text, "512 KB")) {
+        return "info size kb";
+    }
+    settings_info_format_size(text, sizeof(text), 48433ul);
+    if (!text_equals(text, "47.2 MB")) {
+        return "info size mb";
+    }
+    settings_info_format_size(text, sizeof(text), 1572864ul);
+    if (!text_equals(text, "1.5 GB")) {
+        return "info size gb";
+    }
+    settings_info_format_duration(text, sizeof(text), 5ul);
+    if (!text_equals(text, "5s")) {
+        return "info duration seconds";
+    }
+    settings_info_format_duration(text, sizeof(text), 245ul);
+    if (!text_equals(text, "4m 05s")) {
+        return "info duration minutes";
+    }
+    settings_info_format_duration(text, sizeof(text), 7380ul);
+    if (!text_equals(text, "2h 03m")) {
+        return "info duration hours";
+    }
+    settings_info_format_duration(text, sizeof(text), 90000ul);
+    if (!text_equals(text, "1d 01h")) {
+        return "info duration days";
+    }
+    settings_info_format_ping(text, sizeof(text), 3);
+    if (!text_equals(text, "Reply in 3 ms")) {
+        return "info ping reply";
+    }
+    settings_info_format_ping(text, sizeof(text), SETTINGS_PING_ETIMEDOUT);
+    if (!text_equals(text, "No reply (timed out)")) {
+        return "info ping timeout";
+    }
+    settings_info_format_ping(text, sizeof(text), SETTINGS_PING_ENODEV);
+    if (!text_equals(text, "No network adapter")) {
+        return "info ping nodev";
+    }
+    settings_info_format_ping(text, sizeof(text), -5);
+    if (!text_equals(text, "Failed (error 5)")) {
+        return "info ping error";
+    }
+    settings_info_format_ipv4(tiny, sizeof(tiny), NET_IPV4_ADDR(255, 255, 255, 255));
+    if (strlen(tiny) != sizeof(tiny) - 1) {
+        return "info format truncation";
+    }
+    info.network_valid = 0;
+    if (settings_info_ping_gateway(&info, 10) != SETTINGS_PING_ENODEV) {
+        return "info ping without adapter";
+    }
+    return 0;
+}
+
+static int rect_inside(const GfxRect *outer, const GfxRect *inner) {
+    return inner->w > 0 && inner->h > 0 && inner->x >= outer->x && inner->y >= outer->y &&
+           inner->x + inner->w <= outer->x + outer->w && inner->y + inner->h <= outer->y + outer->h;
+}
+
+static int rects_overlap(const GfxRect *a, const GfxRect *b) {
+    return a->x < b->x + b->w && b->x < a->x + a->w && a->y < b->y + b->h && b->y < a->y + a->h;
+}
+
+static int rects_disjoint(const GfxRect *rects, int rect_count) {
+    for (int i = 0; i < rect_count; ++i) {
+        for (int j = i + 1; j < rect_count; ++j) {
+            if (rects_overlap(&rects[i], &rects[j])) {
+                return 0;
+            }
+        }
+    }
+    return 1;
+}
+
+static int rect_center_hit(const SettingsUiLayout *layout, const GfxRect *rect) {
+    return settings_ui_hit_test(layout, rect->x + rect->w / 2, rect->y + rect->h / 2);
+}
+
+static const char *check_section_layout(const SettingsUiLayout *layout, int section) {
+    const GfxRect *content = &layout->content;
+
+    if (!rect_inside(&layout->body, &layout->sidebar) || !rect_inside(&layout->body, content) ||
+        layout->sidebar.x + layout->sidebar.w != content->x) {
+        return "settings layout panes";
+    }
+    if (!rects_disjoint(layout->section_item, SETTINGS_SECTION_COUNT)) {
+        return "settings layout sidebar overlap";
+    }
+    for (int i = 0; i < SETTINGS_SECTION_COUNT; ++i) {
+        if (!rect_inside(&layout->sidebar, &layout->section_item[i]) ||
+            rect_center_hit(layout, &layout->section_item[i]) != SETTINGS_HIT_SECTION + i) {
+            return "settings layout sidebar item";
+        }
+    }
+    if (layout->card_count < 1 || layout->card_count > SETTINGS_UI_MAX_CARDS ||
+        !rects_disjoint(layout->cards, layout->card_count)) {
+        return "settings layout cards";
+    }
+    for (int i = 0; i < layout->card_count; ++i) {
+        if (!rect_inside(content, &layout->cards[i])) {
+            return "settings layout card bounds";
+        }
+    }
+
+    switch (section) {
+    case SETTINGS_SECTION_APPEARANCE:
+        if (layout->card_count != 3 || !rects_disjoint(layout->theme_tile, 2) ||
+            !rects_disjoint(layout->accent_dot, SETTINGS_ACCENT_COUNT)) {
+            return "settings layout appearance";
+        }
+        for (int i = 0; i < 2; ++i) {
+            if (!rect_inside(&layout->cards[0], &layout->theme_tile[i]) ||
+                rect_center_hit(layout, &layout->theme_tile[i]) != SETTINGS_HIT_THEME + i) {
+                return "settings layout theme tile";
+            }
+        }
+        for (int i = 0; i < SETTINGS_ACCENT_COUNT; ++i) {
+            if (!rect_inside(&layout->cards[1], &layout->accent_dot[i]) ||
+                rect_center_hit(layout, &layout->accent_dot[i]) != SETTINGS_HIT_ACCENT + i) {
+                return "settings layout accent dot";
+            }
+        }
+        if (!rect_inside(&layout->cards[2], &layout->glass_switch) ||
+            rect_center_hit(layout, &layout->glass_switch) != SETTINGS_HIT_GLASS) {
+            return "settings layout glass switch";
+        }
+        break;
+    case SETTINGS_SECTION_KEYBOARD:
+        if (layout->card_count != 1 || !rects_disjoint(layout->layout_row, 2)) {
+            return "settings layout keyboard";
+        }
+        for (int i = 0; i < 2; ++i) {
+            if (!rect_inside(&layout->cards[0], &layout->layout_row[i]) ||
+                rect_center_hit(layout, &layout->layout_row[i]) != SETTINGS_HIT_LAYOUT + i) {
+                return "settings layout keyboard row";
+            }
+        }
+        break;
+    case SETTINGS_SECTION_NETWORK:
+        if (layout->card_count != 2 || !rect_inside(&layout->cards[1], &layout->ping_button) ||
+            rect_center_hit(layout, &layout->ping_button) != SETTINGS_HIT_PING) {
+            return "settings layout network";
+        }
+        break;
+    case SETTINGS_SECTION_ABOUT:
+        if (layout->card_count != 1 || !rect_inside(content, &layout->logo) ||
+            layout->logo.y + layout->logo.h > layout->cards[0].y) {
+            return "settings layout about";
+        }
+        break;
+    default:
+        break;
+    }
+
+    if (settings_ui_hit_test(layout, content->x + content->w - 1, content->y + content->h - 1) !=
+            SETTINGS_HIT_NONE ||
+        settings_ui_hit_test(layout, -5, -5) != SETTINGS_HIT_NONE) {
+        return "settings layout empty space";
+    }
+    return 0;
+}
+
+static const char *test_settings_layout(void) {
+    static const int sizes[][2] = {
+        { SETTINGS_UI_MIN_WIDTH, SETTINGS_UI_MIN_HEIGHT }, { 700, 480 }, { 1000, 700 },
+    };
+    SettingsUiLayout layout;
+    const char *failure;
+
+    for (int size = 0; size < 3; ++size) {
+        for (int section = 0; section < SETTINGS_SECTION_COUNT; ++section) {
+            settings_ui_layout(sizes[size][0], sizes[size][1], 30, section, &layout);
+            failure = check_section_layout(&layout, section);
+            if (failure) {
+                return failure;
+            }
+            /* Everything must fit above the bottom edge, with room for a notice. */
+            for (int card = 0; card < layout.card_count; ++card) {
+                if (layout.cards[card].y + layout.cards[card].h > sizes[size][1] - 16) {
+                    return "settings layout fits";
+                }
+            }
+        }
+    }
+
+    /* A window far below the minimum must still produce sane rectangles. */
+    settings_ui_layout(120, 60, 30, SETTINGS_SECTION_NETWORK, &layout);
+    if (layout.sidebar.w < 0 || layout.content.w < 0 || layout.content.h < 0 ||
+        layout.cards[0].w < 0 || layout.ping_button.w < 0) {
+        return "settings layout tiny";
+    }
+    settings_ui_layout(700, 480, 30, SETTINGS_SECTION_COUNT, &layout);
+    if (layout.card_count != 0) {
+        return "settings layout unknown section";
+    }
+    return 0;
+}
+
+static const char *test_settings_ui_events(void) {
+    Settings settings;
+    SettingsPalette palette;
+    SettingsUi ui;
+    SettingsUiLayout layout;
+    Window win;
+    unsigned int result;
+
+    settings_defaults(&settings);
+    settings_palette(&settings, &palette);
+    settings_ui_init(&ui, &settings, &palette, 0, 30);
+    memset(&win, 0, sizeof(win));
+    win.w = 700;
+    win.h = 480;
+
+    settings_ui_layout(win.w, win.h, 30, SETTINGS_SECTION_APPEARANCE, &layout);
+    result = settings_ui_click(&ui, &win, layout.theme_tile[1].x + 5, layout.theme_tile[1].y + 5);
+    if (result != (SETTINGS_UI_REDRAW | SETTINGS_UI_CHANGED) || settings.theme != SETTINGS_THEME_LIGHT) {
+        return "settings ui theme click";
+    }
+    if (settings_ui_click(&ui, &win, layout.theme_tile[1].x + 5, layout.theme_tile[1].y + 5) != 0) {
+        return "settings ui theme click repeat";
+    }
+    result = settings_ui_click(&ui, &win, layout.accent_dot[3].x + 14, layout.accent_dot[3].y + 14);
+    if (!(result & SETTINGS_UI_CHANGED) || settings.accent != 3) {
+        return "settings ui accent click";
+    }
+    result = settings_ui_click(&ui, &win, layout.cards[2].x + 20, layout.cards[2].y + 20);
+    if (!(result & SETTINGS_UI_CHANGED) || settings.glass != 0) {
+        return "settings ui glass off";
+    }
+    result = settings_ui_click(&ui, &win, layout.glass_switch.x + 3, layout.glass_switch.y + 3);
+    if (!(result & SETTINGS_UI_CHANGED) || settings.glass != 1) {
+        return "settings ui glass on";
+    }
+    if (settings_ui_click(&ui, &win, layout.content.x + layout.content.w - 2, layout.title_y) != 0) {
+        return "settings ui empty click";
+    }
+
+    result = settings_ui_click(&ui, &win, layout.section_item[SETTINGS_SECTION_KEYBOARD].x + 4,
+                               layout.section_item[SETTINGS_SECTION_KEYBOARD].y + 4);
+    if (result != SETTINGS_UI_REDRAW || ui.section != SETTINGS_SECTION_KEYBOARD) {
+        return "settings ui section click";
+    }
+    if (settings_ui_click(&ui, &win, layout.section_item[SETTINGS_SECTION_KEYBOARD].x + 4,
+                          layout.section_item[SETTINGS_SECTION_KEYBOARD].y + 4) != 0) {
+        return "settings ui section repeat";
+    }
+    settings_ui_layout(win.w, win.h, 30, SETTINGS_SECTION_KEYBOARD, &layout);
+    result = settings_ui_click(&ui, &win, layout.layout_row[1].x + 10, layout.layout_row[1].y + 10);
+    if (!(result & SETTINGS_UI_CHANGED) || settings.layout != SETTINGS_LAYOUT_US) {
+        return "settings ui layout click";
+    }
+    if (settings_ui_click(&ui, &win, layout.layout_row[1].x + 10, layout.layout_row[1].y + 10) != 0) {
+        return "settings ui layout repeat";
+    }
+    if (!settings_valid(&settings)) {
+        return "settings ui keeps model valid";
+    }
+    /* An accent dot is not clickable on another page. */
+    settings_ui_layout(win.w, win.h, 30, SETTINGS_SECTION_APPEARANCE, &layout);
+    if (settings_ui_click(&ui, &win, layout.accent_dot[0].x + 14, layout.accent_dot[0].y + 14) != 0 ||
+        settings.accent != 3) {
+        return "settings ui foreign click";
+    }
+
+    result = settings_ui_hover(&ui, &win, layout.section_item[0].x + 4, layout.section_item[0].y + 4);
+    if (result != SETTINGS_UI_REDRAW || ui.hover != SETTINGS_HIT_SECTION) {
+        return "settings ui hover";
+    }
+    if (settings_ui_hover(&ui, &win, layout.section_item[0].x + 6, layout.section_item[0].y + 6) != 0) {
+        return "settings ui hover repeat";
+    }
+    if (settings_ui_hover(&ui, &win, -1, -1) != SETTINGS_UI_REDRAW || ui.hover != SETTINGS_HIT_NONE) {
+        return "settings ui hover leave";
+    }
+
+    ui.section = SETTINGS_SECTION_NETWORK;
+    ui.info.network_valid = 0;
+    settings_ui_layout(win.w, win.h, 30, SETTINGS_SECTION_NETWORK, &layout);
+    if (settings_ui_click(&ui, &win, layout.ping_button.x + 5, layout.ping_button.y + 5) != 0 ||
+        ui.ping_pending) {
+        return "settings ui ping without adapter";
+    }
+    ui.section = SETTINGS_SECTION_APPEARANCE;
+    if (settings_ui_service(&ui, ui.info_refreshed_ms + 60000ul) != 0) {
+        return "settings ui service idle";
+    }
+    settings_ui_select(&ui, SETTINGS_SECTION_COUNT);
+    if (ui.section != SETTINGS_SECTION_APPEARANCE) {
+        return "settings ui select invalid";
+    }
+    return 0;
+}
+
+static void settings_test_info(SettingsInfo *info) {
+    memset(info, 0, sizeof(*info));
+    info->display_valid = 1;
+    info->display_width = 1280;
+    info->display_height = 720;
+    info->display_bits_per_pixel = 32;
+    info->network_valid = 1;
+    info->network.mac[0] = 0x52;
+    info->network.mac[1] = 0x54;
+    info->network.mac[5] = 0x56;
+    info->network.flags = NET_INFO_PRESENT | NET_INFO_LINK_UP;
+    info->network.ipv4 = NET_IPV4_ADDR(10, 0, 2, 15);
+    info->network.netmask = NET_IPV4_ADDR(255, 255, 255, 0);
+    info->network.gateway = NET_IPV4_ADDR(10, 0, 2, 2);
+    info->memory_valid = 1;
+    info->memory_total_kib = 262144;
+    info->memory_used_kib = 62144;
+    info->storage_valid = 1;
+    info->storage_total_kib = 16000;
+    info->storage_free_kib = 12000;
+    info->uptime_valid = 1;
+    info->uptime_seconds = 245;
+    info->version_valid = 1;
+    memcpy(info->os_name, "HydrogenOS", 11);
+    memcpy(info->os_version, "0.3.0-dev", 10);
+    memcpy(info->os_arch, "x86_64", 7);
+}
+
+static uint32_t window_pixel(const Window *win, int x, int y) {
+    return ((const uint32_t *)win->surface)[y * win->w + x] & 0x00FFFFFFu;
+}
+
+static uint32_t window_checksum(const Window *win) {
+    return gfx_checksum((const uint32_t *)win->surface, win->w, win->h, win->w);
+}
+
+/* A pixel inside a sidebar item, right of its label. */
+static uint32_t selected_item_pixel(const Window *win, const SettingsUiLayout *layout, int section) {
+    const GfxRect *item = &layout->section_item[section];
+
+    return window_pixel(win, item->x + item->w - 5, item->y + item->h / 2);
+}
+
+static const char *check_ui_section_paint(SettingsUi *ui, Window *win, const SettingsPalette *palette,
+                                          uint32_t *sums) {
+    SettingsUiLayout layout;
+
+    for (int section = 0; section < SETTINGS_SECTION_COUNT; ++section) {
+        ui->section = section;
+        settings_ui_draw(ui, win);
+        settings_ui_layout(win->w, win->h, 30, section, &layout);
+        sums[section] = window_checksum(win);
+
+        if (window_pixel(win, win->w - 1, win->h - 1) != palette->surface ||
+            window_pixel(win, 3, win->h - 3) != palette->sidebar ||
+            selected_item_pixel(win, &layout, section) != palette->accent) {
+            return "settings ui paints tokens";
+        }
+        settings_ui_draw(ui, win);
+        if (window_checksum(win) != sums[section]) {
+            return "settings ui deterministic";
+        }
+    }
+    for (int section = 1; section < SETTINGS_SECTION_COUNT; ++section) {
+        if (sums[section] == sums[section - 1]) {
+            return "settings ui sections differ";
+        }
+    }
+    return 0;
+}
+
+static const char *check_ui_live_preview(SettingsUi *ui, Window *win, Settings *settings,
+                                         SettingsPalette *palette) {
+    SettingsUiLayout layout;
+    uint32_t dark_sum;
+
+    ui->section = SETTINGS_SECTION_APPEARANCE;
+    settings_ui_layout(win->w, win->h, 30, SETTINGS_SECTION_APPEARANCE, &layout);
+    settings_ui_draw(ui, win);
+    dark_sum = window_checksum(win);
+
+    /* Theme switching repaints with the light tokens. */
+    settings->theme = SETTINGS_THEME_LIGHT;
+    settings_palette(settings, palette);
+    settings_ui_draw(ui, win);
+    if (window_pixel(win, win->w - 1, win->h - 1) != palette->surface ||
+        window_pixel(win, 3, win->h - 3) != palette->sidebar ||
+        window_checksum(win) == dark_sum) {
+        return "settings ui light theme";
+    }
+
+    /* The accent shows up in the selected sidebar item and the selected dot. */
+    settings->accent = 5;
+    settings_palette(settings, palette);
+    settings_ui_draw(ui, win);
+    if (palette->accent != settings_accent_color(5, SETTINGS_THEME_LIGHT) ||
+        selected_item_pixel(win, &layout, SETTINGS_SECTION_APPEARANCE) != palette->accent ||
+        window_pixel(win, layout.accent_dot[5].x + 14, layout.accent_dot[5].y + 14) != palette->accent ||
+        window_pixel(win, layout.accent_dot[2].x + 14, layout.accent_dot[2].y + 14) == palette->accent) {
+        return "settings ui accent paint";
+    }
+
+    /* The glass switch is accent coloured when on and grey when off. */
+    settings->glass = 0;
+    settings_ui_draw(ui, win);
+    if (window_pixel(win, layout.glass_switch.x + layout.glass_switch.w - 6,
+                     layout.glass_switch.y + 13) != palette->control_off) {
+        return "settings ui switch off";
+    }
+    settings->glass = 1;
+    settings_ui_draw(ui, win);
+    if (window_pixel(win, layout.glass_switch.x + 6, layout.glass_switch.y + 13) != palette->accent) {
+        return "settings ui switch on";
+    }
+
+    ui->save_failed = 1;
+    settings_ui_draw(ui, win);
+    ui->save_failed = 0;
+    return 0;
+}
+
+static const char *test_settings_ui_draw(void) {
+    static const int sizes[][2] = { { SETTINGS_UI_MIN_WIDTH, SETTINGS_UI_MIN_HEIGHT }, { 700, 480 } };
+    Settings settings;
+    SettingsPalette palette;
+    SettingsUi ui;
+    uint32_t sums[SETTINGS_SECTION_COUNT];
+    const char *failure = 0;
+
+    if (quiet_stdout_begin() != 0) {
+        return "stdout guard";
+    }
+    if (comp_init_size(TEST_SURFACE_W, TEST_SURFACE_H) != 0) {
+        quiet_stdout_end();
+        return "settings ui compositor";
+    }
+    if (quiet_stdout_end() != 0) {
+        return "stdout restore";
+    }
+
+    for (int size = 0; size < 2 && !failure; ++size) {
+        Window *win = comp_create_window(0, 0, sizes[size][0], sizes[size][1]);
+
+        if (!win || !win->surface) {
+            return "settings ui window";
+        }
+        settings_defaults(&settings);
+        settings_palette(&settings, &palette);
+        settings_ui_init(&ui, &settings, &palette, 0, 30);
+        settings_test_info(&ui.info);
+
+        failure = check_ui_section_paint(&ui, win, &palette, sums);
+        if (!failure) {
+            failure = check_ui_live_preview(&ui, win, &settings, &palette);
+        }
+        if (comp_destroy_window(win) != 0 && !failure) {
+            failure = "settings ui window destroy";
+        }
+    }
+    return failure;
+}
+
 static void report_fail(const char *reason) {
     write(1, "DESKTOPTEST FAIL: ", 18);
     write(1, reason, strlen(reason));
@@ -867,6 +1652,33 @@ int main(void) {
     }
     if (!failure) {
         failure = test_compositor_effects();
+    }
+    if (!failure) {
+        failure = test_settings_model();
+    }
+    if (!failure) {
+        failure = test_settings_parse();
+    }
+    if (!failure) {
+        failure = test_settings_diff();
+    }
+    if (!failure) {
+        failure = test_settings_palette();
+    }
+    if (!failure) {
+        failure = test_settings_persistence();
+    }
+    if (!failure) {
+        failure = test_settings_info();
+    }
+    if (!failure) {
+        failure = test_settings_layout();
+    }
+    if (!failure) {
+        failure = test_settings_ui_events();
+    }
+    if (!failure) {
+        failure = test_settings_ui_draw();
     }
 
     if (failure) {

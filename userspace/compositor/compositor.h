@@ -105,6 +105,9 @@ uint32_t *comp_back_buffer(void);
 int comp_width(void);
 int comp_height(void);
 
+/* Draws 8x16 bitmap text with its top-left at (x, y) and damages the window. */
+void comp_text_render(Window *win, int x, int y, const char *text, uint32_t color);
+
 /* Event loop */
 void comp_event_loop(void);
 
