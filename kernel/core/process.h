@@ -3,6 +3,7 @@
 #include <stdint.h>
 
 #include "isr.h"
+#include "vmm_user.h"
 
 struct kernel_pipe;
 
@@ -118,7 +119,7 @@ typedef struct process {
     uint32_t waiting_poll_count;
     uint64_t waiting_poll_deadline_ms;
     uint8_t waiting_poll_has_deadline;
-    uintptr_t brk;
+    VmmUserSpace vm;
     struct process *next;
 } process_t;
 

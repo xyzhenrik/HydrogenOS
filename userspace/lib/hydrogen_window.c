@@ -39,7 +39,7 @@ static void *alloc_pages(size_t bytes) {
         return 0;
     }
     size_t aligned = align_up_size(bytes, 4096u);
-    void *ptr = (void *)sys_mmap(0, aligned, 0, 0, 0, 0);
+    void *ptr = (void *)sys_mmap(0, aligned, MMAP_PROT_READ | MMAP_PROT_WRITE, 0);
     if ((long)ptr < 0) {
         return 0;
     }

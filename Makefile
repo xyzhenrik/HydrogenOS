@@ -107,6 +107,8 @@ USER_TEEREADER_A_OBJ = $(BUILD_DIR)/user_teereader_a.o
 USER_TEEREADER_A_ELF = $(BUILD_DIR)/user_teereader_a.elf
 USER_TEEREADER_B_OBJ = $(BUILD_DIR)/user_teereader_b.o
 USER_TEEREADER_B_ELF = $(BUILD_DIR)/user_teereader_b.elf
+USER_MMAPTEST_OBJ = $(BUILD_DIR)/user_mmaptest.o
+USER_MMAPTEST_ELF = $(BUILD_DIR)/user_mmaptest.elf
 INIT_CONFIG = userspace/init/init.rc
 USER_COMPOSITOR_OBJ = $(BUILD_DIR)/user_compositor.o
 USER_COMPOSITOR_ELF = $(BUILD_DIR)/user_compositor.elf
@@ -126,9 +128,11 @@ USER_SHELL_OBJ = $(BUILD_DIR)/user_shell.o
 USER_SHELL_ELF = $(BUILD_DIR)/user_shell.elf
 USER_CRT0_OBJ = $(BUILD_DIR)/user_crt0.o
 USER_LIBC_OBJ = $(BUILD_DIR)/user_libc.o
+USER_LIBC_CORE_OBJ = $(BUILD_DIR)/user_libc_core.o
+USER_MALLOC_OBJ = $(BUILD_DIR)/user_malloc.o
 OBJS = $(BUILD_DIR)/boot.o $(BUILD_DIR)/kernel.o $(BUILD_DIR)/console.o $(BUILD_DIR)/serial.o $(BUILD_DIR)/panic.o \
        $(BUILD_DIR)/paging.o $(BUILD_DIR)/time.o $(BUILD_DIR)/pmm.o $(BUILD_DIR)/kheap.o $(BUILD_DIR)/string.o \
-       $(BUILD_DIR)/syscall.o $(BUILD_DIR)/process.o $(BUILD_DIR)/pipe.o \
+       $(BUILD_DIR)/vmm_user.o $(BUILD_DIR)/syscall.o $(BUILD_DIR)/process.o $(BUILD_DIR)/pipe.o \
        $(BUILD_DIR)/keyboard.o $(BUILD_DIR)/mouse.o $(BUILD_DIR)/elf_loader.o \
        $(BUILD_DIR)/ata.o $(BUILD_DIR)/pci.o $(BUILD_DIR)/virtio.o $(BUILD_DIR)/virtio_blk.o $(BUILD_DIR)/virtio_gpu.o $(BUILD_DIR)/virtio_input.o $(BUILD_DIR)/msi.o $(BUILD_DIR)/block.o $(BUILD_DIR)/block_cache.o $(BUILD_DIR)/mbr.o \
        $(BUILD_DIR)/ext2.o $(BUILD_DIR)/vfs.o $(BUILD_DIR)/ramfs.o \
@@ -666,11 +670,25 @@ $(USER_CRT0_OBJ): userspace/lib/crt0.S
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(USER_ASFLAGS) -c $< -o $@
 
-$(USER_LIBC_OBJ): userspace/lib/mini_libc.c userspace/lib/mini_libc.h userspace/lib/syscall.h
+$(USER_LIBC_CORE_OBJ): userspace/lib/mini_libc.c userspace/lib/mini_libc.h userspace/lib/syscall.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(USER_CFLAGS) -c $< -o $@
 
-$(INITRD): $(USER_HELLO_ELF) $(USER_ECHO_ELF) $(USER_CAT_ELF) $(USER_TIME_ELF) $(USER_SLEEP_ELF) $(USER_PIPEREAD_ELF) $(USER_PIPEDELAYREAD_ELF) $(USER_PIPEPRODUCER_ELF) $(USER_PIPECONSUMER_ELF) $(USER_LOGPRODUCER_A_ELF) $(USER_LOGPRODUCER_B_ELF) $(USER_LOGCOLLECTOR_ELF) $(USER_BOOTPROBE_ELF) $(USER_HANDOFFCHECK_ELF) $(USER_STDIOCHECK_ELF) $(USER_STDIOBADBIND_ELF) $(USER_STDIONULLCHECK_ELF) $(USER_DUPCHECK_ELF) $(USER_HANDLELIMITCHECK_ELF) $(USER_FILEOFFSETCHECK_ELF) $(USER_SEEKCHECK_ELF) $(USER_POLLCHECK_ELF) $(USER_POLLWAITCHECK_ELF) $(USER_POLLWAKEWRITER_ELF) $(USER_POLLMANYCHECK_ELF) $(USER_CWDCHECK_ELF) $(USER_DUPFALLBACKCHECK_ELF) $(USER_FSTEST_ELF) $(USER_LOGIN_ELF) $(USER_PKGTEST_ELF) $(USER_LOGSINK_WRITER_A_ELF) $(USER_LOGSINK_WRITER_B_ELF) $(USER_TEEWRITER_ELF) $(USER_TEEREADER_A_ELF) $(USER_TEEREADER_B_ELF) $(USER_COMPOSITOR_ELF) $(USER_DESKTOPDEMO_ELF) $(USER_DESKTOPTEST_ELF) $(USER_INIT_ELF) $(USER_SHELL_ELF) $(INIT_CONFIG) tools/mkinitrd.py
+$(USER_MALLOC_OBJ): userspace/lib/malloc.c userspace/lib/mini_libc.h userspace/lib/syscall.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(USER_LIBC_OBJ): $(USER_LIBC_CORE_OBJ) $(USER_MALLOC_OBJ)
+	$(LD) -r -m elf_x86_64 -o $@ $(USER_LIBC_CORE_OBJ) $(USER_MALLOC_OBJ)
+
+$(USER_MMAPTEST_OBJ): userspace/mmaptest/mmaptest.c userspace/lib/syscall.h userspace/lib/mini_libc.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(USER_MMAPTEST_ELF): $(USER_MMAPTEST_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
+	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_MMAPTEST_OBJ)
+
+$(INITRD): $(USER_HELLO_ELF) $(USER_ECHO_ELF) $(USER_CAT_ELF) $(USER_TIME_ELF) $(USER_SLEEP_ELF) $(USER_PIPEREAD_ELF) $(USER_PIPEDELAYREAD_ELF) $(USER_PIPEPRODUCER_ELF) $(USER_PIPECONSUMER_ELF) $(USER_LOGPRODUCER_A_ELF) $(USER_LOGPRODUCER_B_ELF) $(USER_LOGCOLLECTOR_ELF) $(USER_BOOTPROBE_ELF) $(USER_HANDOFFCHECK_ELF) $(USER_STDIOCHECK_ELF) $(USER_STDIOBADBIND_ELF) $(USER_STDIONULLCHECK_ELF) $(USER_DUPCHECK_ELF) $(USER_HANDLELIMITCHECK_ELF) $(USER_FILEOFFSETCHECK_ELF) $(USER_SEEKCHECK_ELF) $(USER_POLLCHECK_ELF) $(USER_POLLWAITCHECK_ELF) $(USER_POLLWAKEWRITER_ELF) $(USER_POLLMANYCHECK_ELF) $(USER_CWDCHECK_ELF) $(USER_DUPFALLBACKCHECK_ELF) $(USER_FSTEST_ELF) $(USER_LOGIN_ELF) $(USER_PKGTEST_ELF) $(USER_LOGSINK_WRITER_A_ELF) $(USER_LOGSINK_WRITER_B_ELF) $(USER_TEEWRITER_ELF) $(USER_TEEREADER_A_ELF) $(USER_TEEREADER_B_ELF) $(USER_MMAPTEST_ELF) $(USER_COMPOSITOR_ELF) $(USER_DESKTOPDEMO_ELF) $(USER_DESKTOPTEST_ELF) $(USER_INIT_ELF) $(USER_SHELL_ELF) $(INIT_CONFIG) tools/mkinitrd.py
 	mkdir -p $(BUILD_DIR)
 	python3 tools/mkinitrd.py $@ \
 		user=$(USER_HELLO_ELF) \
@@ -708,6 +726,7 @@ $(INITRD): $(USER_HELLO_ELF) $(USER_ECHO_ELF) $(USER_CAT_ELF) $(USER_TIME_ELF) $
 		teewriter=$(USER_TEEWRITER_ELF) \
 		teereader_a=$(USER_TEEREADER_A_ELF) \
 		teereader_b=$(USER_TEEREADER_B_ELF) \
+		mmaptest=$(USER_MMAPTEST_ELF) \
 		compositor=$(USER_COMPOSITOR_ELF) \
 		desktopdemo=$(USER_DESKTOPDEMO_ELF) \
 		desktoptest=$(USER_DESKTOPTEST_ELF) \
@@ -757,6 +776,10 @@ $(BUILD_DIR)/tty.o: kernel/tty/tty.c kernel/include/tty.h kernel/include/framebu
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/kheap.o: kernel/mm/kheap.c kernel/mm/kheap.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/vmm_user.o: kernel/mm/vmm_user.c kernel/mm/vmm_user.h kernel/mm/paging.h kernel/mm/pmm.h kernel/mm/kheap.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 

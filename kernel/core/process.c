@@ -891,7 +891,7 @@ process_t *process_create(uint64_t *pml4, uint32_t parent_pid) {
     p->waiting_handle = -1;
     p->waiting_is_stdio = 0;
     p->waiting_pipe = 0;
-    p->brk = 0x0000000090000000ULL; /* Start of user heap */
+    vmm_user_init(&p->vm);
     process_clear_poll_wait(p);
     process_handles_reset(p);
     if (!process_list) {
@@ -928,6 +928,7 @@ void process_destroy(process_t *p) {
         }
     }
     if (p->pml4 && p->pml4 != paging_kernel_pml4()) {
+        vmm_user_release(&p->vm, p->pml4);
         paging_destroy_user_pml4(p->pml4);
     }
     process_handles_release(p);

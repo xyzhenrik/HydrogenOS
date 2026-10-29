@@ -64,8 +64,6 @@ Beispiel: `-2` entspricht `ENOENT`.
 | 3 | sys_open | `const char* path, int flags` | Datei oeffnen |
 | 4 | sys_close | `int fd` | FD schliessen |
 | 5 | sys_lseek | `int fd, int64_t off, int whence` | Dateiposition |
-| 6 | sys_mmap | `void* addr, size_t len, int prot, int flags, int fd, int64_t off` | Mapping |
-| 7 | sys_munmap | `void* addr, size_t len` | Mapping entfernen |
 | 8 | sys_spawn | `const char* path, const char* const* argv` | Prozess starten |
 | 9 | sys_wait | `int pid, int* status` | blockierend auf direkten Child-Prozess warten |
 | 10 | sys_getpid | `void` | PID |
@@ -82,10 +80,23 @@ Beispiel: `-2` entspricht `ENOENT`.
 | 21 | sys_poll | `int fd, uint32_t events` | Sofortige Readiness-Abfrage fuer einen Handle |
 | 22 | sys_poll_wait | `int fd, uint32_t events, int64_t timeout_ms` | Blockierend auf Handle-Readiness warten |
 | 23 | sys_poll_many | `struct poll_fd* fds, uint32_t count, int64_t timeout_ms` | Mehrere FDs gleichzeitig pollen/warten |
+| 45 | sys_mmap | `void* hint, size_t len, uint32_t prot, uint32_t flags` | Anonymen, genullten Speicher mappen; Rueckgabe = Adresse |
+| 46 | sys_munmap | `void* addr, size_t len` | Seitenbereich (auch teilweise) entfernen |
 
 > Weitere Syscalls werden fortlaufend ergaenzt. Neue Syscalls erhalten **neue Nummern**; bestehende Nummern werden nie umgebogen.
 > Aktuell implementiert: `sys_exit`, `sys_write`, `sys_read`, `sys_open`, `sys_close`, `sys_lseek`, `sys_spawn`, `sys_spawn_with_stdio`, `sys_wait`, `sys_getpid`, `sys_yield`, `sys_sleep`, `sys_time_ms`, `sys_tty_set_color`, `sys_pipe`, `sys_handle_set_inherit`, `sys_dup`, `sys_dup2`, `sys_dup3`, `sys_poll`, `sys_poll_wait`, `sys_poll_many` (und ein undokumentiertes `sys_putchar` fuer Debug-Ausgaben).
 > Der aktuelle Kernel behandelt `sys_wait` als blockierendes Warten auf einen direkten Child-Prozess; unbekannte oder fremde PIDs liefern `-ENOENT`.
+
+## Anonymer Speicher (sys_mmap / sys_munmap)
+- Alle Mappings liegen in einem eigenen Fenster `0x0000_0080_0000_0000 .. 0x0000_7000_0000_0000` (ab PML4-Slot 1) und kollidieren daher nie mit ELF-Segmenten oder dem User-Stack.
+- Seitengranular: `len` wird auf 4 KiB aufgerundet, Seiten werden sofort alloziert und genullt.
+- `prot`: `MMAP_PROT_READ (1)`, `MMAP_PROT_WRITE (2)`, `MMAP_PROT_EXEC (4)`. `READ` ist Pflicht; ohne `EXEC` werden die Seiten per NX nicht ausfuehrbar markiert (sofern die CPU NX kann).
+- `hint`: `0` oder seitenausgerichtete Wunschadresse; ist der Bereich im Fenster frei, wird er genommen, sonst waehlt der Kernel den niedrigsten freien Bereich.
+- `flags` ist reserviert und muss `0` sein.
+- Fehler: `-EINVAL` (len 0, unbekannte/fehlende prot-Bits, flags != 0, unausgerichteter hint/addr, Bereich ausserhalb des Fensters), `-ENOMEM` (kein Adressraum, kein physischer Speicher oder Region-Limit erreicht). Ein fehlgeschlagenes `sys_mmap` hinterlaesst keine Teil-Mappings.
+- `sys_munmap` darf Teile eines Mappings entfernen (Kopf, Ende, Mitte); nicht gemappte Teile des Bereichs werden ignoriert.
+- Beim Prozess-Exit werden alle Mappings automatisch freigegeben.
+- Die frueheren Nummern 34/35 (brk-artiges Mapping) sind stillgelegt und werden nicht wiederverwendet.
 
 ## Error Codes (Subset)
 Diese errno-Werte sind als Startmenge vorgesehen:

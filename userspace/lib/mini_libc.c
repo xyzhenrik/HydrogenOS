@@ -129,27 +129,6 @@ unsigned long time_ms(void) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Memory management (malloc/free) using sys_mmap                      */
-/* ------------------------------------------------------------------ */
-
-static void *heap_end = 0;
-
-void *malloc(size_t size) {
-    if (size == 0) return 0;
-    /* Very simple: always allocate new pages via mmap */
-    size_t aligned_size = (size + 4095) & ~4095ULL;
-    void *ptr = (void *)sys_mmap(0, aligned_size, 0, 0, 0, 0);
-    if ((long)ptr < 0) return 0;
-    return ptr;
-}
-
-void free(void *ptr) {
-    /* Simple malloc doesn't track size for munmap yet, so free is a stub
-       or we would need a header to store the size. */
-    (void)ptr;
-}
-
-/* ------------------------------------------------------------------ */
 /* String utilities                                                    */
 /* ------------------------------------------------------------------ */
 
