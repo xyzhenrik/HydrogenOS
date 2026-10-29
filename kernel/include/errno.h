@@ -25,6 +25,14 @@
 #define ERANGE     34
 #define ENOSYS     38
 #define ENOTEMPTY  39
+#define ENOTSOCK   88
+#define EMSGSIZE   90
+#define EPROTOTYPE 91
+#define EPROTONOSUPPORT 93
+#define EAFNOSUPPORT 97
+#define EADDRINUSE 98
+#define EADDRNOTAVAIL 99
 #define ENETDOWN   100
 #define ENETUNREACH 101
+#define EHOSTUNREACH 113
 #define ETIMEDOUT  110

@@ -55,6 +55,10 @@
 #define SYS_NET_PING 51
 #define SYS_SPAWN_ARGS 52
 #define SYS_TRY_WAIT 53
+#define SYS_SOCKET 59
+#define SYS_BIND 60
+#define SYS_SENDTO 61
+#define SYS_RECVFROM 62
 #define SYS_PUTCHAR 255
 
 uint64_t syscall_handle(regs_t *r);

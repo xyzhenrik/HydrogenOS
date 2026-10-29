@@ -86,6 +86,10 @@ void net_init(void) {
     serial_write("/24\n");
 }
 
+int net_link_up(void) {
+    return net_iface.up && virtio_net_link_up();
+}
+
 int net_get_info(net_info_t *out) {
     if (!net_iface.up)
         return -ENODEV;

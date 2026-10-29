@@ -5,6 +5,7 @@
 #include "ethernet.h"
 #include "icmp.h"
 #include "net_bytes.h"
+#include "udp.h"
 
 #define IPV4_VERSION_IHL   0x45
 #define IPV4_DEFAULT_TTL   64
@@ -15,17 +16,24 @@
 
 static uint16_t ipv4_next_id = 1;
 
-uint16_t ipv4_checksum(const uint8_t *data, size_t len) {
-    uint32_t sum = 0;
+uint32_t ipv4_checksum_add(uint32_t sum, const uint8_t *data, size_t len) {
     size_t i = 0;
 
     for (; i + 1 < len; i += 2)
         sum += net_get16(data + i);
     if (i < len)
         sum += (uint32_t)data[i] << 8;
+    return sum;
+}
+
+uint16_t ipv4_checksum_fold(uint32_t sum) {
     while (sum >> 16)
         sum = (sum & 0xFFFFu) + (sum >> 16);
     return (uint16_t)~sum;
+}
+
+uint16_t ipv4_checksum(const uint8_t *data, size_t len) {
+    return ipv4_checksum_fold(ipv4_checksum_add(0, data, len));
 }
 
 static int ipv4_is_local_destination(uint32_t dst) {
@@ -66,6 +74,9 @@ void ipv4_input(const uint8_t *packet, size_t len) {
     switch (packet[9]) {
     case IPV4_PROTO_ICMP:
         icmp_input(src, payload, payload_len);
+        break;
+    case IPV4_PROTO_UDP:
+        udp_input(src, dst, payload, payload_len);
         break;
     default:
         break;

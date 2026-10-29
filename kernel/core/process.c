@@ -8,6 +8,8 @@
 #include "fs/vfs.h"
 #include "kheap.h"
 #include "paging.h"
+#include "net/netif.h"
+#include "net/socket.h"
 
 #define PROCESS_EXIT_SLOTS 32
 
@@ -28,10 +30,13 @@ static uint32_t console_escape_len = 0;
 static uint32_t console_escape_pos = 0;
 
 #define PROCESS_ERR_EIO 5
+#define PROCESS_ERR_EBADF 9
 #define PROCESS_ERR_EPIPE 32
 
 static void process_handle_release(process_handle_entry_t *entry);
 static void process_wake_pipe_waiters(kernel_pipe_t *pipe);
+static int process_resume_blocked_socket(process_t *p);
+static void process_update_socket_waits(void);
 static int process_resume_blocked_io(process_t *p);
 static int process_resume_blocked_poll(process_t *p);
 static void process_update_poll_timeouts(void);
@@ -213,6 +218,7 @@ static void process_clear_poll_wait(process_t *p) {
     p->waiting_poll_count = 0;
     p->waiting_poll_deadline_ms = 0;
     p->waiting_poll_has_deadline = 0;
+    p->waiting_poll_net = 0;
 }
 
 static void process_handle_reset(process_handle_entry_t *entry) {
@@ -515,6 +521,9 @@ static void process_handle_release(process_handle_entry_t *entry) {
         pipe = entry->resource.pipe;
         kernel_pipe_close_writer(entry->resource.pipe);
         break;
+    case PROCESS_HANDLE_SOCKET:
+        net_socket_release(entry->resource.socket);
+        break;
     default:
         break;
     }
@@ -554,6 +563,13 @@ static int process_handle_clone(process_handle_entry_t *dst,
             return -1;
         }
         dst->resource.pipe = src->resource.pipe;
+        return 0;
+    case PROCESS_HANDLE_SOCKET:
+        if (net_socket_acquire(src->resource.socket) != 0) {
+            process_handle_reset(dst);
+            return -1;
+        }
+        dst->resource.socket = src->resource.socket;
         return 0;
     case PROCESS_HANDLE_NULL_READER:
     case PROCESS_HANDLE_NULL_WRITER:
@@ -856,6 +872,36 @@ static int process_resume_blocked_io(process_t *p) {
     return 0;
 }
 
+/*
+ * Completes a SYS_RECVFROM that blocked on an empty queue. The syscall
+ * arguments are still in the saved frame: rsi = buffer, rdx = capacity,
+ * r8 = optional sender address; they were validated at syscall entry.
+ */
+static int process_resume_blocked_socket(process_t *p) {
+    struct net_socket *socket = 0;
+    uint32_t received = 0;
+    int rc;
+
+    if (!p || p->state != PROCESS_RUNNABLE || p->waiting_socket_fd < 0)
+        return 0;
+
+    if (process_fd_socket(p, p->waiting_socket_fd, &socket) != 0) {
+        p->waiting_socket_fd = -1;
+        p->frame.rax = (uint64_t)-PROCESS_ERR_EBADF;
+        return 0;
+    }
+    rc = net_socket_recvfrom(socket, (uint8_t *)(uintptr_t)p->frame.rsi,
+                             (size_t)p->frame.rdx,
+                             (net_sockaddr_t *)(uintptr_t)p->frame.r8, &received);
+    if (rc != 0) {
+        p->state = PROCESS_BLOCKED_SOCKET;
+        return -1;
+    }
+    p->waiting_socket_fd = -1;
+    p->frame.rax = received;
+    return 0;
+}
+
 static int process_resume_blocked_poll(process_t *p) {
     process_poll_fd_t *fds;
     uint32_t ready_count = 0;
@@ -969,6 +1015,7 @@ void process_init(uint64_t *kernel_pml4) {
     kernel_proc.waiting_handle = -1;
     kernel_proc.waiting_is_stdio = 0;
     kernel_proc.waiting_pipe = 0;
+    kernel_proc.waiting_socket_fd = -1;
     process_clear_poll_wait(&kernel_proc);
     kernel_proc.kernel_wait_fn = 0;
     kernel_proc.kernel_wait_arg = 0;
@@ -1007,6 +1054,7 @@ process_t *process_create(uint64_t *pml4, uint32_t parent_pid) {
     p->waiting_handle = -1;
     p->waiting_is_stdio = 0;
     p->waiting_pipe = 0;
+    p->waiting_socket_fd = -1;
     vmm_user_init(&p->vm);
     process_clear_poll_wait(p);
     p->kernel_wait_fn = 0;
@@ -1325,6 +1373,38 @@ int process_handle_create_pipe(process_t *p, int *out_read_handle,
     return PROCESS_RESOURCE_OK;
 }
 
+int process_handle_attach_socket(process_t *p, struct net_socket *socket) {
+    int handle = process_handle_alloc(p, PROCESS_HANDLE_SOCKET);
+    if (handle < 0)
+        return PROCESS_RESOURCE_NO_HANDLE_SLOT;
+    p->handles[handle].resource.socket = socket;
+    return handle + 3;
+}
+
+int process_fd_socket(process_t *p, int fd, struct net_socket **out) {
+    const process_handle_entry_t *entry;
+
+    if (!process_fd_valid(fd))
+        return -1;
+    entry = process_fd_get_const(p, fd);
+    if (!entry)
+        return -1;
+    if (entry->type != PROCESS_HANDLE_SOCKET)
+        return -2;
+    *out = entry->resource.socket;
+    return 0;
+}
+
+int process_begin_socket_recv_wait(process_t *p, int fd) {
+    struct net_socket *socket = 0;
+
+    if (!p || p == &kernel_proc || process_fd_socket(p, fd, &socket) != 0)
+        return -1;
+    p->state = PROCESS_BLOCKED_SOCKET;
+    p->waiting_socket_fd = fd;
+    return 0;
+}
+
 int process_dup_fd(process_t *p, int src_fd) {
     const process_handle_entry_t *src_entry = process_fd_get_const(p, src_fd);
     if (!src_entry)
@@ -1494,6 +1574,7 @@ int process_begin_fd_poll_wait(process_t *p, int fd, uint32_t events,
     p->waiting_poll_events = events;
     p->waiting_poll_array_ptr = 0;
     p->waiting_poll_count = 0;
+    p->waiting_poll_net = entry->type == PROCESS_HANDLE_SOCKET;
     if (timeout_ms >= 0) {
         p->waiting_poll_deadline_ms = time_ms() + (uint64_t)timeout_ms;
         p->waiting_poll_has_deadline = 1;
@@ -1518,6 +1599,14 @@ int process_begin_poll_many_wait(process_t *p, uintptr_t array_ptr,
     p->waiting_poll_events = 0;
     p->waiting_poll_array_ptr = array_ptr;
     p->waiting_poll_count = count;
+    p->waiting_poll_net = 0;
+    for (uint32_t i = 0; i < count; ++i) {
+        int fd = ((const process_poll_fd_t *)array_ptr)[i].fd;
+        const process_handle_entry_t *entry =
+            process_fd_valid(fd) ? process_fd_get_const(p, fd) : 0;
+        if (entry && entry->type == PROCESS_HANDLE_SOCKET)
+            p->waiting_poll_net = 1;
+    }
     if (timeout_ms >= 0) {
         p->waiting_poll_deadline_ms = time_ms() + (uint64_t)timeout_ms;
         p->waiting_poll_has_deadline = 1;
@@ -1623,6 +1712,16 @@ int process_fd_poll(process_t *p, int fd, uint32_t events,
         }
         if ((events & PROCESS_POLL_HUP) != 0) {
             ready |= PROCESS_POLL_HUP;
+        }
+        break;
+    case PROCESS_HANDLE_SOCKET:
+        if ((events & PROCESS_POLL_READ) != 0 &&
+            net_socket_poll_readable(entry->resource.socket)) {
+            ready |= PROCESS_POLL_READ;
+        }
+        /* A UDP send never waits for queue space. */
+        if ((events & PROCESS_POLL_WRITE) != 0) {
+            ready |= PROCESS_POLL_WRITE;
         }
         break;
     case PROCESS_HANDLE_NULL_WRITER:
@@ -1825,6 +1924,43 @@ static void process_update_kernel_waits(void) {
     } while (it && it != process_list);
 }
 
+/*
+ * Sockets have no interrupt-driven receive path: the NIC is polled whenever
+ * some process waits on a socket. Receivers wake once their queue is
+ * non-empty; poll waiters wake on any new datagram and re-check their set.
+ */
+static void process_update_socket_waits(void) {
+    process_t *it;
+    int waiting = 0;
+
+    if (!process_list) return;
+
+    it = process_list;
+    do {
+        if (it->alive && (it->state == PROCESS_BLOCKED_SOCKET ||
+                          (it->state == PROCESS_BLOCKED_POLL && it->waiting_poll_net)))
+            waiting = 1;
+        it = it->next;
+    } while (it && it != process_list);
+    if (!waiting) return;
+
+    net_poll();
+    int received = net_socket_take_rx_event();
+    it = process_list;
+    do {
+        if (it->alive && it->state == PROCESS_BLOCKED_SOCKET) {
+            struct net_socket *socket = 0;
+            if (process_fd_socket(it, it->waiting_socket_fd, &socket) != 0 ||
+                net_socket_pending(socket))
+                it->state = PROCESS_RUNNABLE;
+        } else if (received && it->alive && it->state == PROCESS_BLOCKED_POLL &&
+                   it->waiting_poll_net) {
+            it->state = PROCESS_RUNNABLE;
+        }
+        it = it->next;
+    } while (it && it != process_list);
+}
+
 void process_wake_sleepers(void) {
     uint32_t now;
     process_t *it;
@@ -1896,6 +2032,9 @@ static int process_resume(process_t *p) {
     if (process_resume_blocked_io(p) != 0) {
         return -1;
     }
+    if (process_resume_blocked_socket(p) != 0) {
+        return -1;
+    }
     if (process_resume_blocked_poll(p) != 0) {
         return -1;
     }
@@ -1933,6 +2072,7 @@ regs_t *process_schedule(regs_t *r) {
     process_wake_sleepers();
     process_update_poll_timeouts();
     process_update_kernel_waits();
+    process_update_socket_waits();
 
     uint64_t *active_pml4 = prev->pml4;
     for (;;) {
@@ -1965,5 +2105,6 @@ regs_t *process_schedule(regs_t *r) {
         __asm__ volatile("sti\n\thlt\n\tcli");
         process_wake_sleepers();
         process_update_poll_timeouts();
+        process_update_socket_waits();
     }
 }
