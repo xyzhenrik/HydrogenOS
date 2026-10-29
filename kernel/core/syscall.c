@@ -18,6 +18,7 @@ void fb_console_clear(void);
 #include "mm/pmm.h"
 #include "process.h"
 #include "user_exec.h"
+#include "vmm_user.h"
 #include "tty.h"
 #include "stat.h"
 #include "dirent.h"
@@ -784,31 +785,24 @@ uint64_t syscall_handle(regs_t *r) {
         return fs_status(vfs_write_file(kpath, data, size));
     }
     case SYS_MMAP: {
-        uintptr_t addr = (uintptr_t)r->rdi;
-        size_t len = (size_t)r->rsi;
-        /* Simple anonymous mapping (brk-like) */
-        if (len == 0) return (uintptr_t)-EINVAL;
-        len = (len + 4095) & ~4095ULL;
         process_t *proc = process_current();
-        if (addr == 0) {
-            /* Find free spot in user address space (very simple: use brk) */
-            addr = proc->brk;
-            proc->brk += len;
-        }
-        for (uintptr_t a = addr; a < addr + len; a += 4096) {
-            uintptr_t phys = pmm_alloc_page();
-            if (!phys) return (uintptr_t)-ENOMEM;
-            paging_map_region(phys, a, 4096, PAGE_USER | PAGE_RW);
-        }
-        return addr;
+        if (!proc || !proc->pml4 || proc->pml4 == paging_kernel_pml4())
+            return (uint64_t)-EPERM;
+        uintptr_t addr = 0;
+        int rc = vmm_user_map(&proc->vm, proc->pml4, (uintptr_t)r->rdi,
+                              (size_t)r->rsi, (uint32_t)r->rdx,
+                              (uint32_t)r->r10, &addr);
+        if (rc != 0)
+            return (uint64_t)(int64_t)rc;
+        return (uint64_t)addr;
     }
     case SYS_MUNMAP: {
-        uintptr_t addr = (uintptr_t)r->rdi;
-        size_t len = (size_t)r->rsi;
-        if (len == 0) return (uint64_t)-EINVAL;
-        len = (len + 4095) & ~4095ULL;
-        paging_unmap_region(addr, len);
-        return 0;
+        process_t *proc = process_current();
+        if (!proc || !proc->pml4 || proc->pml4 == paging_kernel_pml4())
+            return (uint64_t)-EPERM;
+        return (uint64_t)(int64_t)vmm_user_unmap(&proc->vm, proc->pml4,
+                                                 (uintptr_t)r->rdi,
+                                                 (size_t)r->rsi);
     }
     default:
         return (uint64_t)-1;

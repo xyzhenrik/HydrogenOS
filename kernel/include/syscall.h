@@ -36,8 +36,6 @@
 #define SYS_UNLINK  31
 #define SYS_RENAME  32
 #define SYS_WRITEF  33
-#define SYS_MMAP    34
-#define SYS_MUNMAP  35
 #define SYS_FB_INFO 36
 #define SYS_FB_BLIT 37
 #define SYS_MOUSE_STATE 38
@@ -47,6 +45,8 @@
 #define SYS_FB_CLEAR 42
 #define SYS_SYSINFO 43
 #define SYS_SET_LAYOUT 44
+#define SYS_MMAP 45
+#define SYS_MUNMAP 46
 #define SYS_RTC_TIME 54
 #define SYS_RMDIR 47
 #define SYS_PUTCHAR 255

@@ -34,8 +34,6 @@
 #define SYS_UNLINK  31
 #define SYS_RENAME  32
 #define SYS_WRITEF  33
-#define SYS_MMAP    34
-#define SYS_MUNMAP  35
 #define SYS_FB_INFO 36
 #define SYS_FB_BLIT 37
 #define SYS_MOUSE_STATE 38
@@ -45,6 +43,8 @@
 #define SYS_FB_CLEAR 42
 #define SYS_SYSINFO 43
 #define SYS_SET_LAYOUT 44
+#define SYS_MMAP 45
+#define SYS_MUNMAP 46
 #define SYS_RTC_TIME 54
 #define SYS_RMDIR 47
 
@@ -69,6 +69,10 @@
 #define POLL_HUP   (1u << 2)
 #define POLL_NVAL  (1u << 3)
 #define POLL_WAIT_INFINITE (-1)
+
+#define MMAP_PROT_READ  (1u << 0)
+#define MMAP_PROT_WRITE (1u << 1)
+#define MMAP_PROT_EXEC  (1u << 2)
 
 static inline long syscall6(long n, long a1, long a2, long a3, long a4, long a5, long a6) {
     long ret;
@@ -253,9 +257,9 @@ static inline long sys_writef(const char *path, const void *data, unsigned long 
     return syscall3(SYS_WRITEF, (long)path, (long)data, (long)size);
 }
 
-static inline long sys_mmap(void *addr, unsigned long len, int prot, int flags, int fd, long off) {
-    (void)prot; (void)flags; (void)fd; (void)off;
-    return syscall2(SYS_MMAP, (long)addr, (long)len);
+static inline long sys_mmap(void *hint, unsigned long len, unsigned int prot,
+                            unsigned int flags) {
+    return syscall4(SYS_MMAP, (long)hint, (long)len, (long)prot, (long)flags);
 }
 
 static inline long sys_munmap(void *addr, unsigned long len) {
