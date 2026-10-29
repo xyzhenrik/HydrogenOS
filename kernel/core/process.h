@@ -6,6 +6,7 @@
 #include "vmm_user.h"
 
 struct kernel_pipe;
+struct net_socket;
 
 enum {
     PROCESS_MAX_HANDLE = 64,
@@ -47,6 +48,7 @@ typedef enum process_state {
     PROCESS_BLOCKED_POLL = 4,
     PROCESS_SLEEPING = 5,
     PROCESS_BLOCKED_KERNEL = 6,
+    PROCESS_BLOCKED_SOCKET = 7,
 } process_state_t;
 
 typedef enum process_priority {
@@ -65,6 +67,7 @@ typedef enum process_handle_type {
     PROCESS_HANDLE_NULL_WRITER = 5,
     PROCESS_HANDLE_CONSOLE_READER = 6,
     PROCESS_HANDLE_CONSOLE_WRITER = 7,
+    PROCESS_HANDLE_SOCKET = 8,
 } process_handle_type_t;
 
 enum {
@@ -103,6 +106,7 @@ typedef struct process_handle_entry {
     union {
         process_file_handle_t *file;
         struct kernel_pipe *pipe;
+        struct net_socket *socket;
     } resource;
 } process_handle_entry_t;
 
@@ -147,6 +151,8 @@ typedef struct process {
     uint32_t waiting_poll_count;
     uint64_t waiting_poll_deadline_ms;
     uint8_t waiting_poll_has_deadline;
+    uint8_t waiting_poll_net; /* poll set contains a socket */
+    int waiting_socket_fd;
     VmmUserSpace vm;
     process_kernel_wait_fn kernel_wait_fn;
     uintptr_t kernel_wait_arg;
@@ -204,6 +210,15 @@ int process_begin_fd_poll_wait(process_t *p, int fd, uint32_t events,
                                int64_t timeout_ms);
 int process_begin_poll_many_wait(process_t *p, uintptr_t array_ptr,
                                  uint32_t count, int64_t timeout_ms);
+/* Takes over the caller's reference to socket on success and returns its fd.
+ * Returns PROCESS_RESOURCE_NO_HANDLE_SLOT when the handle table is full; the
+ * caller then still owns the reference. */
+int process_handle_attach_socket(process_t *p, struct net_socket *socket);
+/* 0, -1 for an invalid fd, -2 when the fd is not a socket. */
+int process_fd_socket(process_t *p, int fd, struct net_socket **out);
+/* Blocks p until the socket behind fd has a datagram; the scheduler then
+ * repeats the pending SYS_RECVFROM with the registers saved at syscall entry. */
+int process_begin_socket_recv_wait(process_t *p, int fd);
 int process_fd_seek(process_t *p, int fd, int64_t off, int whence,
                     uint64_t *out_pos);
 int process_fd_poll(process_t *p, int fd, uint32_t events,

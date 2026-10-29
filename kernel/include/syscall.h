@@ -56,6 +56,10 @@
 #define SYS_SPAWN_ARGS 52
 #define SYS_TRY_WAIT 53
 #define SYS_MPROTECT 55
+#define SYS_SOCKET 59
+#define SYS_BIND 60
+#define SYS_SENDTO 61
+#define SYS_RECVFROM 62
 #define SYS_LINK 63
 #define SYS_SYMLINK 64
 #define SYS_READLINK 65

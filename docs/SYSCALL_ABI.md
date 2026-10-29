@@ -93,6 +93,10 @@ Beispiel: `-2` entspricht `ENOENT`.
 
 | 52 | sys_spawn_args | `const char* path, const char* const* argv, const char* const* envp, int stdin_fd, int stdout_fd, int stderr_fd` | Prozess mit argv/envp und explizitem Child-stdio starten |
 | 53 | sys_try_wait | `int pid, int* status` | Nicht blockierend pruefen, ob ein direkter Child-Prozess beendet ist |
+| 59 | sys_socket | `int domain, int type, int protocol` | UDP-Socket anlegen (`AF_INET = 2`, `SOCK_DGRAM = 2`, Protokoll `0` oder `17`); liefert einen Handle-fd |
+| 60 | sys_bind | `int fd, uint32_t ipv4, uint32_t port` | Lokale Adresse (`0` = alle) und Port (`0` = ephemer) binden |
+| 61 | sys_sendto | `int fd, const void* buf, size_t len, uint32_t ipv4, uint32_t port` | Ein Datagramm senden; liefert `len` |
+| 62 | sys_recvfrom | `int fd, void* buf, size_t len, uint32_t flags, struct net_sockaddr* from` | Ein Datagramm empfangen (blockierend, `NET_MSG_DONTWAIT` = 1 fuer nicht blockierend); liefert die kopierte Laenge |
 | 63 | sys_link | `const char* old_path, const char* new_path` | Hartlink auf eine Nicht-Verzeichnis-Datei (auch auf einen Symlink selbst) anlegen und `i_links_count` erhoehen; `-EEXIST`, `-ENOENT`, `-EISDIR` (Verzeichnis), `-EMLINK`, `-EXDEV` (anderes Dateisystem), `-EOPNOTSUPP` (kein ext2), `-EROFS` |
 | 64 | sys_symlink | `const char* target, const char* link_path` | Symlink anlegen. `target` wird unveraendert gespeichert (kein cwd-Bezug, hoechstens 255 Bytes) und erst beim Folgen interpretiert; Ziele bis 60 Bytes stehen in `i_block` (fast symlink), laengere in einem Datenblock. Fehler wie `sys_link`, zusaetzlich `-ENOENT` bei leerem Ziel |
 | 65 | sys_readlink | `const char* path, char* buf, size_t cap` | Kopiert das Ziel (ohne NUL, auf `cap` gekuerzt) nach `buf` und liefert die Anzahl kopierter Bytes; `-EINVAL` wenn `path` kein Symlink ist, `-ENOENT`, `-EFAULT` |
@@ -144,6 +148,17 @@ Beispiel: `-2` entspricht `ENOENT`.
 - Liefert die PID und schreibt den Exit-Status nach `*status` (optional), wenn der Child-Prozess bereits beendet war, und raeumt ihn dabei wie `sys_wait` ab.
 - Liefert `0`, solange der Child-Prozess noch laeuft; unbekannte oder fremde PIDs liefern `-ENOENT`.
 
+## UDP-Sockets (sys_socket / sys_bind / sys_sendto / sys_recvfrom)
+- Ein Socket ist ein normaler Handle (`PROCESS_HANDLE_SOCKET`): `sys_close`, `sys_dup`/`dup2`/`dup3`, `sys_poll*` und Vererbung per `sys_handle_set_inherit` funktionieren. Duplikate teilen sich denselben Socket; Port und Empfangswarteschlange werden mit dem letzten `close` freigegeben (auch beim Prozess-Exit). `sys_read`/`sys_write` auf Sockets schlagen fehl.
+- `struct net_sockaddr` (8 Byte): `uint32_t ipv4`, `uint16_t port`, `uint16_t reserved` (0), jeweils in Host-Byte-Order (`10.0.2.15` = `0x0A00020F`). `from` darf `NULL` sein.
+- Der Kernel haelt hoechstens 16 Sockets; danach `-ENFILE`. `sys_socket` funktioniert auch ohne Netzwerkgeraet (Loopback braucht keines) und liefert `-EAFNOSUPPORT`, `-EPROTOTYPE`, `-EPROTONOSUPPORT` fuer andere Familien, Typen und Protokolle, `-EMFILE` bei vollem Handle-Table.
+- `sys_bind`: nur lokale Adressen (`0`, `10.0.2.15`, `127.0.0.0/8`), sonst `-EADDRNOTAVAIL`; Port > 65535 oder bereits gebundener Socket `-EINVAL`; belegter Port `-EADDRINUSE` (ein Wildcard-Bind kollidiert mit jedem Bind auf demselben Port). Ephemere Ports kommen aus `49152..65535`; der Startpunkt der Suche wird pro Zuweisung aus dem TSC gestreut; bei Erschoepfung `-EADDRINUSE`.
+- `sys_sendto` bindet einen ungebundenen Socket zuerst an einen ephemeren Port. Nutzlast bis 1472 Byte (sonst `-EMSGSIZE`), Ziel-Port `1..65535` und Unicast-Ziel (sonst `-EINVAL`; `0.0.0.0`, Broadcast und Multicast sind abgelehnt), Laenge 0 ist erlaubt. UDP-Pruefsumme mit IPv4-Pseudo-Header wird gesendet und beim Empfang geprueft (Pruefsumme 0 = nicht berechnet). Ziele auf dem eigenen Host (`10.0.2.15`, `127.0.0.0/8`) laufen ueber Loopback ohne NIC; der Empfaenger sieht als Absender die Zieladresse. Fuer Ziele ausserhalb parkt der Kernel das Datagramm bis zu 1 s, bis ARP den naechsten Hop aufgeloest hat; der Aufrufer schlaeft dabei im Scheduler (andere Prozesse laufen weiter) und bekommt danach `len` oder `-EHOSTUNREACH`. Hoechstens 4 Datagramme warten gleichzeitig, weitere liefern `-ENOMEM`. Link down liefert `-ENETDOWN`. Puffer und `from` muessen im Aufrufer-Adressraum gemappt und fuer User-Mode zugreifbar sein (bei `recvfrom` zusaetzlich beschreibbar), sonst `-EFAULT`; die Pruefung geschieht vor jeder Queue-Aenderung, Nicht-Socket-fd `-ENOTSOCK (88)`, ungueltiger fd `-EBADF`.
+- `sys_recvfrom` liefert das aelteste Datagramm; ist es laenger als `len`, wird es abgeschnitten und der Rest verworfen. Bei leerer Warteschlange blockiert der Aufrufer ueber den Scheduler (Prozesszustand `socket-recv`), mit `NET_MSG_DONTWAIT` kommt `-EAGAIN`. Unbekannte Flags `-EINVAL`. Jeder Socket puffert hoechstens 8 Datagramme; weitere werden verworfen (Zaehler `rx_dropped`).
+- `sys_poll`, `sys_poll_wait` und `sys_poll_many` melden `POLL_READ`, sobald ein Datagramm bereitliegt; `POLL_WRITE` ist immer gesetzt. Die NIC wird waehrenddessen vom Scheduler gepollt.
+- Nicht implementiert: ICMP Port Unreachable, IP-Fragmentierung (Datagramme > 1472 Byte), Broadcast, `connect`/`getsockname`.
+- Beispiel: `userspace/lib/dns.c` ist ein kleiner A-Record-Resolver (`dns_resolve_a`, Standardserver 10.0.2.3 von QEMU User-Networking); `nslookup <host> [server]` nutzt ihn.
+
 ## Error Codes (Subset)
 Diese errno-Werte sind als Startmenge vorgesehen:
 - `EPERM (1)`
@@ -161,9 +176,11 @@ Diese errno-Werte sind als Startmenge vorgesehen:
 - `ESPIPE (29)`
 - `EPIPE (32)`
 - `ENOSYS (38)`
+- `ENOTSOCK (88)`, `EMSGSIZE (90)`, `EPROTOTYPE (91)`, `EPROTONOSUPPORT (93)`, `EAFNOSUPPORT (97)`, `EADDRINUSE (98)`, `EADDRNOTAVAIL (99)`
 - `ENODEV (19)`
 - `ENETDOWN (100)`
 - `ENETUNREACH (101)`
+- `EHOSTUNREACH (113)`
 - `ETIMEDOUT (110)`
 
 ## Future Extensions

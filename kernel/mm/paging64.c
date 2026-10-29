@@ -17,6 +17,7 @@
 #define CPUID_EXT_FEATURES 0x80000001u
 #define CPUID_EXT_EDX_NX (1u << 20)
 
+#define PAGING_PAGE_SIZE 0x1000ULL
 #define PAGING_SPAN_2M 0x200000ULL
 #define PAGING_SPAN_1G 0x40000000ULL
 #define PAGING_SPAN_512G 0x8000000000ULL
@@ -157,6 +158,55 @@ int paging_is_mapped(uintptr_t virt) {
         return 1;
     uint64_t *pt_tbl = (uint64_t *)(uintptr_t)(pd_tbl[pd_idx] & ~0xFFFULL);
     return (pt_tbl[pt_idx] & PAGE_PRESENT) != 0;
+}
+
+/* One level of the walk: the entry must be present and user-accessible, and
+ * writable when 'writable' is set (permissions are the AND over all levels). */
+static int paging_entry_allows(uint64_t entry, int writable) {
+    if (!(entry & PAGE_PRESENT) || !(entry & PAGE_USER))
+        return 0;
+    return !writable || (entry & PAGE_RW) != 0;
+}
+
+static int paging_user_page_ok(const uint64_t *pml4_root, uintptr_t virt,
+                               int writable) {
+    const uint64_t *pdpt_tbl;
+    const uint64_t *pd_tbl;
+    const uint64_t *pt_tbl;
+    uint64_t entry = pml4_root[(virt >> 39) & 0x1FF];
+
+    if (!paging_entry_allows(entry, writable))
+        return 0;
+    pdpt_tbl = (const uint64_t *)(uintptr_t)(entry & PAGE_ADDR_MASK);
+    entry = pdpt_tbl[(virt >> 30) & 0x1FF];
+    if (!paging_entry_allows(entry, writable))
+        return 0;
+    if (entry & PAGE_PS)
+        return 1;
+    pd_tbl = (const uint64_t *)(uintptr_t)(entry & PAGE_ADDR_MASK);
+    entry = pd_tbl[(virt >> 21) & 0x1FF];
+    if (!paging_entry_allows(entry, writable))
+        return 0;
+    if (entry & PAGE_PS)
+        return 1;
+    pt_tbl = (const uint64_t *)(uintptr_t)(entry & PAGE_ADDR_MASK);
+    return paging_entry_allows(pt_tbl[(virt >> 12) & 0x1FF], writable);
+}
+
+int paging_user_range_ok(const uint64_t *pml4_root, uintptr_t virt, size_t len,
+                         int writable) {
+    uintptr_t page;
+    uintptr_t last;
+
+    if (!pml4_root || len == 0 || virt + len < virt)
+        return 0;
+    last = (virt + len - 1) & ~(uintptr_t)(PAGING_PAGE_SIZE - 1);
+    for (page = virt & ~(uintptr_t)(PAGING_PAGE_SIZE - 1);; page += PAGING_PAGE_SIZE) {
+        if (!paging_user_page_ok(pml4_root, page, writable))
+            return 0;
+        if (page == last)
+            return 1;
+    }
 }
 
 void paging_switch(uint64_t *pml4_root) {

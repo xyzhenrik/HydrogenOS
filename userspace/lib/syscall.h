@@ -54,6 +54,10 @@
 #define SYS_SPAWN_ARGS 52
 #define SYS_TRY_WAIT 53
 #define SYS_MPROTECT 55
+#define SYS_SOCKET 59
+#define SYS_BIND 60
+#define SYS_SENDTO 61
+#define SYS_RECVFROM 62
 #define SYS_LINK 63
 #define SYS_SYMLINK 64
 #define SYS_READLINK 65
@@ -404,6 +408,43 @@ static inline long sys_net_info(net_info_t *out) {
 /* Round-trip time in ms, or -errno (e.g. -110 ETIMEDOUT, -19 ENODEV). */
 static inline long sys_net_ping(unsigned int ipv4, long timeout_ms) {
     return syscall2(SYS_NET_PING, (long)ipv4, timeout_ms);
+}
+
+#define NET_AF_INET      2
+#define NET_SOCK_DGRAM   2
+#define NET_IPPROTO_UDP  17
+#define NET_MSG_DONTWAIT (1u << 0)
+
+/* Peer address filled in by sys_recvfrom. */
+typedef struct net_sockaddr_t {
+    unsigned int ipv4;
+    unsigned short port;
+    unsigned short reserved;
+} net_sockaddr_t;
+
+/* Socket descriptors are ordinary handles: close, dup and poll work on them. */
+static inline long sys_socket(int domain, int type, int protocol) {
+    return syscall3(SYS_SOCKET, (long)domain, (long)type, (long)protocol);
+}
+
+/* ipv4 0 binds every local address; port 0 picks an ephemeral port. */
+static inline long sys_bind(int fd, unsigned int ipv4, unsigned int port) {
+    return syscall3(SYS_BIND, (long)fd, (long)ipv4, (long)port);
+}
+
+/* Returns the number of bytes sent or -errno. */
+static inline long sys_sendto(int fd, const void *buf, unsigned long len,
+                              unsigned int ipv4, unsigned int port) {
+    return syscall5(SYS_SENDTO, (long)fd, (long)buf, (long)len, (long)ipv4,
+                    (long)port);
+}
+
+/* Returns the datagram length (truncated to len), -EAGAIN with
+ * NET_MSG_DONTWAIT on an empty queue, or another -errno. from may be NULL. */
+static inline long sys_recvfrom(int fd, void *buf, unsigned long len,
+                                unsigned int flags, net_sockaddr_t *from) {
+    return syscall5(SYS_RECVFROM, (long)fd, (long)buf, (long)len, (long)flags,
+                    (long)from);
 }
 
 static inline long sys_spawn_args(const char *path, const char *const *argv,

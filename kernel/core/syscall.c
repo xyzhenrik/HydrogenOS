@@ -26,6 +26,8 @@ void fb_console_clear(void);
 #include "rtc.h"
 #include "power.h"
 #include "net/net.h"
+#include "net/socket.h"
+#include "net/udp.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -54,6 +56,24 @@ static int user_range_ok(const void *ptr, size_t len) {
     if (paging_user_range_has_prot_none(paging_current_pml4(), start, len))
         return 0;
     return 1;
+}
+
+/* Like user_range_ok, but also requires the pages to be mapped for user mode
+ * (and writable when 'writable'), so the kernel can access them fault-free. */
+static int user_buffer_ok(const process_t *proc, const void *ptr, size_t len,
+                          int writable) {
+    return user_range_ok(ptr, len) && proc && proc->pml4 &&
+           paging_user_range_ok(proc->pml4, (uintptr_t)ptr, len, writable);
+}
+
+/* 0 and the socket behind fd, or -EBADF / -ENOTSOCK. */
+static int socket_from_fd(process_t *proc, int fd, net_socket_t **out) {
+    int rc = process_fd_socket(proc, fd, out);
+    if (rc == -1)
+        return -EBADF;
+    if (rc == -2)
+        return -ENOTSOCK;
+    return 0;
 }
 
 static int user_str_copy(const char *uptr, char *dst, size_t dst_sz) {
@@ -1077,6 +1097,89 @@ uint64_t syscall_handle(regs_t *r) {
         while (!net_ping_wait_check((uintptr_t)ticket, &result))
             __asm__ volatile("sti\n\thlt\n\tcli");
         return result;
+    }
+    case SYS_SOCKET: {
+        process_t *proc = process_current();
+        net_socket_t *socket = 0;
+
+        int rc = net_socket_create((int)r->rdi, (int)r->rsi, (int)r->rdx, &socket);
+        if (rc != 0)
+            return (uint64_t)(int64_t)rc;
+        int fd = process_handle_attach_socket(proc, socket);
+        if (fd < 0) {
+            net_socket_release(socket);
+            return (uint64_t)-EMFILE;
+        }
+        return (uint64_t)fd;
+    }
+    case SYS_BIND: {
+        net_socket_t *socket = 0;
+        uint64_t port = r->rdx;
+
+        int rc = socket_from_fd(process_current(), (int)r->rdi, &socket);
+        if (rc != 0)
+            return (uint64_t)(int64_t)rc;
+        if (port > NET_PORT_MAX)
+            return (uint64_t)-EINVAL;
+        return (uint64_t)(int64_t)net_socket_bind(socket, (uint32_t)r->rsi,
+                                                  (uint16_t)port);
+    }
+    case SYS_SENDTO: {
+        process_t *proc = process_current();
+        net_socket_t *socket = 0;
+        const uint8_t *buf = (const uint8_t *)(uintptr_t)r->rsi;
+        size_t len = (size_t)r->rdx;
+        uint64_t port = r->r8;
+
+        int rc = socket_from_fd(proc, (int)r->rdi, &socket);
+        if (rc != 0)
+            return (uint64_t)(int64_t)rc;
+        if (len > UDP_PAYLOAD_MAX)
+            return (uint64_t)-EMSGSIZE;
+        if (len > 0 && !user_buffer_ok(proc, buf, len, 0))
+            return (uint64_t)-EFAULT;
+        if (port > NET_PORT_MAX)
+            return (uint64_t)-EINVAL;
+        rc = net_socket_sendto(socket, buf, len, (uint32_t)r->r10, (uint16_t)port);
+        if (rc < 0)
+            return (uint64_t)(int64_t)rc;
+        if (rc == 0)
+            return len;
+
+        /* The datagram waits for neighbour resolution; the scheduler
+         * completes the syscall with the datagram length or an error. */
+        if (process_begin_kernel_wait(proc, udp_send_wait_check, (uintptr_t)rc) != 0) {
+            udp_send_cancel(rc);
+            return (uint64_t)-EINVAL;
+        }
+        return 0;
+    }
+    case SYS_RECVFROM: {
+        process_t *proc = process_current();
+        net_socket_t *socket = 0;
+        uint8_t *buf = (uint8_t *)(uintptr_t)r->rsi;
+        size_t len = (size_t)r->rdx;
+        uint32_t flags = (uint32_t)r->r10;
+        net_sockaddr_t *from = (net_sockaddr_t *)(uintptr_t)r->r8;
+        uint32_t received = 0;
+
+        int rc = socket_from_fd(proc, (int)r->rdi, &socket);
+        if (rc != 0)
+            return (uint64_t)(int64_t)rc;
+        if ((r->r10 & ~(uint64_t)NET_MSG_DONTWAIT) != 0)
+            return (uint64_t)-EINVAL;
+        if (len > 0 && !user_buffer_ok(proc, buf, len, 1))
+            return (uint64_t)-EFAULT;
+        if (from && !user_buffer_ok(proc, from, sizeof(*from), 1))
+            return (uint64_t)-EFAULT;
+        rc = net_socket_recvfrom(socket, buf, len, from, &received);
+        if (rc == 0)
+            return received;
+        if ((flags & NET_MSG_DONTWAIT) != 0)
+            return (uint64_t)-EAGAIN;
+        if (process_begin_socket_recv_wait(proc, (int)r->rdi) != 0)
+            return (uint64_t)-EBADF;
+        return 0;
     }
     default:
         return (uint64_t)-1;
