@@ -53,6 +53,9 @@
 #define SYS_NET_PING 51
 #define SYS_SPAWN_ARGS 52
 #define SYS_TRY_WAIT 53
+#define SYS_LINK 63
+#define SYS_SYMLINK 64
+#define SYS_READLINK 65
 
 #define PRIO_IDLE   0
 #define PRIO_NORMAL 1
@@ -75,6 +78,9 @@
 #define OPEN_CREATE   (1u << 2)
 #define OPEN_TRUNCATE (1u << 3)
 #define OPEN_APPEND   (1u << 4)
+
+/* sys_stat flag: describe a symlink itself instead of following it. */
+#define STAT_NOFOLLOW (1u << 0)
 
 #define POLL_READ  (1u << 0)
 #define POLL_WRITE (1u << 1)
@@ -241,6 +247,10 @@ static inline long sys_stat(const char *path, void *buf) {
     return syscall3(SYS_STAT, (long)path, (long)buf, 0);
 }
 
+static inline long sys_lstat(const char *path, void *buf) {
+    return syscall3(SYS_STAT, (long)path, (long)buf, STAT_NOFOLLOW);
+}
+
 static inline long sys_fstat(int fd, void *buf) {
     return syscall3(SYS_FSTAT, (long)fd, (long)buf, 0);
 }
@@ -263,6 +273,20 @@ static inline long sys_rmdir(const char *path) {
 
 static inline long sys_rename(const char *old_path, const char *new_path) {
     return syscall2(SYS_RENAME, (long)old_path, (long)new_path);
+}
+
+static inline long sys_link(const char *old_path, const char *new_path) {
+    return syscall2(SYS_LINK, (long)old_path, (long)new_path);
+}
+
+static inline long sys_symlink(const char *target, const char *link_path) {
+    return syscall2(SYS_SYMLINK, (long)target, (long)link_path);
+}
+
+/* Copies up to cap bytes of the target, without a terminator, and returns the
+   number of bytes copied or -errno (-22 EINVAL if path is not a symlink). */
+static inline long sys_readlink(const char *path, char *buf, unsigned long cap) {
+    return syscall3(SYS_READLINK, (long)path, (long)buf, (long)cap);
 }
 
 static inline long sys_writef(const char *path, const void *data, unsigned long size) {

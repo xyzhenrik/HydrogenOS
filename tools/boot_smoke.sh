@@ -113,6 +113,7 @@ if [ "$FOUND" -eq 1 ]; then
   grep -q "SHELL PASS" "$LOG_FILE" || MISSING="$MISSING SHELL_PASS"
   grep -q "LIBC PASS" "$LOG_FILE" || MISSING="$MISSING LIBC_PASS"
   grep -q "stdout captured: cwdcheck: cwd ok" "$LOG_FILE" || MISSING="$MISSING CWDCHECK_PASS"
+  grep -q "LINK PASS" "$LOG_FILE" || MISSING="$MISSING LINK_PASS"
   if [ "$REQUIRE_DESKTOP" = "1" ]; then
     grep -qE "compositor: ready|COMP READY" "$LOG_FILE" || MISSING="$MISSING COMPOSITOR_READY"
     grep -q "FRAME CHECKSUM:" "$LOG_FILE" || MISSING="$MISSING FRAME_CHECKSUM"

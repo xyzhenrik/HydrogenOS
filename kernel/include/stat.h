@@ -9,6 +9,10 @@
 
 #define S_ISREG(m)  (((m) & S_IFMT) == S_IFREG)
 #define S_ISDIR(m)  (((m) & S_IFMT) == S_IFDIR)
+#define S_ISLNK(m)  (((m) & S_IFMT) == S_IFLNK)
+
+/* SYS_STAT flags: describe a symlink itself instead of following it. */
+#define STAT_NOFOLLOW (1u << 0)
 
 typedef struct hydrogen_stat {
     uint32_t st_mode;    /* file type + permissions */
