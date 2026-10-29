@@ -84,12 +84,12 @@ int main(void) {
 
     long rc = sys_net_info(&info);
     if (rc != 0) {
-        fprintf(2, "ping: %s\n", ping_error_text(rc));
+        dprintf(2, "ping: %s\n", ping_error_text(rc));
         return 1;
     }
     target = info.gateway;
     if (read_target(&target) != 0) {
-        fprintf(2, "ping: expected an IPv4 address like 10.0.2.2\n");
+        dprintf(2, "ping: expected an IPv4 address like 10.0.2.2\n");
         return 1;
     }
 

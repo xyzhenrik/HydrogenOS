@@ -33,7 +33,7 @@ static const char *const cleanup_dirs[] = {
 };
 
 static int fail(const char *reason) {
-    fprintf(2, "DIRTEST FAIL: %s\n", reason);
+    dprintf(2, "DIRTEST FAIL: %s\n", reason);
     return 1;
 }
 
@@ -224,7 +224,7 @@ int main(void) {
     if (sys_sysinfo(&info) != 0)
         return fail("sysinfo");
     if (info.fs_type != FS_TYPE_EXT2) {
-        fprintf(2, "dirtest: root is not ext2, skipping\n");
+        dprintf(2, "dirtest: root is not ext2, skipping\n");
         printf("DIRTEST PASS\n");
         return 0;
     }

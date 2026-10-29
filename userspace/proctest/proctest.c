@@ -8,7 +8,7 @@
 #define PROCTEST_DT_REG 8
 
 static void fail(const char *reason) {
-    fprintf(1, "PROC FAIL: %s\n", reason);
+    dprintf(1, "PROC FAIL: %s\n", reason);
 }
 
 static int str_eq(const char *a, const char *b) {

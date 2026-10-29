@@ -116,7 +116,7 @@ static void report_failure(const ShellCase *c, const char *output, int status) {
         }
     }
     report[len] = 0;
-    fprintf(2, "%s (status %d)\n", report, status);
+    dprintf(2, "%s (status %d)\n", report, status);
 }
 
 static int run_case(const ShellCase *c) {
@@ -128,14 +128,14 @@ static int run_case(const ShellCase *c) {
     long pid;
 
     if (pipe(fds) != 0) {
-        fprintf(2, "SHELL FAIL %s: pipe\n", c->name);
+        dprintf(2, "SHELL FAIL %s: pipe\n", c->name);
         return -1;
     }
     pid = spawn_args("/shell", argv, shell_env, SPAWN_STDIO_NULL, fds[1], fds[1]);
     close(fds[1]);
     if (pid <= 0) {
         close(fds[0]);
-        fprintf(2, "SHELL FAIL %s: spawn %d\n", c->name, (int)pid);
+        dprintf(2, "SHELL FAIL %s: spawn %d\n", c->name, (int)pid);
         return -1;
     }
     for (;;) {
@@ -149,7 +149,7 @@ static int run_case(const ShellCase *c) {
     output[used] = 0;
     close(fds[0]);
     if (wait_pid((int)pid, &status) < 0) {
-        fprintf(2, "SHELL FAIL %s: wait\n", c->name);
+        dprintf(2, "SHELL FAIL %s: wait\n", c->name);
         return -1;
     }
     if (status != c->expected_status || !str_eq(output, c->expected)) {
