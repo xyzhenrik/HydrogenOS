@@ -128,7 +128,7 @@ typedef struct process {
     uint8_t state;
     uint8_t priority;        /* process_priority_t */
     uint32_t timeslice_ms;   /* remaining time this timeslice */
-    uint32_t sleep_until_ms; /* if > 0: sleeping until time_ms() >= sleep_until_ms */
+    uint64_t sleep_until_ms; /* if > 0: sleeping until time_ms() >= sleep_until_ms */
     uint32_t waiting_for_pid;
     uintptr_t waiting_status_ptr;
     uint32_t wait_result_pid;
@@ -143,6 +143,10 @@ typedef struct process {
     uint32_t waiting_poll_count;
     uint64_t waiting_poll_deadline_ms;
     uint8_t waiting_poll_has_deadline;
+    /* Pipes the blocked poll watches, snapshotted at block time so a pipe
+     * event can find its waiters without touching their address spaces. */
+    struct kernel_pipe *waiting_poll_pipes[PROCESS_POLL_MAX_FDS];
+    uint32_t waiting_poll_pipe_count;
     VmmUserSpace vm;
     process_kernel_wait_fn kernel_wait_fn;
     uintptr_t kernel_wait_arg;

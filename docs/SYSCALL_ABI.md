@@ -53,6 +53,7 @@ Beispiel: `-2` entspricht `ENOENT`.
 - `write` ohne Reader liefert aktuell `-EPIPE`.
 - Null-`stdin` liefert sofort EOF; Null-`stdout`/`stderr` verwerfen Daten und melden Erfolg mit der geschriebenen Bytezahl.
 - `close` und implizites Prozess-Exit wecken wartende Pipe-Gegenseiten fuer EOF/Broken-Pipe auf.
+- Alle blockierenden Syscalls (`read`, `write`, `wait`, `sleep`, `poll_wait`, `poll_many`, `net_ping`) blockieren ueber den Scheduler: der Prozess wird mit Warte-Grund markiert, der Scheduler wechselt weg (Leerlauf im Kernel, wenn nichts lauffaehig ist) und schliesst den Syscall beim Aufwecken ab. Pipe-Ereignisse wecken nur Prozesse, die auf genau diese Pipe warten (Reader bei Daten/EOF, Writer bei Platz/Broken-Pipe, Poller auf dieser Pipe).
 - Weitergehende Referenzsemantik folgt spaeter; das aktuelle Rechte-Modell deckt bisher Read/Write plus `inherit` ab.
 
 ## Syscall Tabelle (v0)

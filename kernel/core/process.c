@@ -213,6 +213,7 @@ static void process_clear_poll_wait(process_t *p) {
     p->waiting_poll_count = 0;
     p->waiting_poll_deadline_ms = 0;
     p->waiting_poll_has_deadline = 0;
+    p->waiting_poll_pipe_count = 0;
 }
 
 static void process_handle_reset(process_handle_entry_t *entry) {
@@ -914,17 +915,51 @@ static int process_resume_blocked_poll(process_t *p) {
     return 0;
 }
 
+static int process_poll_watches_pipe(const process_t *p,
+                                    const kernel_pipe_t *pipe) {
+    for (uint32_t i = 0; i < p->waiting_poll_pipe_count; ++i) {
+        if (p->waiting_poll_pipes[i] == pipe) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/*
+ * Makes runnable exactly the processes whose wait can make progress after an
+ * event on 'pipe': readers when data arrived or the last writer left, writers
+ * when space opened up or the last reader left, and pollers watching it. A
+ * wake that loses the race against another waiter is harmless: the resume path
+ * re-checks the condition and blocks again.
+ */
 static void process_wake_pipe_waiters(kernel_pipe_t *pipe) {
     if (!pipe || !process_list) return;
     process_t *it = process_list;
     do {
-        if (it->alive && it->state == PROCESS_BLOCKED_POLL) {
-            it->state = PROCESS_RUNNABLE;
-        } else if (it->alive &&
-                   (it->state == PROCESS_BLOCKED_PIPE_READ ||
-                    it->state == PROCESS_BLOCKED_PIPE_WRITE) &&
-                   it->waiting_pipe == pipe) {
-            it->state = PROCESS_RUNNABLE;
+        if (it->alive) {
+            switch ((process_state_t)it->state) {
+            case PROCESS_BLOCKED_PIPE_READ:
+                if (it->waiting_pipe == pipe &&
+                    (kernel_pipe_has_data(pipe) ||
+                     !kernel_pipe_has_writers(pipe))) {
+                    it->state = PROCESS_RUNNABLE;
+                }
+                break;
+            case PROCESS_BLOCKED_PIPE_WRITE:
+                if (it->waiting_pipe == pipe &&
+                    (kernel_pipe_has_space(pipe) ||
+                     !kernel_pipe_has_readers(pipe))) {
+                    it->state = PROCESS_RUNNABLE;
+                }
+                break;
+            case PROCESS_BLOCKED_POLL:
+                if (process_poll_watches_pipe(it, pipe)) {
+                    it->state = PROCESS_RUNNABLE;
+                }
+                break;
+            default:
+                break;
+            }
         }
         it = it->next;
     } while (it && it != process_list);
@@ -1468,6 +1503,15 @@ int process_begin_fd_write_wait(process_t *p, int fd) {
     return process_begin_pipe_write_wait(p, fd - 3);
 }
 
+static void process_poll_watch_entry(process_t *p,
+                                     const process_handle_entry_t *entry) {
+    if (!entry || (entry->type != PROCESS_HANDLE_PIPE_READER &&
+                   entry->type != PROCESS_HANDLE_PIPE_WRITER)) {
+        return;
+    }
+    p->waiting_poll_pipes[p->waiting_poll_pipe_count++] = entry->resource.pipe;
+}
+
 int process_begin_fd_poll_wait(process_t *p, int fd, uint32_t events,
                                int64_t timeout_ms) {
     const process_handle_entry_t *entry;
@@ -1494,6 +1538,8 @@ int process_begin_fd_poll_wait(process_t *p, int fd, uint32_t events,
     p->waiting_poll_events = events;
     p->waiting_poll_array_ptr = 0;
     p->waiting_poll_count = 0;
+    p->waiting_poll_pipe_count = 0;
+    process_poll_watch_entry(p, entry);
     if (timeout_ms >= 0) {
         p->waiting_poll_deadline_ms = time_ms() + (uint64_t)timeout_ms;
         p->waiting_poll_has_deadline = 1;
@@ -1506,6 +1552,8 @@ int process_begin_fd_poll_wait(process_t *p, int fd, uint32_t events,
 
 int process_begin_poll_many_wait(process_t *p, uintptr_t array_ptr,
                                  uint32_t count, int64_t timeout_ms) {
+    const process_poll_fd_t *fds;
+
     if (!p || p == &kernel_proc || !process_poll_array_ok(array_ptr, count)) {
         return -1;
     }
@@ -1518,6 +1566,13 @@ int process_begin_poll_many_wait(process_t *p, uintptr_t array_ptr,
     p->waiting_poll_events = 0;
     p->waiting_poll_array_ptr = array_ptr;
     p->waiting_poll_count = count;
+    p->waiting_poll_pipe_count = 0;
+    fds = (const process_poll_fd_t *)array_ptr;
+    for (uint32_t i = 0; i < count; ++i) {
+        if (process_fd_valid(fds[i].fd)) {
+            process_poll_watch_entry(p, process_fd_get_const(p, fds[i].fd));
+        }
+    }
     if (timeout_ms >= 0) {
         p->waiting_poll_deadline_ms = time_ms() + (uint64_t)timeout_ms;
         p->waiting_poll_has_deadline = 1;
@@ -1789,10 +1844,7 @@ void process_set_priority(process_t *p, uint8_t prio) {
 
 void process_begin_sleep(process_t *p, uint32_t ms) {
     if (!p) return;
-    uint64_t now = time_ms();
-    uint64_t until = now + (uint64_t)ms;
-    /* Clamp to uint32_t range; the system uptime wraps much later */
-    p->sleep_until_ms = (uint32_t)(until & 0xFFFFFFFFULL);
+    p->sleep_until_ms = time_ms() + (uint64_t)ms;
     p->state = PROCESS_SLEEPING;
 }
 
@@ -1826,12 +1878,12 @@ static void process_update_kernel_waits(void) {
 }
 
 void process_wake_sleepers(void) {
-    uint32_t now;
+    uint64_t now;
     process_t *it;
 
     if (!process_list) return;
 
-    now = (uint32_t)(time_ms() & 0xFFFFFFFFULL);
+    now = time_ms();
     it = process_list;
     do {
         if (it->alive && it->state == PROCESS_SLEEPING &&
@@ -1902,20 +1954,32 @@ static int process_resume(process_t *p) {
     return 0;
 }
 
+/* Wakes every process whose wait is bounded by time or by a kernel poll. */
+static void process_update_timed_waits(void) {
+    process_wake_sleepers();
+    process_update_poll_timeouts();
+    process_update_kernel_waits();
+}
+
 /*
  * Priority-aware scheduler, called after every syscall and on timer ticks
- * that interrupt user mode.
+ * that interrupted user mode.
  *
- * Candidates are tried in priority order until one actually resumes; a
- * candidate whose wake was spurious re-blocks and drops out. If nothing can
- * run, the CPU idles here with the kernel as current process until a timer
- * deadline makes a process runnable. 'prev' is never resumed unless it is
- * runnable: returning its frame while it is blocked or dead would make a
- * pending syscall return early or run a dead process.
+ * All blocking goes through here: a blocking syscall only records what the
+ * process waits for and returns, so 'r' is a user frame whose pending result
+ * is completed on resume (see process_resume()). Candidates are tried in
+ * priority order until one actually resumes; a candidate whose wake was
+ * spurious re-blocks and drops out. If nothing can run, the CPU idles here
+ * with the kernel as current process until an interrupt makes a process
+ * runnable. 'prev' is never resumed unless it is runnable: returning its
+ * frame while it is blocked or dead would make a pending syscall return early
+ * or run a dead process.
  *
  * Idling is only reachable from the syscall path: a timer tick interrupts a
  * running, hence runnable, process, so process_pick_next() finds at least
- * 'prev' and the IRQ is acknowledged normally.
+ * 'prev' and the IRQ is acknowledged normally. Interrupts that arrive while
+ * idling see the kernel as current process and never reschedule, so no
+ * kernel-mode frame is ever stored as a process frame.
  */
 regs_t *process_schedule(regs_t *r) {
     process_t *prev = current_proc;
@@ -1930,9 +1994,7 @@ regs_t *process_schedule(regs_t *r) {
         }
     }
 
-    process_wake_sleepers();
-    process_update_poll_timeouts();
-    process_update_kernel_waits();
+    process_update_timed_waits();
 
     uint64_t *active_pml4 = prev->pml4;
     for (;;) {
@@ -1962,8 +2024,8 @@ regs_t *process_schedule(regs_t *r) {
             process_destroy(prev);
             prev = 0;
         }
+        /* sti directly followed by hlt cannot lose a wakeup interrupt. */
         __asm__ volatile("sti\n\thlt\n\tcli");
-        process_wake_sleepers();
-        process_update_poll_timeouts();
+        process_update_timed_waits();
     }
 }

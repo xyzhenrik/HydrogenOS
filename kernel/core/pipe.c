@@ -1,7 +1,7 @@
 #include "pipe.h"
 
 enum {
-    KERNEL_PIPE_POOL_SIZE = 16,
+    KERNEL_PIPE_POOL_SIZE = 64,
     KERNEL_PIPE_BUFFER_CAP = KERNEL_PIPE_CAPACITY,
 };
 

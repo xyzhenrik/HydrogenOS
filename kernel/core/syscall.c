@@ -325,17 +325,10 @@ uint64_t syscall_handle(regs_t *r) {
         int rc = process_fd_write(proc, fd, (const uint8_t *)buf,
                                   (uint32_t)len, &wrote);
         if (rc == 1) {
-            if (!process_has_runnable_other_than(proc)) {
-                do {
-                    __asm__ volatile("sti\n\thlt\n\tcli");
-                    rc = process_fd_write(proc, fd, (const uint8_t *)buf,
-                                          (uint32_t)len, &wrote);
-                } while (rc == 1);
-            } else if (process_begin_fd_write_wait(proc, fd) == 0) {
-                return 0;
-            } else {
+            /* The scheduler completes the write once the pipe has room. */
+            if (process_begin_fd_write_wait(proc, fd) != 0)
                 return (uint64_t)-EIO;
-            }
+            return 0;
         }
         if (rc == -2)
             return (uint64_t)-EPIPE;
@@ -359,16 +352,7 @@ uint64_t syscall_handle(regs_t *r) {
         uint32_t got = 0;
         int rc = process_fd_read(proc, fd, (uint8_t *)buf, (uint32_t)len, &got);
         if (rc == 1) {
-            if (!process_has_runnable_other_than(proc)) {
-                do {
-                    __asm__ volatile("sti\n\thlt\n\tcli");
-                    rc = process_fd_read(proc, fd, (uint8_t *)buf,
-                                         (uint32_t)len, &got);
-                } while (rc == 1);
-                if (rc != 0)
-                    return (uint64_t)-EIO;
-                return got;
-            }
+            /* The scheduler completes the read once data or EOF arrives. */
             if (process_begin_fd_read_wait(proc, fd) != 0)
                 return (uint64_t)-EIO;
             return 0;
@@ -452,7 +436,6 @@ uint64_t syscall_handle(regs_t *r) {
         int64_t timeout_ms = (int64_t)r->rdx;
         process_t *proc = process_current();
         uint32_t ready = 0;
-        uint64_t start = 0;
 
         if (!poll_events_valid(events)) {
             return (uint64_t)-EINVAL;
@@ -467,21 +450,6 @@ uint64_t syscall_handle(regs_t *r) {
             return ready;
         }
 
-        if (!process_has_runnable_other_than(proc)) {
-            start = time_ms();
-            do {
-                __asm__ volatile("sti\n\thlt\n\tcli");
-                if (process_fd_poll(proc, fd, events, &ready) != 0) {
-                    return (uint64_t)-EBADF;
-                }
-                if (ready != 0) {
-                    return ready;
-                }
-            } while (timeout_ms == -1 ||
-                     (time_ms() - start) < (uint64_t)timeout_ms);
-            return 0;
-        }
-
         if (process_begin_fd_poll_wait(proc, fd, events, timeout_ms) != 0) {
             return (uint64_t)-EIO;
         }
@@ -493,7 +461,6 @@ uint64_t syscall_handle(regs_t *r) {
         int64_t timeout_ms = (int64_t)r->rdx;
         process_t *proc = process_current();
         uint32_t ready_count = 0;
-        uint64_t start = 0;
         int rc;
 
         if (timeout_ms < -1) {
@@ -515,25 +482,6 @@ uint64_t syscall_handle(regs_t *r) {
         }
         if (ready_count != 0 || timeout_ms == 0) {
             return ready_count;
-        }
-
-        if (!process_has_runnable_other_than(proc)) {
-            start = time_ms();
-            do {
-                __asm__ volatile("sti\n\thlt\n\tcli");
-                rc = process_poll_many(proc, fds, count, &ready_count);
-                if (rc == -2) {
-                    return (uint64_t)-EINVAL;
-                }
-                if (rc != 0) {
-                    return (uint64_t)-EBADF;
-                }
-                if (ready_count != 0) {
-                    return ready_count;
-                }
-            } while (timeout_ms == -1 ||
-                     (time_ms() - start) < (uint64_t)timeout_ms);
-            return 0;
         }
 
         if (process_begin_poll_many_wait(proc, (uintptr_t)fds, count, timeout_ms) != 0) {
@@ -654,15 +602,6 @@ uint64_t syscall_handle(regs_t *r) {
         process_t *proc = process_current();
         if (ms == 0)
             return 0;
-        /* If we are the only runnable process, busy-wait with hlt */
-        if (!process_has_runnable_other_than(proc)) {
-            uint64_t start = time_ms();
-            while ((time_ms() - start) < (uint64_t)ms) {
-                __asm__ volatile("sti\n\thlt\n\tcli");
-            }
-            return 0;
-        }
-        /* Otherwise put the process to sleep; the scheduler will wake it */
         process_begin_sleep(proc, ms);
         return 0;
     }
@@ -951,14 +890,10 @@ uint64_t syscall_handle(regs_t *r) {
         if (net_ping_wait_check((uintptr_t)ticket, &result))
             return result;
 
-        /* Block like poll_wait; with nothing else runnable wait in place. */
-        if (process_has_runnable_other_than(proc) &&
-            process_begin_kernel_wait(proc, net_ping_wait_check,
-                                      (uintptr_t)ticket) == 0)
-            return 0;
-        while (!net_ping_wait_check((uintptr_t)ticket, &result))
-            __asm__ volatile("sti\n\thlt\n\tcli");
-        return result;
+        if (process_begin_kernel_wait(proc, net_ping_wait_check,
+                                      (uintptr_t)ticket) != 0)
+            return (uint64_t)-EIO;
+        return 0;
     }
     default:
         return (uint64_t)-1;
