@@ -81,13 +81,9 @@ static void mouse_write(uint8_t data) {
     inb(0x60); // ack
 }
 
-static void mouse_set_sample_defaults(void) {
-    mouse_write(0xF6); // set defaults
-    mouse_write(0xF4); // enable streaming
-}
-
 static uint8_t packet_cycle = 0;
-static uint8_t packet_bytes[3];
+/* Four slots: IntelliMouse mode appends a wheel byte to the 3-byte packet. */
+static uint8_t packet_bytes[4];
 
 static void mouse_handle_byte(uint8_t data) {
     if (four_byte_mode && packet_cycle == 3) {

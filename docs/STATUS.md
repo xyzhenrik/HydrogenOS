@@ -158,7 +158,7 @@
 - Verification programs: `fstest` (mkdir/write/stat/read/rename/unlink) and `desktoptest` (compositor + widgets + layout + theme + taskbar + launcher + filemanager).
 - `init` now supports `daemon` services: they are spawned once and the init loop stays alive, so compositor, desktop demo and shell run concurrently.
 - `tools/boot_smoke.sh` asserts `FSTEST PASS`, `DESKTOPTEST PASS`, the compositor ready banner and `FRAME CHECKSUM:`.
-- Boot smoke passes locally (with grub extracted from the Arch package because `grub-mkrescue` is not installed system-wide). Known gap: `pollwaitcheck`/`pollmanycheck` are temporarily not part of `init.rc` because the spawn-with-stdio pipe writer reference is not counted before the child writes; they need a proper handle-refcount fix before being re-enabled.
+- Boot smoke passes locally (with grub extracted from the Arch package because `grub-mkrescue` is not installed system-wide). (The former pollwaitcheck/pollmanycheck gap is resolved in milestone 0.3, see below.)
 
 ### Desktop v0 follow-up: visible framebuffer + keyboard (2026-10-23)
 
@@ -273,3 +273,25 @@
   (FSTEST, DESKTOPTEST, LOGIN, PKG, compositor and frame checksum checks).
 - 2K build (`GFXMODE=2560x1440x32`) boots and renders the desktop with the same
   markers; 1080p is the default.
+
+## Milestone 0.3 "Solid Foundations" (2026-10-29)
+
+- **Poll/scheduler fix:** the excluded poll tests were not a refcount bug. `process_begin_fd_poll_wait()` left pipe-read wait state set, so a woken poll performed a phantom pipe read and consumed the child's byte. `process_schedule()` now keeps trying candidates until one actually resumes and idles in the kernel otherwise. `pollwaitcheck`, `pollmanycheck` and `dupfallbackcheck` are back in `init.rc`. Pipe reference counters are 32-bit and acquisition can fail.
+- **Display:** native Bochs/QEMU std-VGA (BGA) driver (`kernel/drivers/bochs_display.c`). Backend order: multiboot VBE, virtio-gpu, BGA, text mode. `pci_init` now runs before `fb_init`. `SYS_FB_INFO` returns `-ENODEV` without a framebuffer.
+- **Memory:** `SYS_MMAP` (45) / `SYS_MUNMAP` (46) with a per-process region list (`kernel/mm/vmm_user.c`), a dedicated mmap window, NX for non-exec pages (EFER.NXE), partial unmap and teardown at exit. The old brk syscalls 34/35 are retired. The userspace `malloc`/`free`/`calloc`/`realloc` is built on mmap.
+- **ext2:** proper directory create/remove (`SYS_RMDIR` 47), multi-group allocation, cleanup of half-created inodes, and `unlink` refuses directories. `e2fsck -fn` is clean after boot.
+- **/proc:** `kernel/fs/procfs.c` provides `/proc/<pid>/status`, `/proc/meminfo`, `/proc/uptime` and `/proc/version`, plus a `ps` tool.
+- **ACPI:** RSDP/RSDT/XSDT/FADT parsing and DSDT `\_S5` scan (`kernel/arch/x86_64/acpi.c`). `SYS_SHUTDOWN` (48) and `SYS_REBOOT` (49) flush the block cache first. `/poweroff` and `/reboot` exist. The RTC reads the FADT century through the ACPI module.
+- **RTC:** CMOS wall clock (`kernel/arch/x86_64/rtc.c`), `SYS_RTC_TIME` (54), a userspace time library, `date`, and the taskbar shows real time.
+- **Network:** virtio-net driver and a minimal Ethernet/ARP/IPv4/ICMP stack (`kernel/net/`) with static QEMU user-net config 10.0.2.15/24. `SYS_NET_INFO` (50) and `SYS_NET_PING` (51) exist, plus a `ping` tool. The smoke test pings 10.0.2.2.
+- **Shell:** modular rewrite (lexer/parser/expand/env/exec/jobs/builtins). It supports `>`, `>>`, `<`, `2>`, `2>&1`, pipelines, `&` with `jobs`/`wait` (and/or lists background as one job), `$VAR`/`${VAR}`/`$?`, `export`/`unset`/`env`, and line continuation. New kernel syscalls: `SYS_SPAWN_ARGS` (52), `SYS_TRY_WAIT` (53), and open flags for create/truncate/append.
+- **Desktop materials:** cached box-blur glass for the taskbar and launcher, nine-slice soft window shadows, anti-aliased rounded corners, all driven by theme tokens.
+- **Fixes:** PS/2 IntelliMouse packet buffer overflow (wheel byte written past `packet_bytes[3]`) and a sequence-point UB in desktopdemo.
+- **Verification:** `tools/boot_smoke.sh` now boots grub-free by default (`BOOT_MODE=kernel`, QEMU `-kernel` with `kernel32.elf`, `-vga std`, virtio-net) and requires the desktop. It passes with FSTEST, DIRTEST, MMAP, PROC, RTC, NET, SHELL, POWERCHECK, LOGIN, PKG, DESKTOPTEST, ACPI OK, COMP READY and FRAME CHECKSUM.
+
+### Open follow-ups
+- `cwdcheck` is still not in `init.rc`: re-check it against the new ext2 directory code.
+- Blocking syscalls still `sti;hlt`-wait inside the kernel when nothing else is runnable; they should block through the scheduler.
+- `init` `restart=on-failure` has no retry limit.
+- Positioned file writes are whole-file read-modify-write (O(file size)).
+- BGA LFB is mapped write-back; write-combining needs PAT.

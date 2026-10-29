@@ -10,7 +10,7 @@
 ### A1: Kern-Infrastruktur
 - [x] **1.** `PROCESS_MAX_HANDLE` 8 → 64 erhöhen (process.h + process.c anpassen, Tests)
 - [x] **2.** Gemeinsame `kernel/include/errno.h` — alle verstreuten `#define ENOENT 2` konsolidieren
-- [ ] **3.** `sys_mmap` / `sys_munmap` implementieren (Userspace-Heap-Erweiterung via `brk`-Semantik)
+- [x] **3.** `sys_mmap` / `sys_munmap` implementieren (Userspace-Heap-Erweiterung via `brk`-Semantik)
 - [x] **4.** `sys_getcwd` / `sys_chdir` — VFS-Arbeitsverzeichnis pro Prozess
 - [x] **5.** `sys_fstat` / `sys_stat` — Datei-Metadaten (size, type, mtime)
 - [x] **6.** `sys_readdir` — Verzeichnis-Iteration für `ls`-artige Tools
@@ -20,10 +20,10 @@
 - [x] **10.** SMP-Vorbereitung: per-CPU-State-Struct (single CPU jetzt, SMP später)
 
 ### A2: VFS & Dateisystem
-- [ ] **11.** VFS: mkdir / rmdir / unlink / rename implementieren
+- [x] **11.** VFS: mkdir / rmdir / unlink / rename implementieren
 - [x] **12.** ext2: Schreib-Support (Datei anlegen, Daten schreiben, Inode-Allokation)
-- [ ] **13.** ext2: Verzeichnis anlegen
-- [ ] **14.** `/proc`-Stub-Filesystem (PID-Liste, `/proc/<pid>/status`)
+- [x] **13.** ext2: Verzeichnis anlegen
+- [x] **14.** `/proc`-Stub-Filesystem (PID-Liste, `/proc/<pid>/status`)
 - [ ] **15.** Pfad-Cache / dcache (einfacher Hash, LRU eviction)
 - [ ] **16.** Block-Cache: Writeback-Policy statt nur Read-Cache
 - [ ] **17.** Block-Device-Abstraktion: mehrere Geräte gleichzeitig (`/dev/blk0`, `/dev/blk1`)
@@ -49,8 +49,8 @@
 - [x] **32.** IOAPIC-Setup
 - [x] **33.** MSI/MSI-X-Support für Virtio-PCI
 - [ ] **34.** AHCI-Stub (PCI-Detect, kein Full-Driver — Real-HW-Pfad vorbereiten)
-- [ ] **35.** `virtio-net` — PCI-Probe + Loopback-Test
-- [ ] **36.** Einfacher Netzwerk-Stack-Stub (Ethernet-Frame-RX/TX)
+- [x] **35.** `virtio-net` — PCI-Probe + Loopback-Test
+- [x] **36.** Einfacher Netzwerk-Stack-Stub (Ethernet-Frame-RX/TX)
 - [ ] **37.** ARP + IPv4-Grundstruktur
 - [ ] **38.** UDP-Grundimplementierung
 - [ ] **39.** TCP (minimal: SYN/ACK, Send/Receive)
@@ -74,12 +74,12 @@
 - [ ] **52.** Dynamischer ELF-Loader (Shared-Library-Support, PLT/GOT)
 - [ ] **53.** `/bin`, `/lib`, `/etc`, `/tmp`-Verzeichnisstruktur im initialen FS
 - [ ] **54.** Shell: Pipe-Operator `|` (Shell-seitige Pipe-Verkettung)
-- [ ] **55.** Shell: Output-Redirection `>` / `>>`
-- [ ] **56.** Shell: Input-Redirection `<`
-- [ ] **57.** Shell: Hintergrund-Job `&` + `wait`
+- [x] **55.** Shell: Output-Redirection `>` / `>>`
+- [x] **56.** Shell: Input-Redirection `<`
+- [x] **57.** Shell: Hintergrund-Job `&` + `wait`
 - [x] **58.** Shell: `ls`, `pwd`, `cd`, `mkdir`, `rm`, `touch`
 - [x] **59.** Shell: `cp`, `mv`, `find` (minimal)
-- [ ] **60.** Shell: Environment-Variable-Expansion `$VAR` + `export`
+- [x] **60.** Shell: Environment-Variable-Expansion `$VAR` + `export`
 
 ---
 
@@ -113,7 +113,7 @@
 - [ ] **81.** System-Logger `syslogd` (Userspace-Daemon, liest logsink, schreibt `/var/log/system.log`)
 - [ ] **82.** RTC-Treiber (CMOS, Wanduhrzeit beim Boot lesen)
 - [ ] **83.** ACPI-Tabellen-Parser (RSDP → RSDT/XSDT → FADT, Shutdown via SLP_TYPx)
-- [ ] **84.** Power-Management: sauberes Shutdown / Reboot via ACPI
+- [x] **84.** Power-Management: sauberes Shutdown / Reboot via ACPI
 - [ ] **85.** Benutzer-Authentifizierung (`/etc/passwd`-Stil, `sys_getuid` / `sys_setuid`)
 - [ ] **86.** Datei-Permissions (Inode-Bits rwxrwxrwx, UID/GID, Kernel-Enforcement)
 - [x] **87.** Paketformat `.hpkg` (tar + JSON-Manifest: name, version, deps, files)

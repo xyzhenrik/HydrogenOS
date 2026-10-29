@@ -819,7 +819,7 @@ static void draw_settings(App *a) {
     {
         char line[64]; int z = 0;
         const char *pre = "Resolution: ";
-        while (pre[z]) line[z] = pre[z++];
+        while (pre[z]) { line[z] = pre[z]; ++z; }
         append_num(line, &z, SW); line[z++] = 'x';
         append_num(line, &z, SH); line[z] = 0;
         comp_text_render(w, PAD, TITLE_H + 176, line, COL_EDIT_FG);
