@@ -6,11 +6,14 @@
 #define STRINGIFY(x) STRINGIFY_VALUE(x)
 
 #define RC_EINTR (-4l)
+#define RC_EPERM (-1l)
 #define RC_ESRCH (-3l)
 #define RC_EFAULT (-14l)
 #define RC_EINVAL (-22l)
 
 #define EXIT_SEGV_HANDLED 42
+#define EXIT_WIDE_STATUS_SEEN 0xFF
+#define BOOTSTRAP_PID 1
 #define KICK_INTERVAL_MS 100
 #define KICK_ATTEMPTS 50
 #define STATE_TIMEOUT_MS 5000
@@ -304,6 +307,10 @@ static int child_main(int argc, char **argv) {
         }
         return 0;
     }
+    if (str_equal(mode, "exitwide")) {
+        announce_ready();
+        return -1;
+    }
     if (str_equal(mode, "exit")) {
         announce_ready();
         return 7;
@@ -529,12 +536,32 @@ static int test_child_signal(void) {
     return sigaction(SIGCHLD, &restore, 0) == 0 ? 0 : fail("restore SIGCHLD");
 }
 
+/* The kernel must refuse what would take it down: killing the bootstrap
+ * process, unmapped user pointers, exit statuses posing as a signal death. */
+static int test_kernel_guards(void) {
+    long pid;
+
+    if (kill(BOOTSTRAP_PID, 0) != 0)
+        return fail("bootstrap process missing");
+    if (kill(BOOTSTRAP_PID, SIGKILL) != RC_EPERM ||
+        kill(BOOTSTRAP_PID, SIGTERM) != RC_EPERM)
+        return fail("bootstrap process killable");
+    if (sys_write(1, (const void *)UNMAPPED_ADDRESS, 1) != RC_EFAULT ||
+        sys_read(0, (void *)UNMAPPED_ADDRESS, 1) != RC_EFAULT ||
+        sys_stat("/", (void *)UNMAPPED_ADDRESS) != RC_EFAULT)
+        return fail("unmapped syscall pointer accepted");
+    pid = start_child("exitwide", 0, 0);
+    if (pid < 0)
+        return fail("start exitwide");
+    return expect_status(pid, EXIT_WIDE_STATUS_SEEN, "exit status not masked");
+}
+
 int main(int argc, char **argv) {
     if (argc >= 2)
         return child_main(argc, argv);
     if (test_argument_errors() || test_handler_and_registers() ||
         test_sleeper_killed() || test_faults() || test_interrupted_calls() ||
-        test_wait_interrupted() || test_child_signal())
+        test_wait_interrupted() || test_child_signal() || test_kernel_guards())
         return 1;
     fprintf(1, "SIG PASS\n");
     return 0;

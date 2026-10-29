@@ -59,5 +59,6 @@ long signal_install(int sig, signal_handler_t handler);
 const char *signal_name(int sig);
 /* Text a shell prints for a process killed by sig; "" if none is wanted. */
 const char *signal_description(int sig);
-/* Accepts "TERM", "SIGTERM" or a decimal number; returns 0 if unknown. */
+/* Accepts "TERM", "SIGTERM" or a decimal number. Returns 0 for the number 0
+ * (the existence probe of kill) and -1 if the signal is unknown. */
 int signal_number(const char *name);

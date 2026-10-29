@@ -31,8 +31,10 @@ void fb_console_clear(void);
 #include <stdint.h>
 
 #include "errno.h"
+#include "gdt.h"
+#include "core/signal.h"
 
-static process_t *bootstrap_proc = 0;
+static uint32_t bootstrap_pid = 0;
 static uintptr_t user_return_rip = 0;
 static uintptr_t user_return_rsp = 0;
 
@@ -41,7 +43,7 @@ static int poll_events_valid(uint32_t events) {
     return (events & ~known) == 0;
 }
 
-static int user_range_ok(const void *ptr, size_t len) {
+static int user_range_probe(const void *ptr, size_t len, int write) {
     if (!ptr) return 0;
     uintptr_t start = (uintptr_t)ptr;
     if (start < 0x1000) return 0;
@@ -49,7 +51,17 @@ static int user_range_ok(const void *ptr, size_t len) {
     uintptr_t end = start + len - 1;
     if (end < start) return 0;
     if (end >= (uintptr_t)KERNEL_VMA_BASE) return 0;
-    return 1;
+    /* An unmapped user page would fault in kernel mode, which is fatal. */
+    return paging_user_range_accessible(paging_current_pml4(), start, len,
+                                        write);
+}
+
+static int user_range_ok(const void *ptr, size_t len) {
+    return user_range_probe(ptr, len, 0);
+}
+
+static int user_range_writable(const void *ptr, size_t len) {
+    return user_range_probe(ptr, len, 1);
 }
 
 static int user_str_copy(const char *uptr, char *dst, size_t dst_sz) {
@@ -158,7 +170,11 @@ static uint64_t fs_status(int rc) {
 }
 
 void syscall_set_bootstrap(process_t *proc) {
-    bootstrap_proc = proc;
+    bootstrap_pid = proc ? proc->pid : 0;
+}
+
+int syscall_is_bootstrap(const process_t *proc) {
+    return proc && bootstrap_pid != 0 && proc->pid == bootstrap_pid;
 }
 
 void syscall_set_user_return(uintptr_t rip, uintptr_t rsp) {
@@ -166,32 +182,40 @@ void syscall_set_user_return(uintptr_t rip, uintptr_t rsp) {
     user_return_rsp = rsp;
 }
 
-static void user_return_to_kernel(regs_t *r, uint64_t status) {
+static int user_return_to_kernel(regs_t *r, uint64_t status) {
     if (!r || user_return_rip == 0 || user_return_rsp == 0)
-        return;
+        return 0;
     process_set_current(process_kernel());
     paging_switch(paging_kernel_pml4());
     r->rdi = status;
     r->rip = user_return_rip;
-    r->cs = 0x08;
+    r->cs = GDT_KERNEL_CODE_SELECTOR;
     r->rflags = 0x202;
     r->rsp = user_return_rsp;
-    r->ss = 0x10;
+    r->ss = GDT_KERNEL_DATA_SELECTOR;
     user_return_rip = 0;
     user_return_rsp = 0;
+    return 1;
+}
+
+int syscall_bootstrap_exited(const process_t *exited, regs_t *r,
+                             uint64_t status) {
+    if (!syscall_is_bootstrap(exited) || process_has_runnable_other_than(exited))
+        return 0;
+    bootstrap_pid = 0;
+    return user_return_to_kernel(r, status);
 }
 
 uint64_t syscall_handle(regs_t *r) {
     switch (r->rax) {
     case SYS_EXIT: {
         process_t *exiting = process_current();
-        int is_bootstrap = (exiting == bootstrap_proc);
-        process_mark_exited(exiting, (int)r->rdi);
-        if (is_bootstrap && !process_has_runnable_other_than(exiting)) {
-            bootstrap_proc = 0;
-            user_return_to_kernel(r, r->rdi);
+        /* Only the low byte is a status: the bits above are reserved for the
+           kernel's own encoding of a death by signal. */
+        uint64_t status = r->rdi & SIGNAL_EXIT_STATUS_MASK;
+        process_mark_exited(exiting, (int)status);
+        if (syscall_bootstrap_exited(exiting, r, status))
             process_destroy(exiting);
-        }
         return 0;
     }
     case SYS_SET_LAYOUT: {
@@ -200,7 +224,7 @@ uint64_t syscall_handle(regs_t *r) {
     }
     case SYS_RTC_TIME: {
         hydrogen_rtc_time_t *out = (hydrogen_rtc_time_t *)(uintptr_t)r->rdi;
-        if (!user_range_ok(out, sizeof(*out)))
+        if (!user_range_writable(out, sizeof(*out)))
             return (uint64_t)-EFAULT;
         hydrogen_rtc_time_t now;
         int rc = rtc_now(&now);
@@ -221,7 +245,7 @@ uint64_t syscall_handle(regs_t *r) {
     }
     case SYS_SYSINFO: {
         uint32_t *o = (uint32_t *)(uintptr_t)r->rdi;
-        if (!o || !user_range_ok(o, sizeof(uint32_t) * 9))
+        if (!o || !user_range_writable(o, sizeof(uint32_t) * 9))
             return (uint64_t)-EFAULT;
         ext2_info_t ei;
         int ext2_root = (ext2_is_mounted() && ext2_info(&ei) == 0);
@@ -267,7 +291,7 @@ uint64_t syscall_handle(regs_t *r) {
     }
     case SYS_MOUSE_STATE: {
         int *out = (int *)(uintptr_t)r->rdi;
-        if (!out || !user_range_ok(out, sizeof(int) * 4))
+        if (!out || !user_range_writable(out, sizeof(int) * 4))
             return (uint64_t)-EFAULT;
         mouse_poll();
         int mx = 0, my = 0;
@@ -280,7 +304,7 @@ uint64_t syscall_handle(regs_t *r) {
     }
     case SYS_FB_INFO: {
         uint32_t *info = (uint32_t *)(uintptr_t)r->rdi;
-        if (!info || !user_range_ok(info, sizeof(uint32_t) * 4))
+        if (!info || !user_range_writable(info, sizeof(uint32_t) * 4))
             return (uint64_t)-EFAULT;
         if (!framebuffer.addr || framebuffer.width == 0 ||
             framebuffer.height == 0)
@@ -354,7 +378,7 @@ uint64_t syscall_handle(regs_t *r) {
         process_t *proc = process_current();
         if (!buf || len == 0)
             return 0;
-        if (!user_range_ok(buf, len))
+        if (!user_range_writable(buf, len))
             return (uint64_t)-EFAULT;
         if (fd < 0 || fd == 1 || fd == 2)
             return (uint64_t)-EBADF;
@@ -509,7 +533,7 @@ uint64_t syscall_handle(regs_t *r) {
         if (count == 0 || count > PROCESS_POLL_MAX_FDS) {
             return (uint64_t)-EINVAL;
         }
-        if (!user_range_ok(fds, sizeof(process_poll_fd_t) * count)) {
+        if (!user_range_writable(fds, sizeof(process_poll_fd_t) * count)) {
             return (uint64_t)-EFAULT;
         }
 
@@ -621,7 +645,7 @@ uint64_t syscall_handle(regs_t *r) {
         process_t *proc = process_current();
         if (pid == 0)
             return (uint64_t)-EINVAL;
-        if (status_ptr && !user_range_ok(status_ptr, sizeof(int)))
+        if (status_ptr && !user_range_writable(status_ptr, sizeof(int)))
             return (uint64_t)-EFAULT;
         int rc = process_wait(proc, pid, &status);
         if (rc < 0)
@@ -639,7 +663,7 @@ uint64_t syscall_handle(regs_t *r) {
         process_t *proc = process_current();
         if (pid == 0)
             return (uint64_t)-EINVAL;
-        if (status_ptr && !user_range_ok(status_ptr, sizeof(int)))
+        if (status_ptr && !user_range_writable(status_ptr, sizeof(int)))
             return (uint64_t)-EFAULT;
         int rc = process_wait(proc, pid, &status);
         if (rc < 0)
@@ -688,7 +712,7 @@ uint64_t syscall_handle(regs_t *r) {
         process_t *proc = process_current();
         int read_handle = -1;
         int write_handle = -1;
-        if (!fds || !user_range_ok(fds, sizeof(int) * 2))
+        if (!fds || !user_range_writable(fds, sizeof(int) * 2))
             return (uint64_t)-EFAULT;
         int rc = process_handle_create_pipe(proc, &read_handle, &write_handle);
         if (rc == PROCESS_RESOURCE_NO_HANDLE_SLOT)
@@ -755,7 +779,7 @@ uint64_t syscall_handle(regs_t *r) {
             return (uint64_t)-EFAULT;
         if (copy_resolved_user_path(proc, path, kpath, sizeof(kpath)) != 0)
             return (uint64_t)-EFAULT;
-        if (!buf || !user_range_ok(buf, sizeof(hydrogen_stat_t)))
+        if (!buf || !user_range_writable(buf, sizeof(hydrogen_stat_t)))
             return (uint64_t)-EFAULT;
         if (!vfs_is_ready())
             return (uint64_t)-ENOENT;
@@ -769,7 +793,7 @@ uint64_t syscall_handle(regs_t *r) {
         int fd = (int)r->rdi;
         hydrogen_stat_t *buf = (hydrogen_stat_t *)(uintptr_t)r->rsi;
         process_t *proc = process_current();
-        if (!buf || !user_range_ok(buf, sizeof(hydrogen_stat_t)))
+        if (!buf || !user_range_writable(buf, sizeof(hydrogen_stat_t)))
             return (uint64_t)-EFAULT;
         if (!vfs_is_ready())
             return (uint64_t)-ENOENT;
@@ -798,7 +822,7 @@ uint64_t syscall_handle(regs_t *r) {
             return (uint64_t)-EFAULT;
         if (copy_resolved_user_path(proc, path, kpath, sizeof(kpath)) != 0)
             return (uint64_t)-EFAULT;
-        if (!buf || !user_range_ok(buf, sizeof(hydrogen_dirent_t)))
+        if (!buf || !user_range_writable(buf, sizeof(hydrogen_dirent_t)))
             return (uint64_t)-EFAULT;
         if (!vfs_is_ready())
             return (uint64_t)-ENOENT;
@@ -816,7 +840,7 @@ uint64_t syscall_handle(regs_t *r) {
         size_t size = (size_t)r->rsi;
         if (!buf || size == 0)
             return (uint64_t)-EINVAL;
-        if (!user_range_ok(buf, size))
+        if (!user_range_writable(buf, size))
             return (uint64_t)-EFAULT;
         process_t *proc = process_current();
         size_t cwd_len = k_strlen(proc->cwd) + 1;
@@ -941,7 +965,7 @@ uint64_t syscall_handle(regs_t *r) {
     case SYS_NET_INFO: {
         net_info_t *out = (net_info_t *)(uintptr_t)r->rdi;
         net_info_t info;
-        if (!user_range_ok(out, sizeof(*out)))
+        if (!user_range_writable(out, sizeof(*out)))
             return (uint64_t)-EFAULT;
         int rc = net_get_info(&info);
         if (rc != 0)

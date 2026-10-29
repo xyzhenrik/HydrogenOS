@@ -62,3 +62,17 @@
 
 uint64_t syscall_handle(regs_t *r);
 void syscall_set_user_return(uintptr_t rip, uintptr_t rsp);
+
+struct process;
+
+/* True for the first user process, whose death hands the CPU back to the
+ * kernel shell. */
+int syscall_is_bootstrap(const struct process *proc);
+
+/*
+ * Called once `exited` is dead. If it is the bootstrap process and nothing
+ * else can run, rewrites r to resume in the kernel shell and returns 1; the
+ * caller then owns destroying `exited`. Returns 0 otherwise.
+ */
+int syscall_bootstrap_exited(const struct process *exited, regs_t *r,
+                             uint64_t status);

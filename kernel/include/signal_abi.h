@@ -27,7 +27,12 @@
 
 #define SIGNAL_BIT(sig) (1u << (sig))
 
-/* Exit status of a process that was terminated by a signal. */
+/* SYS_EXIT keeps only the low byte of its argument, so a status that carries
+ * SIGNAL_STATUS_SIGNALED can only come from the kernel. */
+#define SIGNAL_EXIT_STATUS_MASK 0xFFu
+
+/* Exit status of a process that was terminated by a signal; the low byte is
+ * the signal number. */
 #define SIGNAL_STATUS_SIGNALED 0x40000000
 #define SIGNAL_STATUS(sig) (SIGNAL_STATUS_SIGNALED | (sig))
 

@@ -20,7 +20,6 @@
 #define PAGING_SPAN_2M 0x200000ULL
 #define PAGING_SPAN_1G 0x40000000ULL
 #define PAGING_SPAN_512G 0x8000000000ULL
-#define PAGING_USER_TOP 0x0000800000000000ULL
 
 extern uint64_t pml4[];
 extern uint64_t pdpt[];
@@ -151,6 +150,41 @@ int paging_is_mapped(uintptr_t virt) {
         return 1;
     uint64_t *pt_tbl = (uint64_t *)(uintptr_t)(pd_tbl[pd_idx] & ~0xFFFULL);
     return (pt_tbl[pt_idx] & PAGE_PRESENT) != 0;
+}
+
+static int paging_user_page_accessible(const uint64_t *pml4_root,
+                                       uintptr_t virt, uint64_t required) {
+    uint64_t entry = pml4_root[(virt >> 39) & 0x1FF];
+    if ((entry & required) != required)
+        return 0;
+    const uint64_t *pdpt_tbl = (const uint64_t *)(uintptr_t)(entry & PAGE_ADDR_MASK);
+    entry = pdpt_tbl[(virt >> 30) & 0x1FF];
+    if ((entry & required) != required)
+        return 0;
+    if (entry & PAGE_PS)
+        return 1;
+    const uint64_t *pd_tbl = (const uint64_t *)(uintptr_t)(entry & PAGE_ADDR_MASK);
+    entry = pd_tbl[(virt >> 21) & 0x1FF];
+    if ((entry & required) != required)
+        return 0;
+    if (entry & PAGE_PS)
+        return 1;
+    const uint64_t *pt_tbl = (const uint64_t *)(uintptr_t)(entry & PAGE_ADDR_MASK);
+    return (pt_tbl[(virt >> 12) & 0x1FF] & required) == required;
+}
+
+int paging_user_range_accessible(const uint64_t *pml4_root, uintptr_t virt,
+                                 size_t size_bytes, int write) {
+    const uint64_t required = PAGE_PRESENT | PAGE_USER | (write ? PAGE_RW : 0);
+    if (!pml4_root || size_bytes == 0 || virt >= PAGING_USER_TOP ||
+        size_bytes > PAGING_USER_TOP - virt)
+        return 0;
+    for (uintptr_t page = virt & ~(uintptr_t)0xFFF; page < virt + size_bytes;
+         page += 0x1000) {
+        if (!paging_user_page_accessible(pml4_root, page, required))
+            return 0;
+    }
+    return 1;
 }
 
 void paging_switch(uint64_t *pml4_root) {

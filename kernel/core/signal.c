@@ -1,26 +1,19 @@
 #include "signal.h"
 
 #include "errno.h"
+#include "gdt.h"
+#include "paging.h"
 #include "process.h"
 #include "serial.h"
+#include "syscall.h"
 
-#define USER_CODE_SELECTOR 0x23u
-#define USER_DATA_SELECTOR 0x1Bu
-#define USER_SPACE_TOP 0x0000800000000000ULL
 #define USER_MIN_ADDRESS 0x1000ULL
 #define USER_RED_ZONE 128ULL
-#define PAGE_SIZE 4096ULL
 
 #define RFLAGS_ALWAYS_SET 0x2ULL
 #define RFLAGS_INTERRUPT_ENABLE 0x200ULL
 /* CF, PF, AF, ZF, SF, DF, OF: the flags a process may legitimately change. */
 #define RFLAGS_USER_MASK 0xCD5ULL
-
-#define PTE_PRESENT 0x1ULL
-#define PTE_WRITABLE 0x2ULL
-#define PTE_USER 0x4ULL
-#define PTE_LARGE 0x80ULL
-#define PTE_ADDRESS_MASK 0x000FFFFFFFFFF000ULL
 
 #define CONSOLE_CHAIN_DEPTH_MAX 16
 
@@ -104,49 +97,15 @@ static void signal_log_fatal_fault(const process_t *p, int sig) {
     serial_write("\n");
 }
 
-/*
- * Walks the process's own page tables: the kernel runs with the process's
- * address space active, so touching an unmapped or read-only user page would
- * fault in kernel mode. Table frames are identity mapped.
- */
-static int signal_page_accessible(const uint64_t *pml4, uint64_t address,
-                                  int write) {
-    const uint64_t required = PTE_PRESENT | PTE_USER | (write ? PTE_WRITABLE : 0);
-    uint64_t entry = pml4[(address >> 39) & 0x1FF];
-    if ((entry & required) != required)
-        return 0;
-    const uint64_t *pdpt = (const uint64_t *)(uintptr_t)(entry & PTE_ADDRESS_MASK);
-    entry = pdpt[(address >> 30) & 0x1FF];
-    if ((entry & required) != required)
-        return 0;
-    if (entry & PTE_LARGE)
-        return 1;
-    const uint64_t *pd = (const uint64_t *)(uintptr_t)(entry & PTE_ADDRESS_MASK);
-    entry = pd[(address >> 21) & 0x1FF];
-    if ((entry & required) != required)
-        return 0;
-    if (entry & PTE_LARGE)
-        return 1;
-    const uint64_t *pt = (const uint64_t *)(uintptr_t)(entry & PTE_ADDRESS_MASK);
-    entry = pt[(address >> 12) & 0x1FF];
-    return (entry & required) == required;
-}
-
 static int signal_user_range_accessible(const process_t *p, uint64_t address,
                                         uint64_t length, int write) {
-    if (address < USER_MIN_ADDRESS || length == 0 ||
-        address >= USER_SPACE_TOP || length > USER_SPACE_TOP - address)
-        return 0;
-    for (uint64_t page = address & ~(PAGE_SIZE - 1);
-         page < address + length; page += PAGE_SIZE) {
-        if (!signal_page_accessible(p->pml4, page, write))
-            return 0;
-    }
-    return 1;
+    return address >= USER_MIN_ADDRESS &&
+           paging_user_range_accessible(p->pml4, (uintptr_t)address,
+                                        (size_t)length, write);
 }
 
 static int signal_user_address_ok(uint64_t address) {
-    return address >= USER_MIN_ADDRESS && address < USER_SPACE_TOP;
+    return address >= USER_MIN_ADDRESS && address < PAGING_USER_TOP;
 }
 
 static int signal_next_ready(const signal_state_t *state) {
@@ -156,6 +115,11 @@ static int signal_next_ready(const signal_state_t *state) {
         return 0;
     if (ready & SIGNAL_BIT(SIGKILL))
         return SIGKILL;
+    /* A fault belongs to the instruction that is about to run again: it goes
+     * first, so its handler (or the fatal log line) sees that context rather
+     * than another handler's. */
+    if (ready & SIGNAL_FAULT_MASK)
+        return __builtin_ctz(ready & SIGNAL_FAULT_MASK);
     return __builtin_ctz(ready);
 }
 
@@ -174,7 +138,15 @@ static void signal_force(process_t *p, int sig) {
 static void signal_terminate(process_t *p, int sig) {
     if (SIGNAL_FAULT_MASK & SIGNAL_BIT(sig))
         signal_log_fatal_fault(p, sig);
+    p->signals.fatal_signal = sig;
     process_mark_exited(p, (int)SIGNAL_STATUS(sig));
+}
+
+/* Whether sig would end the process right away (no handler, not ignored). */
+static int signal_fatal_now(const signal_state_t *state, int sig) {
+    return sig == SIGKILL ||
+           (state->actions[sig].handler == SIG_DFL &&
+            !signal_default_ignored(sig));
 }
 
 void signal_state_init(signal_state_t *state) {
@@ -190,6 +162,7 @@ void signal_state_init(signal_state_t *state) {
     state->fault_addr = 0;
     state->fault_trap = 0;
     state->fault_error = 0;
+    state->fatal_signal = 0;
 }
 
 int signal_deliverable(const process_t *p) {
@@ -217,6 +190,9 @@ int64_t signal_kill(uint32_t pid, int sig) {
         return -ESRCH;
     if (sig == 0)
         return 0;
+    /* Nothing else could take over the console if the bootstrap process died. */
+    if (syscall_is_bootstrap(target) && signal_fatal_now(&target->signals, sig))
+        return -EPERM;
     return signal_send(target, sig);
 }
 
@@ -328,7 +304,7 @@ static int signal_enter_handler(process_t *p, int sig) {
     const uint64_t size = sizeof(signal_frame_t);
     uint64_t sp = p->frame.rsp;
 
-    if (sp < USER_RED_ZONE + size + USER_MIN_ADDRESS || sp >= USER_SPACE_TOP)
+    if (sp < USER_RED_ZONE + size + USER_MIN_ADDRESS || sp >= PAGING_USER_TOP)
         return -1;
     /* A function entry sees rsp = 8 (mod 16): the return address was pushed
      * onto a 16-byte aligned stack. */
@@ -358,7 +334,7 @@ static int signal_enter_handler(process_t *p, int sig) {
 int signal_deliver(process_t *p) {
     signal_state_t *state = &p->signals;
 
-    if (p->frame.cs != USER_CODE_SELECTOR)
+    if (p->frame.cs != GDT_USER_CODE_SELECTOR)
         return SIGNAL_DELIVER_NONE;
     for (;;) {
         int sig = signal_next_ready(state);
@@ -367,8 +343,7 @@ int signal_deliver(process_t *p) {
         state->pending &= ~SIGNAL_BIT(sig);
 
         uint64_t handler = state->actions[sig].handler;
-        if (sig == SIGKILL ||
-            (handler == SIG_DFL && !signal_default_ignored(sig))) {
+        if (signal_fatal_now(state, sig)) {
             signal_terminate(p, sig);
             return SIGNAL_DELIVER_KILLED;
         }
@@ -386,8 +361,9 @@ int signal_deliver(process_t *p) {
 }
 
 static int signal_context_valid(const hydrogen_sigcontext_t *ctx) {
-    return ctx->cs == USER_CODE_SELECTOR && ctx->ss == USER_DATA_SELECTOR &&
-           signal_user_address_ok(ctx->rip) && ctx->rsp < USER_SPACE_TOP;
+    return ctx->cs == GDT_USER_CODE_SELECTOR &&
+           ctx->ss == GDT_USER_DATA_SELECTOR &&
+           signal_user_address_ok(ctx->rip) && ctx->rsp < PAGING_USER_TOP;
 }
 
 int signal_return(process_t *p, regs_t *r) {
@@ -409,8 +385,8 @@ int signal_return(process_t *p, regs_t *r) {
     r->rsi = ctx.rsi; r->rdi = ctx.rdi; r->rbp = ctx.rbp; r->rbx = ctx.rbx;
     r->rdx = ctx.rdx; r->rcx = ctx.rcx; r->rax = ctx.rax;
     r->rip = ctx.rip;
-    r->cs = USER_CODE_SELECTOR;
-    r->ss = USER_DATA_SELECTOR;
+    r->cs = GDT_USER_CODE_SELECTOR;
+    r->ss = GDT_USER_DATA_SELECTOR;
     r->rsp = ctx.rsp;
     r->rflags = (ctx.rflags & RFLAGS_USER_MASK) | RFLAGS_INTERRUPT_ENABLE |
                 RFLAGS_ALWAYS_SET;

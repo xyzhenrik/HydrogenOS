@@ -23,8 +23,19 @@ void paging_map_region_pml4(uint64_t *pml4, uintptr_t phys, uintptr_t virt,
  */
 int paging_user_map_page(uint64_t *pml4, uintptr_t virt, uintptr_t phys,
                          uint64_t flags);
+/*
+ * True if every page of [virt, virt + size_bytes) lies in user space and is
+ * mapped user-accessible (and writable if `write`) in `pml4`. Walks the
+ * tables without touching the range, so it is safe to call before the kernel
+ * dereferences a user pointer. An empty range is never accessible.
+ */
+int paging_user_range_accessible(const uint64_t *pml4, uintptr_t virt,
+                                 size_t size_bytes, int write);
 /* Unmap user pages in a range, free their frames and prune empty PTs/PDs. */
 void paging_user_unmap_range(uint64_t *pml4, uintptr_t virt, size_t size_bytes);
+
+/* First address above the lower (user) half of the canonical address space. */
+#define PAGING_USER_TOP 0x0000800000000000ULL
 
 #define PAGE_RW 0x2
 #define PAGE_PRESENT 0x1

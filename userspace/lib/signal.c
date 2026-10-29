@@ -83,9 +83,11 @@ int signal_number(const char *name) {
         for (; *name >= '0' && *name <= '9'; ++name) {
             number = number * 10 + (*name - '0');
             if (number >= 32)
-                return 0;
+                return -1;
         }
-        return *name == 0 && signal_name(number) ? number : 0;
+        if (*name != 0)
+            return -1;
+        return number == 0 || signal_name(number) ? number : -1;
     }
     if (name[0] == 'S' && name[1] == 'I' && name[2] == 'G')
         name += 3;
@@ -93,5 +95,5 @@ int signal_number(const char *name) {
         if (names_equal(name, signal_table[i].name))
             return signal_table[i].number;
     }
-    return 0;
+    return -1;
 }

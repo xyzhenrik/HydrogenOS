@@ -17,6 +17,8 @@ typedef struct signal_state {
     uint64_t fault_addr;
     uint64_t fault_trap;
     uint64_t fault_error;
+    /* The signal that terminated the process; 0 while it lives. */
+    int fatal_signal;
 } signal_state_t;
 
 enum {
@@ -34,7 +36,8 @@ int signal_deliverable(const struct process *p);
  * -EINVAL for an unknown signal or -ESRCH for a dead target. */
 int signal_send(struct process *target, int sig);
 
-/* Syscall bodies; user pointers are probed against p's page tables. */
+/* Syscall bodies; user pointers are probed against p's page tables. Signals
+ * that would terminate the bootstrap process are refused with -EPERM. */
 int64_t signal_kill(uint32_t pid, int sig);
 int64_t signal_sigaction(struct process *p, int sig, uint64_t act_user,
                          uint64_t old_user);

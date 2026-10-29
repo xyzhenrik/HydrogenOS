@@ -1,5 +1,6 @@
 #include "process.h"
 #include "core/time.h"
+#include "errno.h"
 #include "higher_half.h"
 #include "keyboard.h"
 #include "pipe.h"
@@ -8,6 +9,7 @@
 #include "fs/vfs.h"
 #include "kheap.h"
 #include "paging.h"
+#include "syscall.h"
 
 #define PROCESS_EXIT_SLOTS 32
 
@@ -27,7 +29,6 @@ static char console_escape_pending[8];
 static uint32_t console_escape_len = 0;
 static uint32_t console_escape_pos = 0;
 
-#define PROCESS_ERR_EINTR 4
 #define PROCESS_ERR_EIO 5
 #define PROCESS_ERR_EPIPE 32
 
@@ -1874,7 +1875,7 @@ int process_interrupt_wait(process_t *p) {
     p->sleep_until_ms = 0;
     p->kernel_wait_fn = 0;
     p->kernel_wait_arg = 0;
-    p->frame.rax = (uint64_t)-PROCESS_ERR_EINTR;
+    p->frame.rax = (uint64_t)-EINTR;
     p->state = PROCESS_RUNNABLE;
     return 1;
 }
@@ -1990,6 +1991,16 @@ regs_t *process_schedule(regs_t *r) {
                 continue;
             }
             if (signal_deliver(next) == SIGNAL_DELIVER_KILLED) {
+                if (syscall_bootstrap_exited(
+                        next, r, SIGNAL_STATUS(next->signals.fatal_signal))) {
+                    /* The bootstrap process is gone and nothing else can run:
+                       r now resumes in the kernel shell. */
+                    process_destroy(next);
+                    if (prev != next && !prev->alive) {
+                        process_destroy(prev);
+                    }
+                    return r;
+                }
                 if (next != prev) {
                     process_set_current(&kernel_proc);
                     active_pml4 = paging_kernel_pml4();

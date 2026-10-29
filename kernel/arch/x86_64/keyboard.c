@@ -153,6 +153,7 @@ void keyboard_handle_scancode(uint8_t scancode) {
 
 static int vshift = 0;
 static int vcaps = 0;
+static int vctrl = 0;
 
 static void virtio_feed_key(int code, int value) {
     /* Track modifier state. */
@@ -160,6 +161,10 @@ static void virtio_feed_key(int code, int value) {
         case 42: /* KEY_LEFTSHIFT */
         case 54: /* KEY_RIGHTSHIFT */
             vshift = (value != 0) ? 1 : 0;
+            return;
+        case 29:  /* KEY_LEFTCTRL */
+        case 97:  /* KEY_RIGHTCTRL */
+            vctrl = (value != 0) ? 1 : 0;
             return;
         case 58: /* KEY_CAPSLOCK */
             if (value == 1) vcaps = !vcaps;
@@ -235,6 +240,10 @@ static void virtio_feed_key(int code, int value) {
         out = (uint16_t)(out - 'a' + 'A');
     }
 
+    if (vctrl && out >= 'a' && out <= 'z') {
+        out = (uint16_t)(out - 'a' + 1);
+    }
+
     if (out) buffer_put(out);
 }
 
@@ -244,6 +253,7 @@ void keyboard_init(void) {
     buf_head = buf_tail = 0;
     vshift = 0;
     vcaps = 0;
+    vctrl = 0;
 }
 
 void keyboard_poll(void) {

@@ -448,7 +448,8 @@ static int builtin_wait(int argc, char **argv) {
     return status;
 }
 
-/* kill [-SIGNAL | -s SIGNAL] {pid | %job}... ; SIGNAL is a name or number. */
+/* kill [-SIGNAL | -s SIGNAL] {pid | %job}... ; SIGNAL is a name or number,
+   0 only checks that the process exists. */
 static int builtin_kill(int argc, char **argv) {
     static const char kill_usage[] = "usage: kill [-SIGNAL | -s SIGNAL] {pid | %job}...";
     int sig = SIGTERM;
@@ -464,7 +465,7 @@ static int builtin_kill(int argc, char **argv) {
         sig = signal_number(argv[first] + 1);
         first++;
     }
-    if (sig == 0) {
+    if (sig < 0) {
         out_error("kill", 0, "unknown signal");
         return STATUS_USAGE;
     }
