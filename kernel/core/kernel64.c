@@ -30,6 +30,7 @@
 #include "tty.h"
 #include "video/fb_console.h"
 #include "fs/ramfs.h"
+#include "net/net.h"
 
 extern uint8_t stack_top64;
 
@@ -532,6 +533,7 @@ void kmain64(uint64_t magic, uint64_t multiboot_info_addr) {
   pci_dump_devices();
   block_init();
   block_cache_init();
+  net_init();
   initrd_setup((uintptr_t)multiboot_info_addr);
   vfs_init();
   serial_write("[VFS] root: ");

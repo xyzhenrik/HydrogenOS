@@ -45,6 +45,8 @@
 #define SYS_FB_CLEAR 42
 #define SYS_SYSINFO 43
 #define SYS_SET_LAYOUT 44
+#define SYS_NET_INFO 50
+#define SYS_NET_PING 51
 
 #define PRIO_IDLE   0
 #define PRIO_NORMAL 1
@@ -298,4 +300,33 @@ static inline long sys_sysinfo(sysinfo_t *out) {
 
 static inline long sys_set_layout(int layout) {
     return syscall1(SYS_SET_LAYOUT, layout);
+}
+
+#define NET_INFO_PRESENT (1u << 0)
+#define NET_INFO_LINK_UP (1u << 1)
+#define NET_PING_TIMEOUT_MAX_MS 60000
+
+/* IPv4 addresses have the first octet in the most significant byte. */
+#define NET_IPV4_ADDR(a, b, c, d) \
+    (((unsigned int)(a) << 24) | ((unsigned int)(b) << 16) | \
+     ((unsigned int)(c) << 8) | (unsigned int)(d))
+
+typedef struct net_info_t {
+    unsigned char mac[6];
+    unsigned short flags;
+    unsigned int ipv4;
+    unsigned int netmask;
+    unsigned int gateway;
+    unsigned int rx_frames;
+    unsigned int tx_frames;
+    unsigned int rx_dropped;
+} net_info_t;
+
+static inline long sys_net_info(net_info_t *out) {
+    return syscall1(SYS_NET_INFO, (long)out);
+}
+
+/* Round-trip time in ms, or -errno (e.g. -110 ETIMEDOUT, -19 ENODEV). */
+static inline long sys_net_ping(unsigned int ipv4, long timeout_ms) {
+    return syscall2(SYS_NET_PING, (long)ipv4, timeout_ms);
 }

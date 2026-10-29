@@ -857,6 +857,8 @@ void process_init(uint64_t *kernel_pml4) {
     kernel_proc.waiting_is_stdio = 0;
     kernel_proc.waiting_pipe = 0;
     process_clear_poll_wait(&kernel_proc);
+    kernel_proc.kernel_wait_fn = 0;
+    kernel_proc.kernel_wait_arg = 0;
     process_handles_reset(&kernel_proc);
     kernel_proc.next = 0;
     for (int i = 0; i < PROCESS_EXIT_SLOTS; ++i) {
@@ -893,6 +895,8 @@ process_t *process_create(uint64_t *pml4, uint32_t parent_pid) {
     p->waiting_pipe = 0;
     p->brk = 0x0000000090000000ULL; /* Start of user heap */
     process_clear_poll_wait(p);
+    p->kernel_wait_fn = 0;
+    p->kernel_wait_arg = 0;
     process_handles_reset(p);
     if (!process_list) {
         process_list = p;
@@ -1641,6 +1645,35 @@ void process_begin_sleep(process_t *p, uint32_t ms) {
     p->state = PROCESS_SLEEPING;
 }
 
+int process_begin_kernel_wait(process_t *p, process_kernel_wait_fn fn,
+                              uintptr_t arg) {
+    if (!p || p == &kernel_proc || !fn)
+        return -1;
+    p->kernel_wait_fn = fn;
+    p->kernel_wait_arg = arg;
+    p->state = PROCESS_BLOCKED_KERNEL;
+    return 0;
+}
+
+static void process_update_kernel_waits(void) {
+    process_t *it;
+    uint64_t result = 0;
+
+    if (!process_list) return;
+
+    it = process_list;
+    do {
+        if (it->alive && it->state == PROCESS_BLOCKED_KERNEL &&
+            it->kernel_wait_fn(it->kernel_wait_arg, &result)) {
+            it->kernel_wait_fn = 0;
+            it->kernel_wait_arg = 0;
+            it->frame.rax = result;
+            it->state = PROCESS_RUNNABLE;
+        }
+        it = it->next;
+    } while (it && it != process_list);
+}
+
 void process_wake_sleepers(void) {
     uint32_t now;
     process_t *it;
@@ -1704,6 +1737,7 @@ regs_t *process_schedule(regs_t *r) {
 
     process_wake_sleepers();
     process_update_poll_timeouts();
+    process_update_kernel_waits();
 
     /*
      * Find the highest-priority runnable candidate.

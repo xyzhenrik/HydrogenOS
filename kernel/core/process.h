@@ -28,6 +28,7 @@ typedef enum process_state {
     PROCESS_BLOCKED_PIPE_WRITE = 3,
     PROCESS_BLOCKED_POLL = 4,
     PROCESS_SLEEPING = 5,
+    PROCESS_BLOCKED_KERNEL = 6,
 } process_state_t;
 
 typedef enum process_priority {
@@ -90,6 +91,12 @@ typedef struct process_poll_fd {
     uint32_t revents;
 } process_poll_fd_t;
 
+/* Polled by the scheduler on every tick while a process is in
+ * PROCESS_BLOCKED_KERNEL. Returns 1 and stores the syscall result once the
+ * wait is over. Runs under an arbitrary address space, so it must not touch
+ * user memory. */
+typedef int (*process_kernel_wait_fn)(uintptr_t arg, uint64_t *out_result);
+
 typedef struct process {
     uint64_t *pml4;
     uint32_t pid;
@@ -118,6 +125,8 @@ typedef struct process {
     uint32_t waiting_poll_count;
     uint64_t waiting_poll_deadline_ms;
     uint8_t waiting_poll_has_deadline;
+    process_kernel_wait_fn kernel_wait_fn;
+    uintptr_t kernel_wait_arg;
     uintptr_t brk;
     struct process *next;
 } process_t;
@@ -179,5 +188,7 @@ int process_stdio_close(process_t *p, int stdio_fd);
 int process_has_runnable_other_than(process_t *p);
 void process_set_priority(process_t *p, uint8_t prio);
 void process_begin_sleep(process_t *p, uint32_t ms);
+int process_begin_kernel_wait(process_t *p, process_kernel_wait_fn fn,
+                              uintptr_t arg);
 void process_wake_sleepers(void);
 regs_t *process_schedule(regs_t *r);

@@ -82,10 +82,20 @@ Beispiel: `-2` entspricht `ENOENT`.
 | 21 | sys_poll | `int fd, uint32_t events` | Sofortige Readiness-Abfrage fuer einen Handle |
 | 22 | sys_poll_wait | `int fd, uint32_t events, int64_t timeout_ms` | Blockierend auf Handle-Readiness warten |
 | 23 | sys_poll_many | `struct poll_fd* fds, uint32_t count, int64_t timeout_ms` | Mehrere FDs gleichzeitig pollen/warten |
+| 50 | sys_net_info | `struct net_info* out` | MAC, IPv4-Konfiguration, Link-Status und Frame-Zaehler der Netzwerkschnittstelle |
+| 51 | sys_net_ping | `uint32_t ipv4, int64_t timeout_ms` | ICMP-Echo senden und blockierend auf die Antwort warten; liefert RTT in ms |
 
 > Weitere Syscalls werden fortlaufend ergaenzt. Neue Syscalls erhalten **neue Nummern**; bestehende Nummern werden nie umgebogen.
 > Aktuell implementiert: `sys_exit`, `sys_write`, `sys_read`, `sys_open`, `sys_close`, `sys_lseek`, `sys_spawn`, `sys_spawn_with_stdio`, `sys_wait`, `sys_getpid`, `sys_yield`, `sys_sleep`, `sys_time_ms`, `sys_tty_set_color`, `sys_pipe`, `sys_handle_set_inherit`, `sys_dup`, `sys_dup2`, `sys_dup3`, `sys_poll`, `sys_poll_wait`, `sys_poll_many` (und ein undokumentiertes `sys_putchar` fuer Debug-Ausgaben).
 > Der aktuelle Kernel behandelt `sys_wait` als blockierendes Warten auf einen direkten Child-Prozess; unbekannte oder fremde PIDs liefern `-ENOENT`.
+
+## Netzwerk (sys_net_info / sys_net_ping)
+- IPv4-Adressen werden als `uint32_t` mit dem ersten Oktett im hoechstwertigen Byte uebergeben (`10.0.2.15` = `0x0A00020F`).
+- `struct net_info` (32 Byte): `uint8_t mac[6]`, `uint16_t flags` (`NET_INFO_PRESENT = 1`, `NET_INFO_LINK_UP = 2`), `uint32_t ipv4`, `netmask`, `gateway`, `rx_frames`, `tx_frames`, `rx_dropped`.
+- `sys_net_info` liefert `-EFAULT` fuer ungueltige Zeiger und `-ENODEV` ohne Netzwerkgeraet.
+- `sys_net_ping` erwartet `1 <= timeout_ms <= 60000` (sonst `-EINVAL`). Broadcast-, Netz-, Multicast- und `0.0.0.0`-Ziele liefern `-EINVAL`, Loopback `-ENETUNREACH`, fehlendes Geraet `-ENODEV`, Link down `-ENETDOWN`, keine freien Ping-Slots `-EBUSY`. Ohne Antwort (inkl. unbeantwortetem ARP) innerhalb des Timeouts kommt `-ETIMEDOUT`. Die eigene Adresse antwortet sofort mit RTT 0.
+- Der Aufrufer blockiert wie bei `sys_poll_wait`; der Scheduler pollt die NIC waehrenddessen. Die RTT-Aufloesung entspricht dem Timer-Tick (10 ms).
+- Statische Konfiguration passend zu QEMU User-Networking: `10.0.2.15/24`, Gateway `10.0.2.2`.
 
 ## Error Codes (Subset)
 Diese errno-Werte sind als Startmenge vorgesehen:
@@ -102,6 +112,10 @@ Diese errno-Werte sind als Startmenge vorgesehen:
 - `ESPIPE (29)`
 - `EPIPE (32)`
 - `ENOSYS (38)`
+- `ENODEV (19)`
+- `ENETDOWN (100)`
+- `ENETUNREACH (101)`
+- `ETIMEDOUT (110)`
 
 ## Future Extensions
 - `sys_fork` / `sys_execve` (falls POSIX-Nahe gewuenscht)

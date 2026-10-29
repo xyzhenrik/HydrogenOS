@@ -42,6 +42,7 @@ if [ "$ARCH" = "x86_64" ] && [ "$BOOT_MODE" = "kernel" ]; then
     -kernel "$ROOT_DIR/build/$ARCH/kernel32.elf" \
     -initrd "$ROOT_DIR/build/$ARCH/initrd.cpio" \
     -drive if=virtio,format=raw,file="$ROOT_DIR/build/$ARCH/disk.img" \
+    -netdev user,id=n0 -device virtio-net-pci,netdev=n0 \
     -m 256M \
     -serial stdio \
     -display none \
@@ -51,6 +52,7 @@ elif [ "$ARCH" = "x86_64" ]; then
   qemu-system-x86_64 \
     -cdrom "$ROOT_DIR/build/$ARCH/hydrogen.iso" \
     -drive if=virtio,format=raw,file="$ROOT_DIR/build/$ARCH/disk.img" \
+    -netdev user,id=n0 -device virtio-net-pci,netdev=n0 \
     -m 256M \
     -serial stdio \
     -display none \
@@ -100,6 +102,7 @@ if [ "$FOUND" -eq 1 ]; then
   grep -q "DESKTOPTEST PASS" "$LOG_FILE" || MISSING="$MISSING DESKTOPTEST_PASS"
   grep -q "LOGIN PASS" "$LOG_FILE" || MISSING="$MISSING LOGIN_PASS"
   grep -q "PKG PASS" "$LOG_FILE" || MISSING="$MISSING PKG_PASS"
+  grep -q "NET PASS" "$LOG_FILE" || MISSING="$MISSING NET_PASS"
   if [ "$REQUIRE_DESKTOP" = "1" ]; then
     grep -qE "compositor: ready|COMP READY" "$LOG_FILE" || MISSING="$MISSING COMPOSITOR_READY"
     grep -q "FRAME CHECKSUM:" "$LOG_FILE" || MISSING="$MISSING FRAME_CHECKSUM"
