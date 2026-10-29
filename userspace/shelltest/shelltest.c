@@ -90,6 +90,15 @@ static const ShellCase cases[] = {
      "wait %1; echo $?\n"
      "kill 99999 2>&1; echo $?\n",
      "143\n137\nkill: 99999: no such process\n1\n", 0},
+    {"exec",
+     "echo via exec | exec /echo\n"
+     "exec /missing_program 2>&1; echo $?\n"
+     "echo before\n"
+     "exec /echo\n"
+     "echo never\n",
+     "echo: type a line and press Enter\nvia exec\n"
+     "exec: /missing_program: command not found\n127\n"
+     "before\necho: type a line and press Enter\n", 0},
     {"exit",
      "echo before; exit 3; echo after\n"
      "echo never\n",

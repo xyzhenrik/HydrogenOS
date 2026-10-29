@@ -36,7 +36,7 @@ Beispiel: `-2` entspricht `ENOENT`.
 - Normale Handle-Slots sind standardmaessig close-on-spawn; beim `sys_spawn` werden nur explizit markierte Handles mit denselben Integer-Slots ans Child weitergereicht.
 - Normales `sys_spawn` vererbt konfiguriertes stdio des Parent-Prozesses; `sys_spawn_with_stdio` kann Child-`stdin/stdout/stderr` explizit aus Parent-FDs binden.
 - `sys_dup` klont einen vorhandenen FD auf den naechsten freien nicht-stdio Handle-Slot; `sys_dup2` klont explizit auf einen Ziel-FD einschliesslich `0/1/2`. Das gilt jetzt auch fuer das implizite stdio-Console-Fallback.
-- `sys_dup3` klont wie `sys_dup2`, versteht aber zusaetzliche Spawn-Flags fuer den Ziel-FD: `DUP3_INHERIT` markiert das Duplikat sofort als vererbbar, `DUP3_CLOSE_ON_SPAWN` markiert es explizit als close-on-spawn.
+- `sys_dup3` klont wie `sys_dup2`, versteht aber zusaetzliche Spawn-Flags fuer den Ziel-FD: `DUP3_INHERIT` markiert das Duplikat sofort als vererbbar, `DUP3_CLOSE_ON_SPAWN` markiert es explizit als close-on-spawn, `DUP3_CLOEXEC` (kombinierbar) markiert es als close-on-exec (siehe `sys_execve`). `dst_fd = -1` waehlt wie `sys_dup` den niedrigsten freien nicht-stdio Slot (`-EMFILE` wenn keiner frei ist); die Userspace-Funktion `dup_cloexec(fd)` nutzt das. Kopien aus `dup`/`dup2`/`dup3`/Vererbung tragen nie close-on-exec, ausser `dup3` setzt es ausdruecklich.
 - `sys_lseek` arbeitet aktuell fuer Dateihandles (`SEEK_SET`, `SEEK_CUR`, `SEEK_END`) auf dem gemeinsamen File-Offset; nicht seekbare Handles wie Pipes oder Console-Fallback liefern `-ESPIPE`.
 - `sys_poll` liefert eine sofortige Readiness-Maske fuer Handles: `POLL_READ`, `POLL_WRITE`, `POLL_HUP`. Fuer Pipes bedeutet das "wuerde ein Read/Write jetzt blockieren?".
 - `sys_poll_wait` erweitert dieselben Events um blockierendes Warten mit Millisekunden-Timeout; `timeout_ms = 0` ist ein reiner Snapshot wie `sys_poll`, `timeout_ms = -1` wartet unbegrenzt.
@@ -105,6 +105,7 @@ Beispiel: `-2` entspricht `ENOENT`.
 | 63 | sys_link | `const char* old_path, const char* new_path` | Hartlink auf eine Nicht-Verzeichnis-Datei (auch auf einen Symlink selbst) anlegen und `i_links_count` erhoehen; `-EEXIST`, `-ENOENT`, `-EISDIR` (Verzeichnis), `-EMLINK`, `-EXDEV` (anderes Dateisystem), `-EOPNOTSUPP` (kein ext2), `-EROFS` |
 | 64 | sys_symlink | `const char* target, const char* link_path` | Symlink anlegen. `target` wird unveraendert gespeichert (kein cwd-Bezug, hoechstens 255 Bytes) und erst beim Folgen interpretiert; Ziele bis 60 Bytes stehen in `i_block` (fast symlink), laengere in einem Datenblock. Fehler wie `sys_link`, zusaetzlich `-ENOENT` bei leerem Ziel |
 | 65 | sys_readlink | `const char* path, char* buf, size_t cap` | Kopiert das Ziel (ohne NUL, auf `cap` gekuerzt) nach `buf` und liefert die Anzahl kopierter Bytes; `-EINVAL` wenn `path` kein Symlink ist, `-ENOENT`, `-EFAULT` |
+| 73 | sys_execve | `const char* path, const char* const* argv, const char* const* envp` | Prozessabbild durch ein ELF aus dem VFS ersetzen; kehrt nur bei Fehler zurueck (siehe unten) |
 
 > Weitere Syscalls werden fortlaufend ergaenzt. Neue Syscalls erhalten **neue Nummern**; bestehende Nummern werden nie umgebogen.
 > Aktuell implementiert: `sys_exit`, `sys_write`, `sys_read`, `sys_open`, `sys_close`, `sys_lseek`, `sys_spawn`, `sys_spawn_with_stdio`, `sys_wait`, `sys_getpid`, `sys_yield`, `sys_sleep`, `sys_time_ms`, `sys_tty_set_color`, `sys_pipe`, `sys_handle_set_inherit`, `sys_dup`, `sys_dup2`, `sys_dup3`, `sys_poll`, `sys_poll_wait`, `sys_poll_many`, `sys_kill`, `sys_sigaction`, `sys_sigreturn` (und ein undokumentiertes `sys_putchar` fuer Debug-Ausgaben).
@@ -149,6 +150,14 @@ Beispiel: `-2` entspricht `ENOENT`.
 - Der Kernel kopiert alle Strings und legt sie oben auf den initialen User-Stack des Childs. Beim Eintritt gilt `RDI = argc`, `RSI = argv`, `RDX = envp` (SysV-kompatibel, `crt0` reicht sie unveraendert an `main(int argc, char **argv, char **envp)` weiter). Prozesse ohne argv starten mit `argc = 0`, `argv = envp = NULL`.
 - Grenzen: hoechstens 64 Eintraege (argv + envp zusammen) und 3072 Bytes Stringdaten inklusive Terminatoren, sonst `-E2BIG (7)`. Ungueltige Pointer liefern `-EFAULT`, nicht ladbare Programme `-ENOENT`, unzulaessige stdio-Bindings `-EBADF`.
 
+### sys_execve
+- Ersetzt das Abbild des aufrufenden Prozesses durch das ELF unter `path` (relative Pfade und Symlinks wie bei `sys_spawn`). `argv`/`envp` duerfen `NULL` sein und gelten wie bei `sys_spawn_args` (hoechstens 64 Eintraege und 3072 Bytes Stringdaten, sonst `-E2BIG`); beim Eintritt gilt `RDI = argc`, `RSI = argv`, `RDX = envp`.
+- Alles wird vor dem Umbau in den Kernel kopiert, das neue Abbild entsteht in einem frischen Adressraum. Erst wenn es vollstaendig geladen ist, werden der alte Adressraum (ELF-Segmente, mmap-Regionen, Stack) freigegeben. Bei jedem Fehler laeuft der Prozess unveraendert weiter und `sys_execve` liefert `-errno`: `-ENOENT` (Datei fehlt oder ist keine regulaere Datei), `-ENOEXEC (8)` (kein ladbares ELF, auch abgeschnittene Dateien), `-E2BIG`, `-EFAULT`, `-ENOMEM`.
+- Erhalten bleiben PID, Parent, Working Directory, Prioritaet, die Blocked-Maske, anstehende Signale und alle Handles einschliesslich der stdio-Bindungen und ihrer Offsets. Handles, die mit `DUP3_CLOEXEC` angelegt wurden, werden geschlossen (auch fuer `0/1/2`; ein geschlossener stdio-Slot faellt auf die Console zurueck). Ob ein Handle spawn-vererbbar ist, spielt fuer `sys_execve` keine Rolle.
+- Signal-Handler werden auf `SIG_DFL` zurueckgesetzt; mit `SIG_IGN` ignorierte Signale bleiben ignoriert. Der Prozess behaelt seinen Namen nicht, er heisst danach wie die neue Datei.
+- Userspace: `execve(path, argv, envp)` und `execv(path, argv)` (mit `environ`) in `mini_libc`; die Shell hat das Builtin `exec command [argument]...`, das die Shell selbst ersetzt und die aktuellen Redirections behaelt.
+- Der Kernel sichert beim Syscall-Eintritt keine SSE-Register; Userspace-Code darf daher keine Werte ueber einen Syscall hinweg in `xmm`-Registern halten (siehe Hinweis in `userspace/exectest/exectest.c`).
+
 ### sys_try_wait
 - Liefert die PID und schreibt den Exit-Status nach `*status` (optional), wenn der Child-Prozess bereits beendet war, und raeumt ihn dabei wie `sys_wait` ab.
 - Liefert `0`, solange der Child-Prozess noch laeuft; unbekannte oder fremde PIDs liefern `-ENOENT`.
@@ -172,6 +181,7 @@ Diese errno-Werte sind als Startmenge vorgesehen:
 - `EINTR (4)`
 - `EIO (5)`
 - `E2BIG (7)`
+- `ENOEXEC (8)`
 - `EBADF (9)`
 - `ENOMEM (12)`
 - `EACCES (13)`
@@ -191,7 +201,7 @@ Diese errno-Werte sind als Startmenge vorgesehen:
 - `ETIMEDOUT (110)`
 
 ## Future Extensions
-- `sys_fork` / `sys_execve` (falls POSIX-Nahe gewuenscht)
+- `sys_fork` (falls POSIX-Nahe gewuenscht)
 - `sys_pipe`, `sys_shm_create`, `sys_shm_map`
 - `sys_epoll`/`sys_poll`
 - `sys_socket` (wenn Netzwerktrack startet)

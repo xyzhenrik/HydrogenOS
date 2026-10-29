@@ -30,10 +30,17 @@ int elf64_load_image(const void *image, size_t size) {
     if (elf64_validate(image, size) != 0)
         return -1;
     const elf64_ehdr_t *eh = (const elf64_ehdr_t *)image;
+    if (eh->e_phoff > size ||
+        (uint64_t)eh->e_phnum * sizeof(elf64_phdr_t) > size - eh->e_phoff)
+        return -1;
     const elf64_phdr_t *ph = (const elf64_phdr_t *)((const uint8_t *)image + eh->e_phoff);
     for (uint16_t i = 0; i < eh->e_phnum; ++i) {
         if (ph[i].p_type != ELF64_PT_LOAD)
             continue;
+        /* The file bytes of a segment must exist; they are copied unchecked. */
+        if (ph[i].p_offset > size || ph[i].p_filesz > size - ph[i].p_offset ||
+            ph[i].p_filesz > ph[i].p_memsz)
+            return -1;
         uintptr_t vaddr = (uintptr_t)ph[i].p_vaddr;
         uintptr_t seg_base = vaddr & ~0xFFFULL;
         uintptr_t seg_off = vaddr - seg_base;

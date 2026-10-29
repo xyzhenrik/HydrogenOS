@@ -13,3 +13,7 @@ int exec_exit_requested(void);
 
 /* Interactive shells announce background jobs and finished jobs. */
 void exec_set_interactive(int interactive);
+
+/* Replaces the shell with argv[0], looked up along $PATH, keeping the current
+ * standard streams. Returns only on failure, with the exit status to report. */
+int exec_replace(char **argv);

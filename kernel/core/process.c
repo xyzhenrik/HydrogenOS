@@ -280,7 +280,8 @@ static void process_entry_apply_dup_defaults(process_handle_entry_t *entry,
 }
 
 static int process_dup_flags_valid(uint32_t flags) {
-    uint32_t known = PROCESS_DUP3_INHERIT | PROCESS_DUP3_CLOSE_ON_SPAWN;
+    uint32_t known = PROCESS_DUP3_INHERIT | PROCESS_DUP3_CLOSE_ON_SPAWN |
+                     PROCESS_DUP3_CLOEXEC;
     if ((flags & ~known) != 0)
         return 0;
     if ((flags & PROCESS_DUP3_INHERIT) != 0 &&
@@ -297,6 +298,8 @@ static void process_entry_apply_dup3_flags(process_handle_entry_t *entry,
     } else if ((flags & PROCESS_DUP3_CLOSE_ON_SPAWN) != 0) {
         process_entry_set_inherit(entry, 0);
     }
+    if ((flags & PROCESS_DUP3_CLOEXEC) != 0)
+        entry->flags |= PROCESS_HANDLE_FLAG_CLOEXEC;
 }
 
 static uint32_t process_str_len(const char *s) {
@@ -538,7 +541,8 @@ static int process_handle_clone(process_handle_entry_t *dst,
     process_handle_reset(dst);
     dst->used = 1;
     dst->type = src->type;
-    dst->flags = src->flags;
+    /* Close-on-exec is a property of one slot, never of its clones. */
+    dst->flags = src->flags & (uint16_t)~PROCESS_HANDLE_FLAG_CLOEXEC;
     switch ((process_handle_type_t)src->type) {
     case PROCESS_HANDLE_FILE:
         dst->resource.file = src->resource.file;
@@ -1208,6 +1212,32 @@ void process_mark_exited(process_t *p, int status) {
     signal_send(process_find_by_pid(p->parent_pid), SIGCHLD);
 }
 
+static void process_handles_close_on_exec(process_t *p) {
+    for (int i = 0; i < PROCESS_MAX_HANDLE; ++i) {
+        if ((p->handles[i].flags & PROCESS_HANDLE_FLAG_CLOEXEC) != 0)
+            process_handle_release(&p->handles[i]);
+    }
+    for (int i = 0; i < 3; ++i) {
+        if ((p->stdio[i].flags & PROCESS_HANDLE_FLAG_CLOEXEC) != 0)
+            process_handle_release(&p->stdio[i]);
+    }
+}
+
+void process_exec_commit(process_t *p, uint64_t *new_pml4, const char *path) {
+    uint64_t *old_pml4 = p->pml4;
+    VmmUserSpace old_vm = p->vm;
+
+    p->pml4 = new_pml4;
+    vmm_user_init(&p->vm);
+    paging_switch(new_pml4);
+    vmm_user_release(&old_vm, old_pml4);
+    paging_destroy_user_pml4(old_pml4);
+
+    process_handles_close_on_exec(p);
+    signal_reset_for_exec(&p->signals);
+    process_set_name(p, path);
+}
+
 int process_inherit_handles(process_t *dst, const process_t *src) {
     if (!dst || !src || dst == &kernel_proc)
         return -1;
@@ -1459,20 +1489,28 @@ int process_begin_socket_recv_wait(process_t *p, int fd) {
     return 0;
 }
 
+/* Lowest unused non-stdio fd, or -1 when the handle table is full. */
+static int process_free_fd(process_t *p) {
+    for (int handle = 0; handle < PROCESS_MAX_HANDLE; ++handle) {
+        const process_handle_entry_t *entry = process_handle_get_slot(p, handle);
+        if (entry && !entry->used)
+            return handle + 3;
+    }
+    return -1;
+}
+
 int process_dup_fd(process_t *p, int src_fd) {
     const process_handle_entry_t *src_entry = process_fd_get_const(p, src_fd);
     if (!src_entry)
         return -1;
-    for (int handle = 0; handle < PROCESS_MAX_HANDLE; ++handle) {
-        process_handle_entry_t *dst_entry = process_handle_get_slot(p, handle);
-        if (!dst_entry || dst_entry->used)
-            continue;
-        if (process_handle_clone(dst_entry, src_entry) != 0)
-            return -1;
-        process_entry_apply_dup_defaults(dst_entry, handle + 3);
-        return handle + 3;
-    }
-    return -2;
+    int dst_fd = process_free_fd(p);
+    if (dst_fd < 0)
+        return -2;
+    process_handle_entry_t *dst_entry = process_fd_get_slot(p, dst_fd);
+    if (!dst_entry || process_handle_clone(dst_entry, src_entry) != 0)
+        return -1;
+    process_entry_apply_dup_defaults(dst_entry, dst_fd);
+    return dst_fd;
 }
 
 int process_dup2_fd(process_t *p, int src_fd, int dst_fd) {
@@ -1502,7 +1540,14 @@ int process_dup3_fd(process_t *p, int src_fd, int dst_fd, uint32_t flags) {
     process_handle_entry_t *dst_entry = 0;
     if (!process_dup_flags_valid(flags))
         return -2;
-    if (!process_fd_valid(src_fd) || !process_fd_valid(dst_fd))
+    if (!process_fd_valid(src_fd))
+        return -1;
+    if (dst_fd == PROCESS_DUP3_ANY_SLOT) {
+        dst_fd = process_free_fd(p);
+        if (dst_fd < 0)
+            return -3;
+    }
+    if (!process_fd_valid(dst_fd))
         return -1;
     if (src_fd == dst_fd)
         return -2;

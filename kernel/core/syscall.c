@@ -579,6 +579,29 @@ uint64_t syscall_handle(regs_t *r) {
             return (uint64_t)-ENOENT;
         return pid;
     }
+    case SYS_EXECVE: {
+        const char *path = (const char *)(uintptr_t)r->rdi;
+        const char *const *argv = (const char *const *)(uintptr_t)r->rsi;
+        const char *const *envp = (const char *const *)(uintptr_t)r->rdx;
+        process_t *proc = process_current();
+        if (!proc || proc == process_kernel())
+            return (uint64_t)-EPERM;
+        if (!path)
+            return (uint64_t)-EFAULT;
+        char kpath[PROCESS_CWD_CAP];
+        int path_rc = copy_followed_user_path(proc, path, kpath, sizeof(kpath), 1);
+        if (path_rc != 0)
+            return (uint64_t)(int64_t)path_rc;
+        /* Everything is copied before the old image is touched. */
+        spawn_args_t *args = (spawn_args_t *)kalloc(sizeof(spawn_args_t));
+        if (!args)
+            return (uint64_t)-ENOMEM;
+        int rc = copy_user_spawn_args(argv, envp, args);
+        if (rc == 0)
+            rc = user_exec_from_vfs(proc, kpath, args, r);
+        kfree(args);
+        return (uint64_t)(int64_t)rc;
+    }
     case SYS_TRY_WAIT: {
         uint32_t pid = (uint32_t)r->rdi;
         int *status_ptr = (int *)(uintptr_t)r->rsi;
@@ -700,6 +723,8 @@ uint64_t syscall_handle(regs_t *r) {
             return (uint64_t)-EBADF;
         if (rc == -2)
             return (uint64_t)-EINVAL;
+        if (rc == -3)
+            return (uint64_t)-EMFILE;
         return (uint64_t)rc;
     }
     case SYS_SET_PRIORITY: {

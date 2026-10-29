@@ -218,7 +218,7 @@ static int run_in_shell(BuiltinFn fn, PreparedCommand *cmd) {
         /* Save all three first: a target such as 2>&1 refers to the fd as
          * it was before any slot was replaced. */
         for (int i = 0; i < 3; ++i) {
-            long fd = dup(i);
+            long fd = dup_cloexec(i);
             if (fd < 0) {
                 out_error("shell", 0, "cannot save standard streams");
                 restore_stdio(&plan, saved);
@@ -298,6 +298,22 @@ static int resolve_external(const char *name) {
             dirs++;
     }
     return -1;
+}
+
+int exec_replace(char **argv) {
+    if (resolve_external(argv[0]) != 0) {
+        out_error("exec", argv[0], "command not found");
+        return STATUS_NOT_FOUND;
+    }
+    if (env_build_envp(envp_storage, sizeof(envp_storage), envp_vector,
+                       sizeof(envp_vector) / sizeof(envp_vector[0])) != 0) {
+        out_error("exec", argv[0], "environment too large");
+        return STATUS_FAILURE;
+    }
+    out_flush();
+    execve(resolved_path, (const char *const *)argv, envp_vector);
+    out_error("exec", argv[0], "cannot execute");
+    return STATUS_CANNOT_EXECUTE;
 }
 
 /* Appends text to subshell_command in single quotes, so that a child
