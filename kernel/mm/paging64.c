@@ -167,6 +167,39 @@ void paging_destroy_user_pml4(uint64_t *pml4_root) {
     pmm_free_page((uintptr_t)pml4_root);
 }
 
+/* Counts the 4 KiB user frames that paging_destroy_user_pml4 would release,
+   i.e. the physical memory owned by this address space (tables excluded). */
+size_t paging_count_user_pages(const uint64_t *pml4_root) {
+    if (!pml4_root || pml4_root == kernel_pml4_tbl)
+        return 0;
+    size_t count = 0;
+    for (int i = 0; i < 256; ++i) {
+        if (!(pml4_root[i] & PAGE_PRESENT) || !(pml4_root[i] & PAGE_USER))
+            continue;
+        const uint64_t *pdpt_tbl =
+            (const uint64_t *)(uintptr_t)(pml4_root[i] & ~0xFFFULL);
+        for (int j = 0; j < 512; ++j) {
+            if (!(pdpt_tbl[j] & PAGE_PRESENT) || !(pdpt_tbl[j] & PAGE_USER) ||
+                (pdpt_tbl[j] & PAGE_PS))
+                continue;
+            const uint64_t *pd_tbl =
+                (const uint64_t *)(uintptr_t)(pdpt_tbl[j] & ~0xFFFULL);
+            for (int k = 0; k < 512; ++k) {
+                if (!(pd_tbl[k] & PAGE_PRESENT) || !(pd_tbl[k] & PAGE_USER) ||
+                    (pd_tbl[k] & PAGE_PS))
+                    continue;
+                const uint64_t *pt_tbl =
+                    (const uint64_t *)(uintptr_t)(pd_tbl[k] & ~0xFFFULL);
+                for (int l = 0; l < 512; ++l) {
+                    if ((pt_tbl[l] & PAGE_PRESENT) && (pt_tbl[l] & PAGE_USER))
+                        ++count;
+                }
+            }
+        }
+    }
+    return count;
+}
+
 void paging_map_region_pml4(uint64_t *pml4_root, uintptr_t phys, uintptr_t virt,
                             size_t size_bytes, uint32_t flags) {
     if (!pml4_root)

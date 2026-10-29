@@ -71,3 +71,22 @@ void kfree(void *ptr) {
   blk->free = 1;
   coalesce();
 }
+
+void kheap_get_stats(kheap_stats_t *out) {
+  if (!out)
+    return;
+  out->total_bytes = 0;
+  out->used_bytes = 0;
+  out->free_bytes = 0;
+  out->largest_free_bytes = 0;
+  for (block_t *cur = heap_head; cur; cur = cur->next) {
+    out->total_bytes += cur->size;
+    if (cur->free) {
+      out->free_bytes += cur->size;
+      if (cur->size > out->largest_free_bytes)
+        out->largest_free_bytes = cur->size;
+    } else {
+      out->used_bytes += cur->size;
+    }
+  }
+}

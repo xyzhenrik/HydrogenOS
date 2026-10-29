@@ -11,6 +11,7 @@ enum {
     PROCESS_POLL_MAX_FDS = PROCESS_MAX_HANDLE + 3,
     PROCESS_HANDLE_PATH_CAP = 128,
     PROCESS_CWD_CAP = 256,
+    PROCESS_NAME_CAP = 32,
     PROCESS_HANDLE_FLAG_INHERIT = 1u << 0,
     PROCESS_HANDLE_FLAG_READ = 1u << 1,
     PROCESS_HANDLE_FLAG_WRITE = 1u << 2,
@@ -94,6 +95,7 @@ typedef struct process {
     uint64_t *pml4;
     uint32_t pid;
     uint32_t parent_pid;
+    char name[PROCESS_NAME_CAP]; /* executable basename, for diagnostics only */
     char cwd[PROCESS_CWD_CAP];  /* current working directory, always absolute, default "/" */
     process_handle_entry_t handles[PROCESS_MAX_HANDLE];
     process_handle_entry_t stdio[3];
@@ -122,9 +124,26 @@ typedef struct process {
     struct process *next;
 } process_t;
 
+/* Read-only snapshot of a process, decoupled from process_t internals so
+   introspection consumers (procfs) never hold pointers into the table. */
+typedef struct process_info {
+    uint32_t pid;
+    uint32_t parent_pid;
+    uint8_t state;      /* process_state_t */
+    uint8_t priority;   /* process_priority_t */
+    uint8_t is_current;
+    uint32_t handle_count;
+    uint32_t user_pages;
+    char name[PROCESS_NAME_CAP];
+    char cwd[PROCESS_CWD_CAP];
+} process_info_t;
+
 void process_init(uint64_t *kernel_pml4);
 process_t *process_create(uint64_t *pml4, uint32_t parent_pid);
 process_t *process_find_by_pid(uint32_t pid);
+void process_set_name(process_t *p, const char *path);
+int process_get_info(uint32_t pid, process_info_t *out);
+int process_next_info(uint32_t after_pid, process_info_t *out);
 void process_destroy(process_t *p);
 process_t *process_current(void);
 process_t *process_kernel(void);

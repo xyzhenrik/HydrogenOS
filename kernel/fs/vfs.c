@@ -1,11 +1,13 @@
 #include "vfs.h"
 #include "ext2.h"
 #include "ramfs.h"
+#include "procfs.h"
 
 typedef enum vfs_fs_type {
     VFS_FS_NONE = 0,
     VFS_FS_EXT2 = 1,
     VFS_FS_RAMFS = 2,
+    VFS_FS_PROCFS = 3,
 } vfs_fs_type_t;
 
 typedef struct vfs_mount {
@@ -95,22 +97,21 @@ static void mounts_clear(void) {
     }
 }
 
+static int mount_root(void) {
+    if (ext2_mount_auto() == 0 && vfs_mount("/", "ext2") == 0)
+        return 0;
+    if (ramfs_init() == 0 && vfs_mount("/", "ramfs") == 0)
+        return 0;
+    return -1;
+}
+
 int vfs_init(void) {
     ready = 0;
     mounts_clear();
-    if (ext2_mount_auto() == 0) {
-        if (vfs_mount("/", "ext2") == 0) {
-            ready = 1;
-            return 0;
-        }
-    }
-    if (ramfs_init() == 0) {
-        if (vfs_mount("/", "ramfs") == 0) {
-            ready = 1;
-            return 0;
-        }
-    }
-    return -1;
+    if (mount_root() != 0)
+        return -1;
+    ready = 1;
+    return vfs_mount("/proc", "procfs");
 }
 
 int vfs_is_ready(void) { return ready; }
@@ -130,6 +131,7 @@ int vfs_mount(const char *path, const char *fs) {
     const char *name = 0;
     if (str_eq(fs, "ext2")) { type = VFS_FS_EXT2; name = "ext2"; }
     else if (str_eq(fs, "ramfs")) { type = VFS_FS_RAMFS; name = "ramfs"; }
+    else if (str_eq(fs, "procfs")) { type = VFS_FS_PROCFS; name = "procfs"; }
     else return -1;
     char norm[16];
     if (path_copy_mount(norm, path, sizeof(norm)) != 0) return -1;
@@ -196,6 +198,7 @@ int vfs_list_dir(const char *path, vfs_dir_cb cb, void *ctx) {
         if (is_root_path(sub)) return ramfs_list_root(cb, ctx);
         return ramfs_list_dir(sub, cb, ctx);
     }
+    if (m->fs == VFS_FS_PROCFS) return procfs_list_dir(sub, cb, ctx);
     return -1;
 }
 
@@ -207,6 +210,7 @@ int vfs_read_file_at(const char *path, uint32_t offset, uint8_t *out,
     if (!m) return -1;
     if (m->fs == VFS_FS_EXT2) return ext2_read_file_at(sub, offset, out, out_sz, out_len);
     if (m->fs == VFS_FS_RAMFS) return ramfs_read_file_at(sub, offset, out, out_sz, out_len);
+    if (m->fs == VFS_FS_PROCFS) return procfs_read_file_at(sub, offset, out, out_sz, out_len);
     return -1;
 }
 
@@ -226,6 +230,7 @@ int vfs_stat(const char *path, vfs_stat_t *out) {
     if (m->fs == VFS_FS_RAMFS) {
         return ramfs_stat(sub, out);
     }
+    if (m->fs == VFS_FS_PROCFS) return procfs_stat(sub, out);
     return -1;
 }
 

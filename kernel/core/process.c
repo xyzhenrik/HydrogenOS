@@ -671,6 +671,87 @@ process_t *process_find_by_pid(uint32_t pid) {
     return 0;
 }
 
+void process_set_name(process_t *p, const char *path) {
+    if (!p || p == &kernel_proc || !path)
+        return;
+    const char *base = path;
+    for (const char *c = path; *c; ++c) {
+        if (*c == '/' && c[1] != '\0')
+            base = c + 1;
+    }
+    uint32_t i = 0;
+    while (base[i] && base[i] != '/' && i < PROCESS_NAME_CAP - 1) {
+        p->name[i] = base[i];
+        ++i;
+    }
+    p->name[i] = '\0';
+}
+
+static uint32_t process_count_handles(const process_t *p) {
+    uint32_t count = 0;
+    for (int i = 0; i < PROCESS_MAX_HANDLE; ++i) {
+        if (p->handles[i].used)
+            ++count;
+    }
+    for (int i = 0; i < 3; ++i) {
+        if (p->stdio[i].used)
+            ++count;
+    }
+    return count;
+}
+
+static void process_fill_info(const process_t *p, process_info_t *out) {
+    out->pid = p->pid;
+    out->parent_pid = p->parent_pid;
+    out->state = p->state;
+    out->priority = p->priority;
+    out->is_current = (p == current_proc);
+    out->handle_count = process_count_handles(p);
+    out->user_pages = (uint32_t)paging_count_user_pages(p->pml4);
+    for (uint32_t i = 0; i < PROCESS_NAME_CAP; ++i) {
+        out->name[i] = p->name[i];
+        if (p->name[i] == '\0')
+            break;
+    }
+    out->name[PROCESS_NAME_CAP - 1] = '\0';
+    for (uint32_t i = 0; i < PROCESS_CWD_CAP; ++i) {
+        out->cwd[i] = p->cwd[i];
+        if (p->cwd[i] == '\0')
+            break;
+    }
+    out->cwd[PROCESS_CWD_CAP - 1] = '\0';
+}
+
+int process_get_info(uint32_t pid, process_info_t *out) {
+    if (!out)
+        return -1;
+    const process_t *p = process_find_by_pid(pid);
+    if (!p)
+        return -1;
+    process_fill_info(p, out);
+    return 0;
+}
+
+/* Yields live processes in ascending pid order regardless of the scheduler's
+   ring order, so a caller can resume iteration from any pid it last saw. */
+int process_next_info(uint32_t after_pid, process_info_t *out) {
+    if (!out || !process_list)
+        return -1;
+    const process_t *best = 0;
+    const process_t *it = process_list;
+    do {
+        if (it->alive && it->pid > after_pid &&
+            (!best || it->pid < best->pid)) {
+            best = it;
+        }
+        it = it->next;
+    } while (it && it != process_list);
+    if (!best)
+        return -1;
+    process_fill_info(best, out);
+    return 0;
+}
+
 static void process_complete_wait(process_t *p) {
     if (!p || !p->wait_ready) return;
 
@@ -881,6 +962,7 @@ process_t *process_create(uint64_t *pml4, uint32_t parent_pid) {
     p->pml4 = pml4;
     p->pid = next_pid++;
     p->parent_pid = parent_pid;
+    p->name[0] = '\0';
     p->cwd[0] = '/';
     p->cwd[1] = '\0';
     p->has_frame = 0;
