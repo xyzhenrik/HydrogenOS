@@ -52,7 +52,6 @@ int net_socket_recvfrom(net_socket_t *socket, uint8_t *buf, size_t cap,
                         net_sockaddr_t *from, uint32_t *out_len);
 
 /* 1 when a datagram is queued. Does not poll the NIC. */
-int net_socket_pending(const net_socket_t *socket);
 
 /* Polls the NIC, then reports whether a datagram is queued. */
 int net_socket_poll_readable(const net_socket_t *socket);

@@ -10,7 +10,8 @@
  *   - pollers watching many pipes all wake on an event on any of them and
  *     leave no registration behind on the pipes they did not wake on
  *   - processes killed while queued (pollers, readers, a parent in wait,
- *     socket receivers) neither stay on a queue nor swallow a wakeup
+ *     socket receivers) neither stay on a queue nor swallow a wakeup, also
+ *     when the kill hits a reader that was already woken but has not run
  *   - blocked socket receivers and pollers wake per datagram
  *   - SYS_WAIT completes when the child exits, whatever the exit order
  * A lost wakeup shows up as a timeout in the coordinator, which never blocks
@@ -445,11 +446,19 @@ static int phase_kill_pollers(void) {
     return 0;
 }
 
-/* A reader that dies at the head of the queue must not eat the wakeup. */
+/*
+ * A reader that dies at the head of the queue must not eat the wakeup.
+ *
+ * The coordinator runs at raised priority while it writes and kills: the
+ * scheduler then keeps running it after the write, so the woken reader is
+ * still queued as runnable, byte unread, when the signal arrives. At equal
+ * priority the reader would run first and the handoff path would go untested.
+ */
 static int phase_kill_readers(void) {
     int data[2];
     int done[2];
     long pids[3];
+    char byte;
 
     if (pipe(data) != 0 || pipe(done) != 0)
         return fail("killread: pipe", 0);
@@ -468,57 +477,38 @@ static int phase_kill_readers(void) {
     int got = read_byte_timeout(done[0]);
     if (got != 1)
         return fail("killread: served after kill", got);
-
-    /*
-     * Killed right after the write that woke it. Depending on whether it ran
-     * first it consumed the byte or must pass the wakeup on to the last
-     * reader; either way the byte is accounted for.
-     */
-    if (write(data[1], "y", 1) != 1)
-        return fail("killread: second write", 0);
-    kill((int)pids[2], SIGKILL);
-    int status = wait_status(pids[2]);
-    if (WIFSIGNALED(status)) {
-        /* It either died before taking the byte or after reporting. */
-        char byte;
-        if (poll_fd(done[0], POLL_READ) != 0 && read_byte_timeout(done[0]) != 2)
-            return fail("killread: report after kill", 0);
-        if (poll_fd(data[0], POLL_READ) != 0 && read(data[0], &byte, 1) != 1)
-            return fail("killread: drain", 0);
-    } else {
-        got = read_byte_timeout(done[0]);
-        if (status != 0 || got != 2)
-            return fail("killread: woken reader", got);
-    }
     if (wait_status(pids[1]) != 0)
         return fail("killread: status", 0);
 
-    /* The handoff case: a reader killed between its wake and its read. */
+    /* Woken, then killed before it ran, with nobody left to pass the wakeup
+     * to: the byte must stay in the pipe. */
+    sys_set_priority(PRIO_HIGH);
+    int wrote = write(data[1], "y", 1);
+    int killed = kill((int)pids[2], SIGKILL);
+    sys_set_priority(PRIO_NORMAL);
+    if (wrote != 1 || killed != 0 || !killed_by_sigkill(pids[2]))
+        return fail("killread: kill woken reader", killed);
+    if (poll_fd(done[0], POLL_READ) != 0)
+        return fail("killread: dead reader reported", 0);
+    if (read(data[0], &byte, 1) != 1 || byte != 'y')
+        return fail("killread: byte lost", 0);
+
+    /* The handoff: the woken head dies unread, the next reader takes over. */
     long reader_a = spawn_one("reader", 7, data[0], done[1]);
     sleep_ms(STAGGER_MS);
     long reader_b = spawn_one("reader", 8, data[0], done[1]);
     sleep_ms(STAGGER_MS);
     if (reader_a <= 0 || reader_b <= 0)
         return fail("killread: respawn", reader_a < 0 ? reader_a : reader_b);
-    if (write(data[1], "z", 1) != 1)
-        return fail("killread: third write", 0);
-    kill((int)reader_a, SIGKILL);
-    status = wait_status(reader_a);
+    sys_set_priority(PRIO_HIGH);
+    wrote = write(data[1], "z", 1);
+    killed = kill((int)reader_a, SIGKILL);
+    sys_set_priority(PRIO_NORMAL);
+    if (wrote != 1 || killed != 0 || !killed_by_sigkill(reader_a))
+        return fail("killread: kill woken head", killed);
     got = read_byte_timeout(done[0]);
-    /* Either the wakeup was passed on to the second reader, or the first one
-     * took the byte before it died or reported. */
-    int handed_on = WIFSIGNALED(status) && got == 8;
-    int consumed = (WIFSIGNALED(status) && got == READ_TIMEOUT &&
-                    poll_fd(data[0], POLL_READ) == 0) ||
-                   got == 7;
-    if (!handed_on && !consumed)
+    if (got != 8)
         return fail("killread: handoff lost", got);
-    if (consumed) {
-        if (write(data[1], "w", 1) != 1)
-            return fail("killread: fourth write", 0);
-        if (read_byte_timeout(done[0]) != 8)
-            return fail("killread: second reader", 0);
-    }
     if (wait_status(reader_b) != 0)
         return fail("killread: second status", 0);
 

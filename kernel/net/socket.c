@@ -188,10 +188,6 @@ int net_socket_has_waiters(void) {
     return 0;
 }
 
-int net_socket_pending(const net_socket_t *socket) {
-    return socket->rx_count != 0;
-}
-
 int net_socket_poll_readable(const net_socket_t *socket) {
     if (socket->rx_count == 0)
         net_poll();
