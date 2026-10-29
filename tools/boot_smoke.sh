@@ -8,16 +8,46 @@ KERNEL_BIN_REL="build/$ARCH/kernel.bin"
 DISK_IMG_REL="build/$ARCH/disk.img"
 LOG_FILE="$BUILD_DIR/boot_smoke.log"
 SUCCESS_STR="HydrogenOS bootet"
+# BOOT_MODE=iso boots through GRUB (needs grub-mkrescue + xorriso) and gets a
+# VBE framebuffer. BOOT_MODE=kernel uses QEMU's multiboot loader directly; it
+# provides no VBE mode, so the desktop markers depend on a native display driver.
+BOOT_MODE="${BOOT_MODE:-}"
+if [ -z "$BOOT_MODE" ]; then
+  if command -v grub-mkrescue >/dev/null 2>&1 && command -v xorriso >/dev/null 2>&1; then
+    BOOT_MODE=iso
+  else
+    BOOT_MODE=kernel
+  fi
+fi
+REQUIRE_DESKTOP="${REQUIRE_DESKTOP:-}"
+if [ -z "$REQUIRE_DESKTOP" ]; then
+  if [ "$BOOT_MODE" = "iso" ]; then REQUIRE_DESKTOP=1; else REQUIRE_DESKTOP=0; fi
+fi
+
 if [ "$ARCH" = "x86_64" ]; then
   SUCCESS_STR="init: shell start"
   rm -f "$ROOT_DIR/build/$ARCH/disk.img"
-  make -C "$ROOT_DIR" ARCH="$ARCH" iso build
+  if [ "$BOOT_MODE" = "iso" ]; then
+    make -C "$ROOT_DIR" ARCH="$ARCH" iso build
+  else
+    make -C "$ROOT_DIR" ARCH="$ARCH" build kernel32
+  fi
 else
   make -C "$ROOT_DIR" ARCH="$ARCH" "$KERNEL_BIN_REL" "$DISK_IMG_REL"
 fi
 
 rm -f "$LOG_FILE"
-if [ "$ARCH" = "x86_64" ]; then
+if [ "$ARCH" = "x86_64" ] && [ "$BOOT_MODE" = "kernel" ]; then
+  qemu-system-x86_64 \
+    -kernel "$ROOT_DIR/build/$ARCH/kernel32.elf" \
+    -initrd "$ROOT_DIR/build/$ARCH/initrd.cpio" \
+    -drive if=virtio,format=raw,file="$ROOT_DIR/build/$ARCH/disk.img" \
+    -m 256M \
+    -serial stdio \
+    -display none \
+    -no-reboot -no-shutdown \
+    >"$LOG_FILE" 2>&1 &
+elif [ "$ARCH" = "x86_64" ]; then
   qemu-system-x86_64 \
     -cdrom "$ROOT_DIR/build/$ARCH/hydrogen.iso" \
     -drive if=virtio,format=raw,file="$ROOT_DIR/build/$ARCH/disk.img" \
@@ -41,8 +71,14 @@ QEMU_PID=$!
 FOUND=0
 
 i=0
-while [ "$i" -lt 400 ]; do
-  if grep -q "FRAME CHECKSUM:" "$LOG_FILE" 2>/dev/null; then
+# Generous ceiling: TCG boots slow down a lot when several QEMUs run in parallel.
+while [ "$i" -lt "${SMOKE_TICKS:-1500}" ]; do
+  if [ "$REQUIRE_DESKTOP" = "1" ]; then
+    DONE_MARKER="FRAME CHECKSUM:"
+  else
+    DONE_MARKER="desktopdemo started as daemon"
+  fi
+  if grep -q "$DONE_MARKER" "$LOG_FILE" 2>/dev/null; then
     FOUND=1
     break
   fi
@@ -61,13 +97,15 @@ kill -9 "$QEMU_PID" >/dev/null 2>&1 || true
 if [ "$FOUND" -eq 1 ]; then
   MISSING=""
   grep -q "FSTEST PASS" "$LOG_FILE" || MISSING="$MISSING FSTEST_PASS"
-  grep -qE "compositor: ready|COMP READY" "$LOG_FILE" || MISSING="$MISSING COMPOSITOR_READY"
   grep -q "DESKTOPTEST PASS" "$LOG_FILE" || MISSING="$MISSING DESKTOPTEST_PASS"
   grep -q "LOGIN PASS" "$LOG_FILE" || MISSING="$MISSING LOGIN_PASS"
   grep -q "PKG PASS" "$LOG_FILE" || MISSING="$MISSING PKG_PASS"
-  grep -q "FRAME CHECKSUM:" "$LOG_FILE" || MISSING="$MISSING FRAME_CHECKSUM"
+  if [ "$REQUIRE_DESKTOP" = "1" ]; then
+    grep -qE "compositor: ready|COMP READY" "$LOG_FILE" || MISSING="$MISSING COMPOSITOR_READY"
+    grep -q "FRAME CHECKSUM:" "$LOG_FILE" || MISSING="$MISSING FRAME_CHECKSUM"
+  fi
   if [ -z "$MISSING" ]; then
-    echo "BOOT SMOKE PASS"
+    echo "BOOT SMOKE PASS (mode=$BOOT_MODE desktop=$REQUIRE_DESKTOP)"
     exit 0
   fi
   echo "BOOT SMOKE FAIL (missing:$MISSING)"

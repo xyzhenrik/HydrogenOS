@@ -167,6 +167,8 @@ ISO_DIR = $(BUILD_DIR)/isodir
 GRUB_CFG = $(ISO_DIR)/boot/grub/grub.cfg
 KERNEL_BIN = $(BUILD_DIR)/kernel.bin
 ISO = $(BUILD_DIR)/hydrogen.iso
+# 32-bit ELF view of the kernel: QEMU's built-in multiboot loader rejects ELF64.
+KERNEL32 = $(BUILD_DIR)/kernel32.elf
 DISK_IMG = $(BUILD_DIR)/disk.img
 FS_DIR = fsroot
 FS_FILES = $(shell find $(FS_DIR) -type f 2>/dev/null)
@@ -175,7 +177,7 @@ $(DISK_IMG): $(USER_ELFS) $(INIT_CONFIG)
 
 -include $(wildcard $(BUILD_DIR)/*.d)
 
-.PHONY: all clean iso build run smoke
+.PHONY: all clean iso build run smoke kernel32
 
 all: build
 build: $(BUILD_DEPS)
@@ -791,6 +793,11 @@ ifeq ($(ARCH),x86_64)
 	cp $(INITRD) $(ISO_DIR)/boot/initrd.cpio
 endif
 	grub-mkrescue -o $(ISO) $(ISO_DIR)
+
+kernel32: $(KERNEL32)
+
+$(KERNEL32): $(KERNEL_BIN)
+	$(OBJCOPY) -O elf32-i386 $< $@
 
 run: $(RUN_DEPS)
 	$(RUN_CMD)
