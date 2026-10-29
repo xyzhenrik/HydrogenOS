@@ -1,4 +1,6 @@
 #include "launcher.h"
+#include "gfx_effects.h"
+#include "theme.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -274,17 +276,25 @@ static void launcher_draw_impl(Launcher *l, Surface *surface) {
     if (l->x < 0) l->x = 0;
     if (l->y < 0) l->y = 0;
 
-    /* Panel. */
-    surface_fill_rect(surface, l->x, l->y, l->w, l->h, l->bg_color);
-    surface_draw_rect(surface, l->x, l->y, l->w, l->h, 0x00FFFFFFu);
+    /* Panel: glass tinted with the launcher colour, casting a soft shadow. */
+    const ThemeEffects *fx = &theme_default()->effects;
+    GfxCanvas canvas = { surface->pixels, surface->width, surface->height, surface->stride, 0 };
+    GfxGlass glass = { fx->glass_blur_radius, fx->panel_radius, l->bg_color, fx->glass_tint_alpha,
+                       fx->glass_highlight, fx->glass_highlight_alpha };
+    if (gfx_glass_apply(&canvas, l->x, l->y, l->w, l->h, &glass) != 0)
+        gfx_fill_round_rect(&canvas, l->x, l->y, l->w, l->h, fx->panel_radius, l->bg_color, 255);
+    gfx_draw_shadow(&canvas, gfx_shadow_get(fx->panel_radius, fx->shadow_blur_radius),
+                    l->x, l->y, l->w, l->h, fx->shadow_offset_x, fx->shadow_offset_y,
+                    fx->shadow_color, fx->shadow_alpha, 0);
 
     /* Input field. */
     int input_x = l->x + 8;
     int input_y = l->y + 8;
     int input_w = l->w - 16;
     int input_h = 20;
-    surface_fill_rect(surface, input_x, input_y, input_w, input_h, l->input_bg);
-    surface_draw_rect(surface, input_x, input_y, input_w, input_h, 0x00FFFFFFu);
+    gfx_fill_round_rect(&canvas, input_x, input_y, input_w, input_h, fx->button_radius, l->input_bg, 255);
+    gfx_stroke_round_rect(&canvas, input_x, input_y, input_w, input_h, fx->button_radius,
+                          fx->glass_highlight, fx->glass_highlight_alpha);
     surface_draw_text(surface, input_x + 4, input_y + 2, l->query[0] ? l->query : "Search apps...", l->fg_color);
 
     int cx = input_x + 4 + (int)strlen(l->query) * 8;
@@ -305,7 +315,7 @@ static void launcher_draw_impl(Launcher *l, Surface *surface) {
         int y = row_y + r * row_h;
 
         if (r == l->selected) {
-            surface_fill_rect(surface, row_x, y, row_w, row_h, l->accent_color);
+            gfx_fill_round_rect(&canvas, row_x, y, row_w, row_h, fx->button_radius, l->accent_color, 255);
         }
 
         char line[192];

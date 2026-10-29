@@ -15,6 +15,27 @@ typedef struct ThemeSpacing {
     int xl;
 } ThemeSpacing;
 
+/* Material tokens: corner radii, drop shadows and the glass material.
+   Radii are in pixels; blur radii are box radii (GFX_BLUR_PASSES passes);
+   alphas are 0..255; colours are 0x00RRGGBB. */
+typedef struct ThemeEffects {
+    int window_radius;
+    int button_radius;
+    int panel_radius;
+
+    int shadow_blur_radius;
+    int shadow_offset_x;
+    int shadow_offset_y;
+    unsigned int shadow_alpha;
+    uint32_t shadow_color;
+
+    int glass_blur_radius;
+    uint32_t glass_tint;
+    unsigned int glass_tint_alpha;
+    uint32_t glass_highlight;
+    unsigned int glass_highlight_alpha;
+} ThemeEffects;
+
 /* Font token container. */
 typedef struct ThemeFont {
     int size;
@@ -81,6 +102,8 @@ typedef struct Theme {
 
     ThemeFont font_token_struct;
     ThemeFont font_info;
+
+    ThemeEffects effects;
 } Theme;
 
 typedef Theme theme_t;

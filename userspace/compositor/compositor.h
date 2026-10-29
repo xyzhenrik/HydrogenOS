@@ -8,6 +8,22 @@
 #define COMP_DEFAULT_WIDTH  1024
 #define COMP_DEFAULT_HEIGHT 768
 
+#define COMP_MATERIAL_OPAQUE 0
+/* Glass windows show a blurred, tinted copy of what lies beneath them. Their
+   surface alpha byte is content opacity: 0 is bare glass, 255 is opaque. */
+#define COMP_MATERIAL_GLASS  1
+
+typedef struct CompWindowStyle {
+    int corner_radius;
+    int shadow;
+    int material;
+    int glass_blur_radius;
+    uint32_t glass_tint;
+    unsigned int glass_tint_alpha;
+} CompWindowStyle;
+
+struct CompWindowState;
+
 /* Window structure (v0) */
 struct Window {
     int id;
@@ -17,6 +33,10 @@ struct Window {
     int focused;
     unsigned int bg_color;
     int damaged;
+    /* Geometry, visibility and style may be changed directly; the next
+       comp_render() notices and repaints everything that changed. */
+    CompWindowStyle style;
+    struct CompWindowState *state;
 };
 
 struct window {
@@ -58,6 +78,15 @@ Window *comp_create_window5(int x, int y, int w, int h, void *surface);
 int comp_destroy_window(Window *win);
 int comp_raise(Window *win);
 int comp_focus(Window *win);
+/* Compositor-owned surfaces are reallocated as needed; caller-owned ones can
+   only shrink. Surface contents are undefined afterwards. */
+int comp_resize_window(Window *win, int w, int h);
+
+/* Window styles: plain (square, no shadow), themed window, themed glass. */
+void comp_style_plain(CompWindowStyle *style);
+void comp_style_window(CompWindowStyle *style);
+void comp_style_glass(CompWindowStyle *style);
+int comp_set_window_style(Window *win, const CompWindowStyle *style);
 
 /* Damage tracking */
 int comp_damage_window(Window *win);
