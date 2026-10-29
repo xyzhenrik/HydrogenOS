@@ -82,6 +82,16 @@ long wait_pid(int pid, int *status) {
     return sys_wait(pid, status);
 }
 
+long spawn_args(const char *path, const char *const *argv,
+                const char *const *envp, int stdin_fd, int stdout_fd,
+                int stderr_fd) {
+    return sys_spawn_args(path, argv, envp, stdin_fd, stdout_fd, stderr_fd);
+}
+
+long try_wait_pid(int pid, int *status) {
+    return sys_try_wait(pid, status);
+}
+
 void yield_cpu(void) {
     (void)sys_yield();
 }

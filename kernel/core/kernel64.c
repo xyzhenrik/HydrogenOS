@@ -26,6 +26,8 @@
 #include "rtc.h"
 #include "pmm.h"
 #include "process.h"
+#include "spawn_args.h"
+#include "user_exec.h"
 #include "serial.h"
 #include "syscall_arch.h"
 #include "syscall.h"
@@ -297,84 +299,70 @@ static int run_user_from_vfs(const char *path) {
   return rc;
 }
 
-int user_spawn_from_vfs(const char *path, regs_t *parent_regs, uint64_t *out_pid) {
-  (void)parent_regs;
+static int spawn_from_vfs(const char *path, const spawn_args_t *args,
+                          int bind_stdio, int stdin_fd, int stdout_fd,
+                          int stderr_fd, uint64_t *out_pid) {
   process_t *parent = process_current();
-  if (!path)
-    return -1;
-  if (!vfs_is_ready())
-    return -1;
+  if (out_pid)
+    *out_pid = 0;
+  if (!path || !vfs_is_ready())
+    return USER_SPAWN_ERR_EXEC;
   vfs_stat_t st;
   if (vfs_stat(path, &st) != 0 || st.type != 1 || st.size == 0)
-    return -1;
+    return USER_SPAWN_ERR_EXEC;
   uint8_t *buf = (uint8_t *)kalloc(st.size);
   if (!buf)
-    return -1;
+    return USER_SPAWN_ERR_EXEC;
   uint32_t got = 0;
   if (vfs_read_file(path, buf, st.size, &got) != 0 || got == 0) {
     kfree(buf);
-    return -1;
+    return USER_SPAWN_ERR_EXEC;
   }
   process_t *proc = load_user_process(buf, got, path);
-  if (!proc) {
-    if (out_pid) *out_pid = 0;
-    kfree(buf);
-    return -1;
-  }
-  if (parent && parent != process_kernel() &&
-      (process_inherit_handles(proc, parent) != 0 ||
-       process_inherit_stdio(proc, parent) != 0)) {
-    if (out_pid) *out_pid = 0;
-    process_destroy(proc);
-    kfree(buf);
-    return -1;
-  }
-  if (out_pid) *out_pid = proc->pid;
   kfree(buf);
+  if (!proc)
+    return USER_SPAWN_ERR_EXEC;
+  if (args && spawn_args_apply(proc, args) != 0) {
+    process_destroy(proc);
+    return USER_SPAWN_ERR_EXEC;
+  }
+  if (parent && parent != process_kernel()) {
+    if (process_inherit_handles(proc, parent) != 0 ||
+        process_inherit_stdio(proc, parent) != 0) {
+      process_destroy(proc);
+      return USER_SPAWN_ERR_EXEC;
+    }
+    if (bind_stdio &&
+        (process_bind_stdio_from_fd(proc, 0, parent, stdin_fd) != 0 ||
+         process_bind_stdio_from_fd(proc, 1, parent, stdout_fd) != 0 ||
+         process_bind_stdio_from_fd(proc, 2, parent, stderr_fd) != 0)) {
+      process_destroy(proc);
+      return USER_SPAWN_ERR_STDIO;
+    }
+  }
+  if (out_pid)
+    *out_pid = proc->pid;
   return 0;
+}
+
+int user_spawn_from_vfs(const char *path, regs_t *parent_regs, uint64_t *out_pid) {
+  (void)parent_regs;
+  return spawn_from_vfs(path, 0, 0, PROCESS_STDIO_BIND_INHERIT,
+                        PROCESS_STDIO_BIND_INHERIT, PROCESS_STDIO_BIND_INHERIT,
+                        out_pid);
 }
 
 int user_spawn_with_stdio_from_vfs(const char *path, regs_t *parent_regs,
                                    uint64_t *out_pid, int stdin_fd,
                                    int stdout_fd, int stderr_fd) {
   (void)parent_regs;
-  process_t *parent = process_current();
-  if (!path)
-    return -1;
-  if (!vfs_is_ready())
-    return -1;
-  vfs_stat_t st;
-  if (vfs_stat(path, &st) != 0 || st.type != 1 || st.size == 0)
-    return -1;
-  uint8_t *buf = (uint8_t *)kalloc(st.size);
-  if (!buf)
-    return -1;
-  uint32_t got = 0;
-  if (vfs_read_file(path, buf, st.size, &got) != 0 || got == 0) {
-    kfree(buf);
-    return -1;
-  }
-  process_t *proc = load_user_process(buf, got, path);
-  if (!proc) {
-    if (out_pid) *out_pid = 0;
-    kfree(buf);
-    return -1;
-  }
-  if (parent && parent != process_kernel()) {
-    if (process_inherit_handles(proc, parent) != 0 ||
-        process_inherit_stdio(proc, parent) != 0 ||
-        process_bind_stdio_from_fd(proc, 0, parent, stdin_fd) != 0 ||
-        process_bind_stdio_from_fd(proc, 1, parent, stdout_fd) != 0 ||
-        process_bind_stdio_from_fd(proc, 2, parent, stderr_fd) != 0) {
-      if (out_pid) *out_pid = 0;
-      process_destroy(proc);
-      kfree(buf);
-      return -1;
-    }
-  }
-  if (out_pid) *out_pid = proc->pid;
-  kfree(buf);
-  return 0;
+  return spawn_from_vfs(path, 0, 1, stdin_fd, stdout_fd, stderr_fd, out_pid);
+}
+
+int user_spawn_args_from_vfs(const char *path, const spawn_args_t *args,
+                             uint64_t *out_pid, int stdin_fd, int stdout_fd,
+                             int stderr_fd) {
+  return spawn_from_vfs(path, args, 1, stdin_fd, stdout_fd, stderr_fd, out_pid);
 }
 
 static void cmd_user(void) {

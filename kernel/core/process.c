@@ -616,11 +616,37 @@ static int process_entry_read(process_handle_entry_t *entry, uint8_t *out,
     }
 }
 
+/* Returns PROCESS_RESOURCE_IO_ERROR (-4) on filesystem failure so the
+ * syscall layer can report EIO instead of EBADF. */
+static int process_file_write(process_handle_entry_t *entry, const uint8_t *in,
+                              uint32_t in_sz, uint32_t *out_len) {
+    process_file_handle_t *file = entry->resource.file;
+    uint32_t offset;
+    if (!file)
+        return -1;
+    offset = file->offset;
+    if ((file->open_flags & PROCESS_OPEN_APPEND) != 0) {
+        vfs_stat_t st;
+        if (vfs_stat(file->path, &st) != 0 || st.type != 1)
+            return PROCESS_RESOURCE_IO_ERROR;
+        offset = st.size;
+    }
+    if (in_sz > UINT32_MAX - offset)
+        return PROCESS_RESOURCE_IO_ERROR;
+    if (vfs_write_file_at(file->path, offset, in, in_sz) != 0)
+        return PROCESS_RESOURCE_IO_ERROR;
+    file->offset = offset + in_sz;
+    *out_len = in_sz;
+    return 0;
+}
+
 static int process_entry_write(process_handle_entry_t *entry, const uint8_t *in,
                                uint32_t in_sz, uint32_t *out_len) {
     if (!entry || !in || !out_len || !process_entry_can_write(entry))
         return -1;
     switch ((process_handle_type_t)entry->type) {
+    case PROCESS_HANDLE_FILE:
+        return process_file_write(entry, in, in_sz, out_len);
     case PROCESS_HANDLE_PIPE_WRITER:
         return kernel_pipe_write(entry->resource.pipe, in, in_sz, out_len);
     case PROCESS_HANDLE_NULL_WRITER:
@@ -1209,14 +1235,32 @@ void process_set_frame(process_t *p, const regs_t *frame) {
     p->has_frame = 1;
 }
 
-int process_handle_open_file(process_t *p, const char *path) {
+static int process_open_flags_valid(uint32_t flags) {
+    if ((flags & ~(uint32_t)PROCESS_OPEN_KNOWN_FLAGS) != 0)
+        return 0;
+    if ((flags & (PROCESS_OPEN_READ | PROCESS_OPEN_WRITE)) == 0)
+        return 0;
+    if ((flags & (PROCESS_OPEN_CREATE | PROCESS_OPEN_TRUNCATE |
+                  PROCESS_OPEN_APPEND)) != 0 &&
+        (flags & PROCESS_OPEN_WRITE) == 0)
+        return 0;
+    return 1;
+}
+
+int process_handle_open_file(process_t *p, const char *path, uint32_t flags) {
+    static const uint8_t empty = 0;
+    if (!process_open_flags_valid(flags))
+        return PROCESS_RESOURCE_INVALID;
     if (!p || p == &kernel_proc || !path || !vfs_is_ready())
         return PROCESS_RESOURCE_ERR;
     char norm[PROCESS_HANDLE_PATH_CAP];
     if (process_resolve_path(p, path, norm, sizeof(norm)) != 0)
         return PROCESS_RESOURCE_ERR;
     vfs_stat_t st;
-    if (vfs_stat(norm, &st) != 0 || st.type != 1)
+    int exists = vfs_stat(norm, &st) == 0;
+    if (exists && st.type != 1)
+        return PROCESS_RESOURCE_ERR;
+    if (!exists && (flags & PROCESS_OPEN_CREATE) == 0)
         return PROCESS_RESOURCE_ERR;
     int handle = process_handle_alloc(p, PROCESS_HANDLE_FILE);
     if (handle < 0)
@@ -1227,9 +1271,23 @@ int process_handle_open_file(process_t *p, const char *path) {
         process_handle_reset(&p->handles[handle]);
         return PROCESS_RESOURCE_NO_KERNEL_RESOURCE;
     }
+    /* Create/truncate only after every resource is secured, so a failed open
+     * never leaves a modified file behind. */
+    if ((!exists || (flags & PROCESS_OPEN_TRUNCATE) != 0) &&
+        vfs_write_file(norm, &empty, 0) != 0) {
+        kfree(file);
+        process_handle_reset(&p->handles[handle]);
+        return PROCESS_RESOURCE_IO_ERROR;
+    }
     file->refs = 1;
     file->offset = 0;
+    file->open_flags = flags;
     process_handle_entry_t *entry = &p->handles[handle];
+    entry->flags &= (uint16_t)~(PROCESS_HANDLE_FLAG_READ | PROCESS_HANDLE_FLAG_WRITE);
+    if ((flags & PROCESS_OPEN_READ) != 0)
+        entry->flags |= PROCESS_HANDLE_FLAG_READ;
+    if ((flags & PROCESS_OPEN_WRITE) != 0)
+        entry->flags |= PROCESS_HANDLE_FLAG_WRITE;
     for (int i = 0; i < PROCESS_HANDLE_PATH_CAP; ++i) {
         file->path[i] = norm[i];
         if (norm[i] == 0) break;
@@ -1530,8 +1588,11 @@ int process_fd_poll(process_t *p, int fd, uint32_t events,
 
     switch ((process_handle_type_t)entry->type) {
     case PROCESS_HANDLE_FILE:
-        if ((events & PROCESS_POLL_READ) != 0) {
+        if ((events & PROCESS_POLL_READ) != 0 && process_entry_can_read(entry)) {
             ready |= PROCESS_POLL_READ;
+        }
+        if ((events & PROCESS_POLL_WRITE) != 0 && process_entry_can_write(entry)) {
+            ready |= PROCESS_POLL_WRITE;
         }
         break;
     case PROCESS_HANDLE_PIPE_READER:

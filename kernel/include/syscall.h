@@ -53,6 +53,8 @@
 #define SYS_REBOOT 49
 #define SYS_NET_INFO 50
 #define SYS_NET_PING 51
+#define SYS_SPAWN_ARGS 52
+#define SYS_TRY_WAIT 53
 #define SYS_PUTCHAR 255
 
 uint64_t syscall_handle(regs_t *r);

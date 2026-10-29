@@ -51,6 +51,8 @@
 #define SYS_REBOOT 49
 #define SYS_NET_INFO 50
 #define SYS_NET_PING 51
+#define SYS_SPAWN_ARGS 52
+#define SYS_TRY_WAIT 53
 
 #define PRIO_IDLE   0
 #define PRIO_NORMAL 1
@@ -67,6 +69,12 @@
 #define SEEK_SET 0
 #define SEEK_CUR 1
 #define SEEK_END 2
+
+#define OPEN_READ     (1u << 0)
+#define OPEN_WRITE    (1u << 1)
+#define OPEN_CREATE   (1u << 2)
+#define OPEN_TRUNCATE (1u << 3)
+#define OPEN_APPEND   (1u << 4)
 
 #define POLL_READ  (1u << 0)
 #define POLL_WRITE (1u << 1)
@@ -362,4 +370,15 @@ static inline long sys_net_info(net_info_t *out) {
 /* Round-trip time in ms, or -errno (e.g. -110 ETIMEDOUT, -19 ENODEV). */
 static inline long sys_net_ping(unsigned int ipv4, long timeout_ms) {
     return syscall2(SYS_NET_PING, (long)ipv4, timeout_ms);
+}
+
+static inline long sys_spawn_args(const char *path, const char *const *argv,
+                                  const char *const *envp, int stdin_fd,
+                                  int stdout_fd, int stderr_fd) {
+    return syscall6(SYS_SPAWN_ARGS, (long)path, (long)argv, (long)envp,
+                    (long)stdin_fd, (long)stdout_fd, (long)stderr_fd);
+}
+
+static inline long sys_try_wait(int pid, int *status) {
+    return syscall2(SYS_TRY_WAIT, (long)pid, (long)status);
 }

@@ -15,6 +15,12 @@
 #define SEEK_CUR 1
 #define SEEK_END 2
 
+#define OPEN_READ     (1u << 0)
+#define OPEN_WRITE    (1u << 1)
+#define OPEN_CREATE   (1u << 2)
+#define OPEN_TRUNCATE (1u << 3)
+#define OPEN_APPEND   (1u << 4)
+
 #define POLL_READ  (1u << 0)
 #define POLL_WRITE (1u << 1)
 #define POLL_HUP   (1u << 2)
@@ -69,7 +75,11 @@ long set_fd_inherit(int fd, int inherit);
 long set_handle_inherit(int fd, int inherit);
 long spawn(const char *path);
 long spawn_with_stdio(const char *path, int stdin_fd, int stdout_fd, int stderr_fd);
+long spawn_args(const char *path, const char *const *argv,
+                const char *const *envp, int stdin_fd, int stdout_fd,
+                int stderr_fd);
 long wait_pid(int pid, int *status);
+long try_wait_pid(int pid, int *status);
 void yield_cpu(void);
 void tty_set_color(unsigned char fg, unsigned char bg);
 int puts(const char *s);
