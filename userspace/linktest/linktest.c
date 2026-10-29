@@ -26,7 +26,7 @@ static const char *const cleanup_dirs[] = {
 };
 
 static int fail(const char *reason) {
-    fprintf(2, "LINK FAIL: %s\n", reason);
+    dprintf(2, "LINK FAIL: %s\n", reason);
     return 1;
 }
 
