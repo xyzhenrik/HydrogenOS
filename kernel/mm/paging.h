@@ -14,13 +14,6 @@ void paging_destroy_user_pml4(uint64_t *pml4);
 size_t paging_count_user_pages(const uint64_t *pml4);
 uint64_t *paging_current_pml4(void);
 int paging_is_mapped(uintptr_t virt);
-/*
- * True when every page of [virt, virt + len) is present and user-accessible
- * in 'pml4' (and writable when 'writable'). Lets the kernel touch a user
- * buffer without taking a fault. len must be non-zero.
- */
-int paging_user_range_ok(const uint64_t *pml4, uintptr_t virt, size_t len,
-                         int writable);
 void paging_map_region_pml4(uint64_t *pml4, uintptr_t phys, uintptr_t virt,
                             size_t size_bytes, uint32_t flags);
 /*
@@ -38,9 +31,6 @@ int paging_user_map_page(uint64_t *pml4, uintptr_t virt, uintptr_t phys,
  */
 void paging_user_protect_range(uint64_t *pml4, uintptr_t virt, size_t size_bytes,
                                uint64_t flags);
-/* Whether any page of the range is a PROT_NONE mapping of `pml4`. */
-int paging_user_range_has_prot_none(const uint64_t *pml4, uintptr_t virt,
-                                    size_t size_bytes);
 /* Unmap user pages in a range, free their frames and prune empty PTs/PDs. */
 void paging_user_unmap_range(uint64_t *pml4, uintptr_t virt, size_t size_bytes);
 

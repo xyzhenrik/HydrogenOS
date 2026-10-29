@@ -20,8 +20,9 @@
 Beispiel: `-2` entspricht `ENOENT`.
 
 ## Pointer/Buffer Regeln
-- Alle User-Pointer muessen im User-Adressraum liegen.
-- Kernel validiert Pointer und Laenge, sonst `-EFAULT`.
+- Alle User-Pointer muessen im User-Adressraum liegen (kanonische untere Haelfte, unterhalb `0x0000_8000_0000_0000`).
+- Der Kernel laeuft vor jedem Zugriff die Seitentabellen des Prozesses seitenweise ab (`kernel/core/usercopy.c`): jede Seite des Bereichs muss gemappt und fuer User-Mode zugaenglich sein, Ausgabepuffer zusaetzlich beschreibbar. Supervisor-only-Speicher (Kernel-Identity-Map), nicht gemappte Seiten, nicht kanonische Adressen, ueberlaufende `addr + len`-Bereiche und Schreibzugriffe auf schreibgeschuetzte Mappings liefern `-EFAULT`; es wird nichts teilweise kopiert.
+- Optionale Pointer (`argv`/`envp` bei `sys_spawn_args`, `status` bei `sys_wait`/`sys_try_wait`) duerfen `NULL` sein; fuer alle anderen Pointer ist `NULL` ungueltig (`-EFAULT`). `sys_write`/`sys_read` mit `len = 0` liefern `0`, ohne den Pointer zu pruefen.
 - Strings sind UTF-8, null-terminiert.
 - Pfadbasierte Syscalls loesen relative Pfade gegen das prozesslokale aktuelle Working Directory auf; `.` und `..` werden dabei normalisiert.
 
@@ -120,7 +121,7 @@ Beispiel: `-2` entspricht `ENOENT`.
 - `sys_munmap` darf Teile eines Mappings entfernen (Kopf, Ende, Mitte); nicht gemappte Teile des Bereichs werden ignoriert.
 - `sys_mprotect` aendert `prot` fuer `[addr, addr+len)` (`len` auf Seiten aufgerundet). Der Bereich muss lueckenlos in Mappings liegen: ausserhalb des Fensters oder unausgerichtet `-EINVAL`, nicht vollstaendig gemappt `-ENOMEM`. Mappings werden bei Bedarf geteilt und gleich geschuetzte Nachbarn wieder zusammengefuehrt; reicht das Region-Limit fuer eine Teilung nicht, kommt `-ENOMEM`. `prot`/`flags` gelten wie bei `sys_mmap`. Bei einem Fehler bleibt alles unveraendert; der Seiteninhalt bleibt bei jeder Schutzaenderung erhalten.
 - Ein Zugriff, den die Seitenrechte verbieten (Schreiben auf `READ`, jeder Zugriff auf `NONE`, Ausfuehren ohne `EXEC`, Zugriff auf ungemappte Seiten), beendet den Prozess mit Exit-Status `139` (128 + SIGSEGV); der Kernel meldet den Fault auf der Konsole. Der User-Stack hat eine `PROT_NONE`-Guard-Page unter sich (ausserhalb des mmap-Fensters, nicht per `sys_mprotect` aenderbar), und `malloc` haengt an jedes grosse Mapping (ab 128 KiB) eine `PROT_NONE`-Seite; dadurch zaehlt jede solche Allokation zwei Regionen, und `malloc` liefert bei erschoepftem Region-Limit 0.
-- Syscalls mit User-Puffern, die eine `PROT_NONE`-Seite beruehren, schlagen mit `-EFAULT` fehl. Schreibzugriffe des Kernels auf `READ`-Seiten werden noch nicht abgefangen (CR0.WP ist aus).
+- Syscalls mit User-Puffern, die eine `PROT_NONE`-Seite beruehren, schlagen mit `-EFAULT` fehl. Das gilt auch fuer Ausgabepuffer auf `READ`-Seiten.
 - Beim Prozess-Exit werden alle Mappings automatisch freigegeben.
 - Die frueheren Nummern 34/35 (brk-artiges Mapping) sind stillgelegt und werden nicht wiederverwendet.
 ## Netzwerk (sys_net_info / sys_net_ping)

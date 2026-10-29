@@ -134,6 +134,8 @@ USER_MMAPTEST_OBJ = $(BUILD_DIR)/user_mmaptest.o
 USER_MMAPTEST_ELF = $(BUILD_DIR)/user_mmaptest.elf
 USER_MPROTECTTEST_OBJ = $(BUILD_DIR)/user_mprotecttest.o
 USER_MPROTECTTEST_ELF = $(BUILD_DIR)/user_mprotecttest.elf
+USER_FAULTTEST_OBJ = $(BUILD_DIR)/user_faulttest.o
+USER_FAULTTEST_ELF = $(BUILD_DIR)/user_faulttest.elf
 USER_POWEROFF_OBJ = $(BUILD_DIR)/user_poweroff.o
 USER_POWEROFF_ELF = $(BUILD_DIR)/user_poweroff.elf
 USER_REBOOT_OBJ = $(BUILD_DIR)/user_reboot.o
@@ -180,7 +182,7 @@ USER_LIBCTEST_OBJ = $(BUILD_DIR)/user_libctest.o
 USER_LIBCTEST_ELF = $(BUILD_DIR)/user_libctest.elf
 OBJS = $(BUILD_DIR)/boot.o $(BUILD_DIR)/kernel.o $(BUILD_DIR)/console.o $(BUILD_DIR)/serial.o $(BUILD_DIR)/panic.o \
        $(BUILD_DIR)/paging.o $(BUILD_DIR)/time.o $(BUILD_DIR)/pmm.o $(BUILD_DIR)/kheap.o $(BUILD_DIR)/string.o \
-       $(BUILD_DIR)/vmm_user.o $(BUILD_DIR)/syscall.o $(BUILD_DIR)/process.o $(BUILD_DIR)/pipe.o $(BUILD_DIR)/spawn_args.o \
+       $(BUILD_DIR)/vmm_user.o $(BUILD_DIR)/syscall.o $(BUILD_DIR)/process.o $(BUILD_DIR)/pipe.o $(BUILD_DIR)/spawn_args.o $(BUILD_DIR)/usercopy.o \
        $(BUILD_DIR)/keyboard.o $(BUILD_DIR)/mouse.o $(BUILD_DIR)/elf_loader.o \
        $(BUILD_DIR)/ata.o $(BUILD_DIR)/pci.o $(BUILD_DIR)/virtio.o $(BUILD_DIR)/virtio_blk.o $(BUILD_DIR)/virtio_gpu.o $(BUILD_DIR)/bochs_display.o $(BUILD_DIR)/virtio_input.o $(BUILD_DIR)/virtio_net.o $(BUILD_DIR)/msi.o $(BUILD_DIR)/block.o $(BUILD_DIR)/block_cache.o $(BUILD_DIR)/mbr.o \
        $(BUILD_DIR)/net.o $(BUILD_DIR)/ethernet.o $(BUILD_DIR)/arp.o $(BUILD_DIR)/ipv4.o $(BUILD_DIR)/icmp.o \
@@ -952,7 +954,14 @@ $(USER_MPROTECTTEST_ELF): $(USER_MPROTECTTEST_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_
 	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_MPROTECTTEST_OBJ)
 
 
-$(INITRD): $(USER_HELLO_ELF) $(USER_ECHO_ELF) $(USER_CAT_ELF) $(USER_TIME_ELF) $(USER_SLEEP_ELF) $(USER_PIPEREAD_ELF) $(USER_PIPEDELAYREAD_ELF) $(USER_PIPEPRODUCER_ELF) $(USER_PIPECONSUMER_ELF) $(USER_LOGPRODUCER_A_ELF) $(USER_LOGPRODUCER_B_ELF) $(USER_LOGCOLLECTOR_ELF) $(USER_BOOTPROBE_ELF) $(USER_HANDOFFCHECK_ELF) $(USER_STDIOCHECK_ELF) $(USER_STDIOBADBIND_ELF) $(USER_STDIONULLCHECK_ELF) $(USER_DUPCHECK_ELF) $(USER_HANDLELIMITCHECK_ELF) $(USER_FILEOFFSETCHECK_ELF) $(USER_SEEKCHECK_ELF) $(USER_POLLCHECK_ELF) $(USER_POLLWAITCHECK_ELF) $(USER_POLLWAKEWRITER_ELF) $(USER_POLLMANYCHECK_ELF) $(USER_CWDCHECK_ELF) $(USER_DUPFALLBACKCHECK_ELF) $(USER_FSTEST_ELF) $(USER_LOGIN_ELF) $(USER_PKGTEST_ELF) $(USER_LOGSINK_WRITER_A_ELF) $(USER_LOGSINK_WRITER_B_ELF) $(USER_TEEWRITER_ELF) $(USER_TEEREADER_A_ELF) $(USER_TEEREADER_B_ELF) $(USER_MMAPTEST_ELF) $(USER_COMPOSITOR_ELF) $(USER_DESKTOPDEMO_ELF) $(USER_DESKTOPTEST_ELF) $(USER_INIT_ELF) $(USER_SHELL_ELF) $(USER_SHELLTEST_ELF) $(INIT_CONFIG) tools/mkinitrd.py $(USER_DATE_ELF) $(USER_RTCTEST_ELF) $(USER_PS_ELF) $(USER_PROCTEST_ELF) $(USER_DIRTEST_ELF) $(USER_POWEROFF_ELF) $(USER_REBOOT_ELF) $(USER_POWERCHECK_ELF) $(USER_NETTEST_ELF) $(USER_PING_ELF) $(USER_LIBCTEST_ELF) $(USER_LINKTEST_ELF) $(USER_SYSLOGD_ELF) $(USER_LOGREAD_ELF) $(USER_LOGTEST_ELF) $(USER_MPROTECTTEST_ELF) $(USER_NSLOOKUP_ELF) $(USER_UDPTEST_ELF)
+$(USER_FAULTTEST_OBJ): userspace/faulttest/faulttest.c userspace/lib/syscall.h userspace/lib/mini_libc.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(USER_FAULTTEST_ELF): $(USER_FAULTTEST_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
+	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_FAULTTEST_OBJ)
+
+$(INITRD): $(USER_HELLO_ELF) $(USER_ECHO_ELF) $(USER_CAT_ELF) $(USER_TIME_ELF) $(USER_SLEEP_ELF) $(USER_PIPEREAD_ELF) $(USER_PIPEDELAYREAD_ELF) $(USER_PIPEPRODUCER_ELF) $(USER_PIPECONSUMER_ELF) $(USER_LOGPRODUCER_A_ELF) $(USER_LOGPRODUCER_B_ELF) $(USER_LOGCOLLECTOR_ELF) $(USER_BOOTPROBE_ELF) $(USER_HANDOFFCHECK_ELF) $(USER_STDIOCHECK_ELF) $(USER_STDIOBADBIND_ELF) $(USER_STDIONULLCHECK_ELF) $(USER_DUPCHECK_ELF) $(USER_HANDLELIMITCHECK_ELF) $(USER_FILEOFFSETCHECK_ELF) $(USER_SEEKCHECK_ELF) $(USER_POLLCHECK_ELF) $(USER_POLLWAITCHECK_ELF) $(USER_POLLWAKEWRITER_ELF) $(USER_POLLMANYCHECK_ELF) $(USER_CWDCHECK_ELF) $(USER_DUPFALLBACKCHECK_ELF) $(USER_FSTEST_ELF) $(USER_LOGIN_ELF) $(USER_PKGTEST_ELF) $(USER_LOGSINK_WRITER_A_ELF) $(USER_LOGSINK_WRITER_B_ELF) $(USER_TEEWRITER_ELF) $(USER_TEEREADER_A_ELF) $(USER_TEEREADER_B_ELF) $(USER_MMAPTEST_ELF) $(USER_COMPOSITOR_ELF) $(USER_DESKTOPDEMO_ELF) $(USER_DESKTOPTEST_ELF) $(USER_INIT_ELF) $(USER_SHELL_ELF) $(USER_SHELLTEST_ELF) $(INIT_CONFIG) tools/mkinitrd.py $(USER_DATE_ELF) $(USER_RTCTEST_ELF) $(USER_PS_ELF) $(USER_PROCTEST_ELF) $(USER_DIRTEST_ELF) $(USER_POWEROFF_ELF) $(USER_REBOOT_ELF) $(USER_POWERCHECK_ELF) $(USER_NETTEST_ELF) $(USER_PING_ELF) $(USER_LIBCTEST_ELF) $(USER_LINKTEST_ELF) $(USER_SYSLOGD_ELF) $(USER_LOGREAD_ELF) $(USER_LOGTEST_ELF) $(USER_MPROTECTTEST_ELF) $(USER_NSLOOKUP_ELF) $(USER_UDPTEST_ELF) $(USER_FAULTTEST_ELF)
 	mkdir -p $(BUILD_DIR)
 	python3 tools/mkinitrd.py $@ \
 		user=$(USER_HELLO_ELF) \
@@ -1004,6 +1013,7 @@ $(INITRD): $(USER_HELLO_ELF) $(USER_ECHO_ELF) $(USER_CAT_ELF) $(USER_TIME_ELF) $
 		mmaptest=$(USER_MMAPTEST_ELF) \
 		libctest=$(USER_LIBCTEST_ELF) \
 		mprotecttest=$(USER_MPROTECTTEST_ELF) \
+		faulttest=$(USER_FAULTTEST_ELF) \
 		poweroff=$(USER_POWEROFF_ELF) \
 		reboot=$(USER_REBOOT_ELF) \
 		powercheck=$(USER_POWERCHECK_ELF) \
@@ -1018,11 +1028,11 @@ $(INITRD): $(USER_HELLO_ELF) $(USER_ECHO_ELF) $(USER_CAT_ELF) $(USER_TIME_ELF) $
 		shelltest=$(USER_SHELLTEST_ELF)
 endif
 
-$(BUILD_DIR)/syscall.o: kernel/core/syscall.c kernel/core/process.h kernel/fs/vfs.h kernel/mm/paging.h kernel/include/syscall.h $(ARCH_DIR)/isr.h kernel/include/console.h kernel/include/tty.h
+$(BUILD_DIR)/syscall.o: kernel/core/syscall.c kernel/core/usercopy.h kernel/core/process.h kernel/fs/vfs.h kernel/mm/paging.h kernel/include/syscall.h $(ARCH_DIR)/isr.h kernel/include/console.h kernel/include/tty.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/process.o: kernel/core/process.c kernel/core/process.h kernel/core/pipe.h kernel/fs/vfs.h kernel/mm/paging.h kernel/mm/kheap.h
+$(BUILD_DIR)/process.o: kernel/core/process.c kernel/core/usercopy.h kernel/core/process.h kernel/core/pipe.h kernel/fs/vfs.h kernel/mm/paging.h kernel/mm/kheap.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
@@ -1031,6 +1041,10 @@ $(BUILD_DIR)/pipe.o: kernel/core/pipe.c kernel/core/pipe.h
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/spawn_args.o: kernel/core/spawn_args.c kernel/core/spawn_args.h kernel/core/process.h kernel/mm/paging.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/usercopy.o: kernel/core/usercopy.c kernel/core/usercopy.h kernel/mm/paging.h kernel/include/errno.h kernel/include/string.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
