@@ -20,6 +20,7 @@ typedef enum init_stdio_mode {
     INIT_STDIO_CHANNEL = 4,
     INIT_STDIO_TEE = 5,
     INIT_STDIO_LOGSINK = 6,
+    INIT_STDIO_SYSLOG = 7,
 } init_stdio_mode_t;
 
 enum {
@@ -27,6 +28,7 @@ enum {
     INIT_MAX_CHANNELS = 16,
     INIT_MAX_TEES = 16,
     INIT_MAX_LOGSINKS = 16,
+    INIT_MAX_SYSLOG_SOURCES = 12,
     INIT_NAME_CAP = 32,
     INIT_PATH_CAP = 64,
     INIT_CHANNEL_NAME_CAP = 32,
@@ -74,6 +76,8 @@ typedef struct init_service {
     int stdin_channel_index;
     int stdout_channel_index;
     int stderr_channel_index;
+    int syslog_source_index;
+    unsigned char log_server;
     char stdin_text[INIT_STDIO_TEXT_CAP];
     char stdout_text[INIT_STDIO_TEXT_CAP];
     char stderr_text[INIT_STDIO_TEXT_CAP];
@@ -109,6 +113,17 @@ typedef struct init_logsink {
     char expected[INIT_STREAM_CAP];
 } init_logsink_t;
 
+/*
+ * One pipe per service whose stdout/stderr go to syslogd. The write end stays
+ * in init until the service is done; syslogd receives the read end as an
+ * inherited handle and labels everything read from it with the service name.
+ */
+typedef struct init_syslog_source {
+    int service_index;
+    int read_fd;
+    int write_fd;
+} init_syslog_source_t;
+
 typedef struct init_service_table {
     init_service_t services[INIT_MAX_SERVICES];
     char names[INIT_MAX_SERVICES][INIT_NAME_CAP];
@@ -116,10 +131,13 @@ typedef struct init_service_table {
     init_channel_t channels[INIT_MAX_CHANNELS];
     init_tee_t tees[INIT_MAX_TEES];
     init_logsink_t logsinks[INIT_MAX_LOGSINKS];
+    init_syslog_source_t syslog_sources[INIT_MAX_SYSLOG_SOURCES];
+    int log_server_index;
     unsigned long count;
     unsigned long channel_count;
     unsigned long tee_count;
     unsigned long logsink_count;
+    unsigned long syslog_source_count;
 } init_service_table_t;
 
 static int tee_append(init_service_table_t *table, int tee_index,
@@ -969,6 +987,93 @@ static int channel_remove_writer_ref(init_service_table_t *table, int channel_in
     return 0;
 }
 
+static int release_output_binding(init_service_table_t *table,
+                                  init_stdio_mode_t mode, int index) {
+    if (!output_mode_uses_binding(mode) || index < 0) {
+        return 0;
+    }
+    return remove_output_binding_ref(table, mode, index);
+}
+
+static int add_syslog_source(init_service_table_t *table, int service_index) {
+    init_syslog_source_t *source;
+    if (!table || table->syslog_source_count >= INIT_MAX_SYSLOG_SOURCES) {
+        return -1;
+    }
+    source = &table->syslog_sources[table->syslog_source_count];
+    source->service_index = service_index;
+    source->read_fd = -1;
+    source->write_fd = -1;
+    return (int)table->syslog_source_count++;
+}
+
+/* Every logging service must start after the log server that will read it. */
+static int validate_syslog_topology(const init_service_table_t *table) {
+    if (!table || table->syslog_source_count == 0) {
+        return 0;
+    }
+    if (table->log_server_index < 0) {
+        return -1;
+    }
+    for (unsigned long i = 0; i < table->syslog_source_count; ++i) {
+        if (table->syslog_sources[i].service_index <= table->log_server_index) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static void close_syslog_source_write(init_service_table_t *table,
+                                      const init_service_t *svc) {
+    if (!table || !svc || svc->syslog_source_index < 0 ||
+        svc->syslog_source_index >= (int)table->syslog_source_count) {
+        return;
+    }
+    close_fd_slot(&table->syslog_sources[svc->syslog_source_index].write_fd);
+}
+
+static void close_syslog_sources(init_service_table_t *table) {
+    for (unsigned long i = 0; i < table->syslog_source_count; ++i) {
+        close_fd_slot(&table->syslog_sources[i].read_fd);
+        close_fd_slot(&table->syslog_sources[i].write_fd);
+    }
+}
+
+/*
+ * Starts the log server with "<service>:<fd>" arguments. The read ends are
+ * inherited only for this one spawn so no other service can hold a source
+ * open and delay its end-of-file.
+ */
+static long spawn_log_server(init_service_table_t *table, const init_service_t *svc) {
+    char args[INIT_MAX_SYSLOG_SOURCES][INIT_NAME_CAP + 8];
+    const char *argv[INIT_MAX_SYSLOG_SOURCES + 2];
+    unsigned long count = table->syslog_source_count;
+    long pid;
+
+    for (unsigned long i = 0; i < count; ++i) {
+        init_syslog_source_t *source = &table->syslog_sources[i];
+        if (configure_pipe(&source->read_fd, &source->write_fd) != 0 ||
+            set_handle_inherit(source->read_fd, 1) != 0 ||
+            snprintf(args[i], sizeof(args[i]), "%s:%d",
+                     table->names[source->service_index], source->read_fd) <= 0) {
+            close_syslog_sources(table);
+            return -1;
+        }
+        argv[i + 1] = args[i];
+    }
+    argv[0] = svc->name;
+    argv[count + 1] = 0;
+    pid = spawn_args(svc->path, argv, 0, SPAWN_STDIO_INHERIT, SPAWN_STDIO_INHERIT,
+                     SPAWN_STDIO_INHERIT);
+    for (unsigned long i = 0; i < count; ++i) {
+        close_fd_slot(&table->syslog_sources[i].read_fd);
+    }
+    if (pid < 0) {
+        close_syslog_sources(table);
+    }
+    return pid;
+}
+
 static int parse_stdio_mode(const char *token, const char *prefix,
                             init_stdio_mode_t *out_mode) {
     const char *value;
@@ -1147,6 +1252,8 @@ static int parse_service_line(init_service_table_t *table, char *line) {
     int stdin_channel_index = -1;
     int stdout_channel_index = -1;
     int stderr_channel_index = -1;
+    int syslog_source_index = -1;
+    int is_log_server = 0;
     char stdin_text[INIT_STDIO_TEXT_CAP];
     char stdout_text[INIT_STDIO_TEXT_CAP];
     char stderr_text[INIT_STDIO_TEXT_CAP];
@@ -1375,6 +1482,30 @@ static int parse_service_line(init_service_table_t *table, char *line) {
             stderr_text[0] = 0;
             continue;
         }
+        if (str_eq(dep, "log=server")) {
+            is_log_server = 1;
+            continue;
+        }
+        if (str_eq(dep, "stdout=syslog") || str_eq(dep, "stderr=syslog") ||
+            str_eq(dep, "log=syslog")) {
+            if (!str_eq(dep, "stderr=syslog")) {
+                if (release_output_binding(table, prev_stdout_mode, prev_stdout_index) != 0) {
+                    return -1;
+                }
+                stdout_mode = INIT_STDIO_SYSLOG;
+                stdout_channel_index = -1;
+                stdout_text[0] = 0;
+            }
+            if (!str_eq(dep, "stdout=syslog")) {
+                if (release_output_binding(table, prev_stderr_mode, prev_stderr_index) != 0) {
+                    return -1;
+                }
+                stderr_mode = INIT_STDIO_SYSLOG;
+                stderr_channel_index = -1;
+                stderr_text[0] = 0;
+            }
+            continue;
+        }
         if (parse_stdio_mode(dep, "stdin=", &stdin_mode) == 0) {
             if (input_mode_uses_binding(prev_stdin_mode) &&
                 prev_stdin_index >= 0 &&
@@ -1476,6 +1607,21 @@ static int parse_service_line(init_service_table_t *table, char *line) {
     if (!output_mode_uses_binding(stderr_mode) && stderr_channel_index >= 0) {
         return -1;
     }
+    if (is_log_server &&
+        (type != INIT_SERVICE_DAEMON || table->log_server_index >= 0 ||
+         stdin_mode != INIT_STDIO_INHERIT || stdout_mode != INIT_STDIO_INHERIT ||
+         stderr_mode != INIT_STDIO_INHERIT)) {
+        return -1;
+    }
+    if (stdout_mode == INIT_STDIO_SYSLOG || stderr_mode == INIT_STDIO_SYSLOG) {
+        syslog_source_index = add_syslog_source(table, service_index);
+        if (syslog_source_index < 0) {
+            return -1;
+        }
+    }
+    if (is_log_server) {
+        table->log_server_index = service_index;
+    }
     svc = &table->services[table->count];
     svc->name = table->names[table->count];
     svc->path = table->paths[table->count];
@@ -1491,6 +1637,8 @@ static int parse_service_line(init_service_table_t *table, char *line) {
     svc->stdin_channel_index = stdin_channel_index;
     svc->stdout_channel_index = stdout_channel_index;
     svc->stderr_channel_index = stderr_channel_index;
+    svc->syslog_source_index = syslog_source_index;
+    svc->log_server = (unsigned char)is_log_server;
     if (str_copy(svc->stdin_text, sizeof(svc->stdin_text), stdin_text) != 0 ||
         str_copy(svc->stdout_text, sizeof(svc->stdout_text), stdout_text) != 0 ||
         str_copy(svc->stderr_text, sizeof(svc->stderr_text), stderr_text) != 0) {
@@ -1525,6 +1673,8 @@ static int parse_service_config(init_service_table_t *table, char *buf) {
     table->channel_count = 0;
     table->tee_count = 0;
     table->logsink_count = 0;
+    table->syslog_source_count = 0;
+    table->log_server_index = -1;
     for (unsigned long i = 0; i < INIT_MAX_CHANNELS; ++i) {
         channel_reset(&table->channels[i]);
     }
@@ -1554,6 +1704,11 @@ static int parse_service_config(init_service_table_t *table, char *buf) {
         }
         line = next;
         line_no++;
+    }
+    if (validate_syslog_topology(table) != 0) {
+        write_str("init: syslog users need an earlier log=server daemon\n");
+        table->count = 0;
+        return -1;
     }
     return table->count == 0 ? -1 : 0;
 }
@@ -1616,6 +1771,9 @@ static long spawn_with_runtime(init_service_table_t *table, const init_service_t
     if (!table || !svc || !rt) {
         return -1;
     }
+    if (svc->log_server) {
+        return spawn_log_server(table, svc);
+    }
     if (svc->setup && svc->setup(table, svc, rt) != 0) {
         write_service_prefix(svc, " setup failed\n");
         return -1;
@@ -1674,6 +1832,13 @@ static long spawn_with_runtime(init_service_table_t *table, const init_service_t
         }
         stdout_fd = table->channels[svc->stdout_channel_index].write_fd;
         break;
+    case INIT_STDIO_SYSLOG:
+        stdout_fd = table->syslog_sources[svc->syslog_source_index].write_fd;
+        if (stdout_fd < 0) {
+            write_service_prefix(svc, " stdout syslog pipe missing\n");
+            return -1;
+        }
+        break;
     default:
         write_service_prefix(svc, " invalid stdout mode\n");
         return -1;
@@ -1700,6 +1865,13 @@ static long spawn_with_runtime(init_service_table_t *table, const init_service_t
             return -1;
         }
         stderr_fd = table->channels[svc->stderr_channel_index].write_fd;
+        break;
+    case INIT_STDIO_SYSLOG:
+        stderr_fd = table->syslog_sources[svc->syslog_source_index].write_fd;
+        if (stderr_fd < 0) {
+            write_service_prefix(svc, " stderr syslog pipe missing\n");
+            return -1;
+        }
         break;
     default:
         write_service_prefix(svc, " invalid stderr mode\n");
@@ -1803,6 +1975,7 @@ static int run_service(init_service_table_t *table, const init_service_t *svc,
             close_runtime_fds(&rt);
         }
         if (!service_should_restart(svc, success)) {
+            close_syslog_source_write(table, svc);
             return success ? 0 : 1;
         }
         if (success) {
@@ -1901,6 +2074,7 @@ int main(void) {
                 continue;
             }
             write_service_prefix(svc, " started as daemon\n");
+            close_syslog_source_write(&table, svc);
             daemon_count++;
             ready_mask |= svc->provides_mask;
             continue;

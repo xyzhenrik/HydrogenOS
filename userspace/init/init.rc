@@ -1,5 +1,6 @@
 logsink syslog "sink-a\nsink-b\n"
-service bootprobe oneshot /bootprobe 100 restart=on-failure
+service syslogd daemon /syslogd 100 log=server
+service bootprobe oneshot /bootprobe 100 restart=on-failure log=syslog syslogd
 service handoffcheck oneshot /handoffcheck 100 restart=on-failure stdin=pipe "init handoff ok\n" bootprobe
 service stdiocheck oneshot /stdiocheck 100 restart=on-failure stdin=pipe "init stdio ok\n" stdout=capture "stdiocheck: stdout ok\n" stderr=capture "stdiocheck: stderr ok\n" bootprobe handoffcheck
 service stdiobadbind oneshot /stdiobadbind 100 restart=on-failure bootprobe handoffcheck stdiocheck
@@ -36,4 +37,5 @@ service shelltest oneshot /shelltest 100 restart=on-failure stdout=capture "SHEL
 service libctest oneshot /libctest 100 restart=on-failure stdout=capture "LIBC PASS\n" bootprobe
 service cwdcheck oneshot /cwdcheck 100 restart=on-failure stdout=capture "cwdcheck: cwd ok\n" bootprobe
 service linktest oneshot /linktest 100 restart=on-failure stdout=capture "LINK PASS\n" bootprobe
-service desktopdemo daemon /desktopdemo 100 restart=always login pkgtest bootprobe handoffcheck stdiocheck stdiobadbind dupcheck handlelimitcheck fileoffsetcheck seekcheck pollcheck logcollector pipeconsumer stdionullcheck fstest desktoptest pollwaitcheck pollmanycheck dupfallbackcheck rtctest proctest dirtest mmaptest powercheck nettest shelltest cwdcheck libctest linktest
+service logtest oneshot /logtest 100 restart=on-failure stdout=capture "SYSLOG PASS\n" stderr=syslog bootprobe syslogd
+service desktopdemo daemon /desktopdemo 100 restart=always stderr=syslog login pkgtest bootprobe handoffcheck stdiocheck stdiobadbind dupcheck handlelimitcheck fileoffsetcheck seekcheck pollcheck logcollector pipeconsumer stdionullcheck fstest desktoptest pollwaitcheck pollmanycheck dupfallbackcheck rtctest proctest dirtest mmaptest powercheck nettest shelltest cwdcheck libctest linktest logtest
