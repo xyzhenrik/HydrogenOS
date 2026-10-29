@@ -55,7 +55,10 @@
 #define SYS_NET_PING 51
 #define SYS_SPAWN_ARGS 52
 #define SYS_TRY_WAIT 53
+#define SYS_MPROTECT 55
 #define SYS_PUTCHAR 255
 
 uint64_t syscall_handle(regs_t *r);
+/* Ends the current process as if it had called sys_exit(status). */
+void syscall_terminate_current(regs_t *r, uint64_t status);
 void syscall_set_user_return(uintptr_t rip, uintptr_t rsp);

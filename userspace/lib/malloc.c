@@ -14,7 +14,8 @@
  * blocks are ever adjacent. Arenas that become completely free are returned
  * to the kernel, except for one kept idle to avoid map/unmap churn.
  * Requests of MALLOC_LARGE_MIN bytes and more get a private mapping that
- * free() returns to the kernel immediately.
+ * free() returns to the kernel immediately. Each is followed by a PROT_NONE
+ * guard page so a linear overrun faults instead of corrupting a neighbour.
  */
 
 #define MALLOC_ALIGN      16u
@@ -192,12 +193,15 @@ static void block_trim(BlockHeader *b, size_t size) {
 }
 
 static void *large_alloc(size_t request) {
-    if (request > (size_t)-1 - HEADER_SIZE - MALLOC_PAGE_SIZE)
+    if (request > (size_t)-1 - HEADER_SIZE - 2u * MALLOC_PAGE_SIZE)
         return 0;
     size_t length = (request + HEADER_SIZE + MALLOC_PAGE_SIZE - 1u) & ~(size_t)(MALLOC_PAGE_SIZE - 1u);
-    BlockHeader *b = (BlockHeader *)map_pages(length);
+    BlockHeader *b = (BlockHeader *)map_pages(length + MALLOC_PAGE_SIZE);
     if (!b)
         return 0;
+    /* Without the guard the page just stays accessible; free() unmaps it
+     * either way. */
+    (void)sys_mprotect((uint8_t *)b + length, MALLOC_PAGE_SIZE, MMAP_PROT_NONE, 0);
     b->prev_size = 0;
     b->size_flags = length | BLOCK_USED | BLOCK_MAPPED;
     return block_payload(b);
@@ -241,7 +245,7 @@ void free(void *ptr) {
         return;
     BlockHeader *b = header_of(ptr);
     if (b->size_flags & BLOCK_MAPPED) {
-        (void)sys_munmap(b, block_size(b));
+        (void)sys_munmap(b, block_size(b) + MALLOC_PAGE_SIZE);
         return;
     }
     block_release(b);

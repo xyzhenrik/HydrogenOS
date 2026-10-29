@@ -238,6 +238,16 @@ static process_t *load_user_process(const uint8_t *elf, size_t elf_size,
 
   const uintptr_t user_stack = 0x0000000080100000;
   const size_t stack_pages = 16;
+  /* The page below the stack stays unmapped so an overflow faults instead of
+   * running into the image, which therefore must not reach this far. */
+  for (size_t i = 0; i <= stack_pages; ++i) {
+    if (paging_is_mapped(user_stack - 0x1000 + i * 0x1000)) {
+      kputs("user: image overlaps stack guard\n");
+      paging_switch(prev_pml4);
+      process_destroy(proc);
+      return 0;
+    }
+  }
   for (size_t i = 0; i < stack_pages; ++i) {
     uintptr_t phys = pmm_alloc_page();
     if (!phys) {
