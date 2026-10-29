@@ -50,15 +50,15 @@ int main(int argc, char **argv) {
     if (argc == 2 && argv[1][0] == '-' && argv[1][1] == 'c' && argv[1][2] == 0) {
         current_only = 1;
     } else if (argc > 1) {
-        fprintf(2, "usage: logread [-c]\n");
+        dprintf(2, "usage: logread [-c]\n");
         return 2;
     }
     if (!current_only && dump_file(LOGREAD_PATH_OLD) < 0) {
-        fprintf(2, "logread: cannot read %s\n", LOGREAD_PATH_OLD);
+        dprintf(2, "logread: cannot read %s\n", LOGREAD_PATH_OLD);
         return 1;
     }
     if (dump_file(LOGREAD_PATH) != 0) {
-        fprintf(2, "logread: cannot read %s\n", LOGREAD_PATH);
+        dprintf(2, "logread: cannot read %s\n", LOGREAD_PATH);
         return 1;
     }
     return 0;

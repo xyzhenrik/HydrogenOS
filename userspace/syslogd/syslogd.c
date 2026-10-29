@@ -54,7 +54,7 @@ static char out_buf[SYSLOG_OUT_CAP];
 static size_t out_len;
 
 static void report(const char *what) {
-    fprintf(2, "syslogd: %s\n", what);
+    dprintf(2, "syslogd: %s\n", what);
 }
 
 static void format_stamp(char *buf, size_t cap) {

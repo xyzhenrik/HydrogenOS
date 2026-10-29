@@ -144,7 +144,7 @@ int main(void) {
     snprintf(marker, sizeof(marker), "marker %lu-%lu-%lu", (unsigned long)epoch,
              (unsigned long)sys_getpid(), time_ms());
     snprintf(suffix, sizeof(suffix), "%s: %s", LOGTEST_SERVICE, marker);
-    fprintf(2, "%s\n", marker);
+    dprintf(2, "%s\n", marker);
 
     deadline = time_ms() + LOGTEST_TIMEOUT_MS;
     for (;;) {
