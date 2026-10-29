@@ -138,6 +138,7 @@ USER_DESKTOPTEST_THEME_OBJ = $(BUILD_DIR)/user_desktoptest_theme.o
 USER_DESKTOPTEST_TASKBAR_OBJ = $(BUILD_DIR)/user_desktoptest_taskbar.o
 USER_DESKTOPTEST_LAUNCHER_OBJ = $(BUILD_DIR)/user_desktoptest_launcher.o
 USER_DESKTOPTEST_FILEMANAGER_OBJ = $(BUILD_DIR)/user_desktoptest_filemanager.o
+USER_GFX_EFFECTS_OBJ = $(BUILD_DIR)/user_gfx_effects.o
 USER_INIT_OBJ = $(BUILD_DIR)/user_init.o
 USER_INIT_ELF = $(BUILD_DIR)/user_init.elf
 USER_SHELL_OBJ = $(BUILD_DIR)/user_shell.o
@@ -739,7 +740,7 @@ $(USER_SHELL_OBJ): userspace/shell/shell.c userspace/lib/syscall.h userspace/lib
 $(USER_SHELL_ELF): $(USER_SHELL_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
 	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_SHELL_OBJ)
 
-$(USER_COMPOSITOR_OBJ): userspace/compositor/compositor.c userspace/compositor/compositor.h userspace/lib/mini_libc.h userspace/lib/syscall.h
+$(USER_COMPOSITOR_OBJ): userspace/compositor/compositor.c userspace/compositor/compositor.h userspace/lib/mini_libc.h userspace/lib/syscall.h userspace/lib/gfx_effects.h userspace/lib/theme.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(USER_CFLAGS) -Iuserspace/compositor -c $< -o $@
 
@@ -747,21 +748,25 @@ $(BUILD_DIR)/input_router.o: userspace/compositor/input_router.c userspace/compo
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(USER_CFLAGS) -Iuserspace/compositor -c $< -o $@
 
-$(USER_COMPOSITOR_ELF): $(USER_COMPOSITOR_OBJ) $(BUILD_DIR)/input_router.o $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
-	$(LD) $(USER_LDFLAGS) --defsym main=comp_event_loop -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_COMPOSITOR_OBJ) $(BUILD_DIR)/input_router.o
+$(USER_GFX_EFFECTS_OBJ): userspace/lib/gfx_effects.c userspace/lib/gfx_effects.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(USER_COMPOSITOR_ELF): $(USER_COMPOSITOR_OBJ) $(BUILD_DIR)/input_router.o $(USER_GFX_EFFECTS_OBJ) $(USER_DESKTOPTEST_THEME_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
+	$(LD) $(USER_LDFLAGS) --defsym main=comp_event_loop -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_COMPOSITOR_OBJ) $(BUILD_DIR)/input_router.o $(USER_GFX_EFFECTS_OBJ) $(USER_DESKTOPTEST_THEME_OBJ)
 
 $(USER_DESKTOPDEMO_OBJ): userspace/desktopdemo/desktopdemo.c userspace/compositor/compositor.h userspace/lib/mini_libc.h userspace/lib/syscall.h userspace/lib/wallclock.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(USER_CFLAGS) -Iuserspace/compositor -c $< -o $@
 
-$(USER_DESKTOPDEMO_ELF): $(USER_DESKTOPDEMO_OBJ) $(USER_COMPOSITOR_OBJ) $(USER_WALLCLOCK_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
-	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_DESKTOPDEMO_OBJ) $(USER_COMPOSITOR_OBJ) $(USER_WALLCLOCK_OBJ)
+$(USER_DESKTOPDEMO_ELF): $(USER_DESKTOPDEMO_OBJ) $(USER_COMPOSITOR_OBJ) $(USER_GFX_EFFECTS_OBJ) $(USER_DESKTOPTEST_THEME_OBJ) $(USER_WALLCLOCK_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
+	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_DESKTOPDEMO_OBJ) $(USER_COMPOSITOR_OBJ) $(USER_GFX_EFFECTS_OBJ) $(USER_DESKTOPTEST_THEME_OBJ) $(USER_WALLCLOCK_OBJ)
 
-$(USER_DESKTOPTEST_OBJ): userspace/desktoptest/desktoptest.c userspace/compositor/compositor.h userspace/lib/mini_libc.h userspace/lib/widgets.h userspace/lib/layout.h userspace/lib/theme.h userspace/lib/taskbar.h userspace/lib/launcher.h userspace/lib/filemanager.h
+$(USER_DESKTOPTEST_OBJ): userspace/desktoptest/desktoptest.c userspace/compositor/compositor.h userspace/lib/gfx_effects.h userspace/lib/mini_libc.h userspace/lib/widgets.h userspace/lib/layout.h userspace/lib/theme.h userspace/lib/taskbar.h userspace/lib/launcher.h userspace/lib/filemanager.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(USER_CFLAGS) -Iuserspace/compositor -c $< -o $@
 
-$(USER_DESKTOPTEST_WIDGETS_OBJ): userspace/lib/widgets.c userspace/lib/widgets.h userspace/lib/mini_libc.h
+$(USER_DESKTOPTEST_WIDGETS_OBJ): userspace/lib/widgets.c userspace/lib/widgets.h userspace/lib/gfx_effects.h userspace/lib/mini_libc.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(USER_CFLAGS) -c $< -o $@
 
@@ -773,11 +778,11 @@ $(USER_DESKTOPTEST_THEME_OBJ): userspace/lib/theme.c userspace/lib/theme.h users
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(USER_CFLAGS) -c $< -o $@
 
-$(USER_DESKTOPTEST_TASKBAR_OBJ): userspace/lib/taskbar.c userspace/lib/taskbar.h userspace/lib/widgets.h userspace/lib/mini_libc.h userspace/lib/wallclock.h
+$(USER_DESKTOPTEST_TASKBAR_OBJ): userspace/lib/taskbar.c userspace/lib/taskbar.h userspace/lib/gfx_effects.h userspace/lib/theme.h userspace/lib/widgets.h userspace/lib/mini_libc.h userspace/lib/wallclock.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(USER_CFLAGS) -c $< -o $@
 
-$(USER_DESKTOPTEST_LAUNCHER_OBJ): userspace/lib/launcher.c userspace/lib/launcher.h userspace/lib/widgets.h userspace/lib/mini_libc.h
+$(USER_DESKTOPTEST_LAUNCHER_OBJ): userspace/lib/launcher.c userspace/lib/launcher.h userspace/lib/gfx_effects.h userspace/lib/theme.h userspace/lib/widgets.h userspace/lib/mini_libc.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(USER_CFLAGS) -c $< -o $@
 
@@ -785,8 +790,8 @@ $(USER_DESKTOPTEST_FILEMANAGER_OBJ): userspace/lib/filemanager.c userspace/lib/f
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(USER_CFLAGS) -c $< -o $@
 
-$(USER_DESKTOPTEST_ELF): $(USER_DESKTOPTEST_OBJ) $(USER_COMPOSITOR_OBJ) $(USER_DESKTOPTEST_WIDGETS_OBJ) $(USER_DESKTOPTEST_LAYOUT_OBJ) $(USER_DESKTOPTEST_THEME_OBJ) $(USER_DESKTOPTEST_TASKBAR_OBJ) $(USER_DESKTOPTEST_LAUNCHER_OBJ) $(USER_DESKTOPTEST_FILEMANAGER_OBJ) $(USER_WALLCLOCK_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
-	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_DESKTOPTEST_OBJ) $(USER_COMPOSITOR_OBJ) $(USER_DESKTOPTEST_WIDGETS_OBJ) $(USER_DESKTOPTEST_LAYOUT_OBJ) $(USER_DESKTOPTEST_THEME_OBJ) $(USER_DESKTOPTEST_TASKBAR_OBJ) $(USER_DESKTOPTEST_LAUNCHER_OBJ) $(USER_DESKTOPTEST_FILEMANAGER_OBJ) $(USER_WALLCLOCK_OBJ)
+$(USER_DESKTOPTEST_ELF): $(USER_DESKTOPTEST_OBJ) $(USER_COMPOSITOR_OBJ) $(USER_GFX_EFFECTS_OBJ) $(USER_DESKTOPTEST_WIDGETS_OBJ) $(USER_DESKTOPTEST_LAYOUT_OBJ) $(USER_DESKTOPTEST_THEME_OBJ) $(USER_DESKTOPTEST_TASKBAR_OBJ) $(USER_DESKTOPTEST_LAUNCHER_OBJ) $(USER_DESKTOPTEST_FILEMANAGER_OBJ) $(USER_WALLCLOCK_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
+	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_DESKTOPTEST_OBJ) $(USER_COMPOSITOR_OBJ) $(USER_GFX_EFFECTS_OBJ) $(USER_DESKTOPTEST_WIDGETS_OBJ) $(USER_DESKTOPTEST_LAYOUT_OBJ) $(USER_DESKTOPTEST_THEME_OBJ) $(USER_DESKTOPTEST_TASKBAR_OBJ) $(USER_DESKTOPTEST_LAUNCHER_OBJ) $(USER_DESKTOPTEST_FILEMANAGER_OBJ) $(USER_WALLCLOCK_OBJ)
 
 $(USER_CRT0_OBJ): userspace/lib/crt0.S
 	mkdir -p $(BUILD_DIR)

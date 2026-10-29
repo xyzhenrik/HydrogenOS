@@ -1,79 +1,98 @@
 #include "theme.h"
 
+/* Static storage: the default theme can never fail to exist. */
+static Theme theme_storage;
+static int theme_storage_ready = 0;
+
 static Theme *theme_cached_default(void) {
-    static Theme *instance = 0;
-    if (!instance) {
-        instance = (Theme *)malloc(sizeof(Theme));
-        if (instance) {
-            memset(instance, 0, sizeof(Theme));
+    Theme *instance = &theme_storage;
+    if (!theme_storage_ready) {
+        memset(instance, 0, sizeof(Theme));
 
-            instance->primary = 0x3B82F6u;
-            instance->primary_color = instance->primary;
-            instance->color_primary = instance->primary;
+        instance->primary = 0x3B82F6u;
+        instance->primary_color = instance->primary;
+        instance->color_primary = instance->primary;
 
-            instance->secondary = 0x64748Bu;
-            instance->secondary_color = instance->secondary;
-            instance->color_secondary = instance->secondary;
+        instance->secondary = 0x64748Bu;
+        instance->secondary_color = instance->secondary;
+        instance->color_secondary = instance->secondary;
 
-            instance->bg = 0x0F172Au;
-            instance->background = instance->bg;
-            instance->bg_color = instance->bg;
-            instance->background_color = instance->bg;
-            instance->color_bg = instance->bg;
+        instance->bg = 0x0F172Au;
+        instance->background = instance->bg;
+        instance->bg_color = instance->bg;
+        instance->background_color = instance->bg;
+        instance->color_bg = instance->bg;
 
-            instance->fg = 0xF8FAFCu;
-            instance->foreground = instance->fg;
-            instance->fg_color = instance->fg;
-            instance->foreground_color = instance->fg;
-            instance->text_color = instance->fg;
-            instance->color_fg = instance->fg;
+        instance->fg = 0xF8FAFCu;
+        instance->foreground = instance->fg;
+        instance->fg_color = instance->fg;
+        instance->foreground_color = instance->fg;
+        instance->text_color = instance->fg;
+        instance->color_fg = instance->fg;
 
-            instance->border = 0x334155u;
-            instance->border_color = instance->border;
-            instance->color_border = instance->border;
+        instance->border = 0x334155u;
+        instance->border_color = instance->border;
+        instance->color_border = instance->border;
 
-            instance->accent = 0xF59E0Bu;
-            instance->accent_color = instance->accent;
-            instance->color_accent = instance->accent;
+        instance->accent = 0xF59E0Bu;
+        instance->accent_color = instance->accent;
+        instance->color_accent = instance->accent;
 
-            instance->spacing = 8;
-            instance->spacing_scale = 8;
-            instance->spacing_unit = 8;
-            instance->space = 8;
-            instance->gap = 8;
-            instance->spacing_xs = 2;
-            instance->spacing_sm = 4;
-            instance->spacing_md = 8;
-            instance->spacing_lg = 16;
-            instance->spacing_xl = 32;
-            instance->spacing_small = 4;
-            instance->spacing_medium = 8;
-            instance->spacing_large = 16;
-            instance->spacings[0] = 2;
-            instance->spacings[1] = 4;
-            instance->spacings[2] = 8;
-            instance->spacings[3] = 16;
-            instance->spacings[4] = 32;
-            instance->spacings[5] = 64;
+        instance->spacing = 8;
+        instance->spacing_scale = 8;
+        instance->spacing_unit = 8;
+        instance->space = 8;
+        instance->gap = 8;
+        instance->spacing_xs = 2;
+        instance->spacing_sm = 4;
+        instance->spacing_md = 8;
+        instance->spacing_lg = 16;
+        instance->spacing_xl = 32;
+        instance->spacing_small = 4;
+        instance->spacing_medium = 8;
+        instance->spacing_large = 16;
+        instance->spacings[0] = 2;
+        instance->spacings[1] = 4;
+        instance->spacings[2] = 8;
+        instance->spacings[3] = 16;
+        instance->spacings[4] = 32;
+        instance->spacings[5] = 64;
 
-            instance->spacing_scale_struct.xs = 2;
-            instance->spacing_scale_struct.sm = 4;
-            instance->spacing_scale_struct.md = 8;
-            instance->spacing_scale_struct.lg = 16;
-            instance->spacing_scale_struct.xl = 32;
-            instance->spacing_tokens = instance->spacing_scale_struct;
-            instance->spacing_values = instance->spacing_scale_struct;
+        instance->spacing_scale_struct.xs = 2;
+        instance->spacing_scale_struct.sm = 4;
+        instance->spacing_scale_struct.md = 8;
+        instance->spacing_scale_struct.lg = 16;
+        instance->spacing_scale_struct.xl = 32;
+        instance->spacing_tokens = instance->spacing_scale_struct;
+        instance->spacing_values = instance->spacing_scale_struct;
 
-            instance->font = 16;
-            instance->font_token = 16;
-            instance->font_size = 16;
-            instance->font_id = 1;
+        instance->font = 16;
+        instance->font_token = 16;
+        instance->font_size = 16;
+        instance->font_id = 1;
 
-            instance->font_token_struct.size = 16;
-            instance->font_token_struct.token = 16;
-            instance->font_token_struct.id = 1;
-            instance->font_info = instance->font_token_struct;
-        }
+        instance->font_token_struct.size = 16;
+        instance->font_token_struct.token = 16;
+        instance->font_token_struct.id = 1;
+        instance->font_info = instance->font_token_struct;
+
+        instance->effects.window_radius = 10;
+        instance->effects.button_radius = 6;
+        instance->effects.panel_radius = 12;
+
+        /* Soft, low key shadow: wide falloff, gentle downward offset. */
+        instance->effects.shadow_blur_radius = 6;
+        instance->effects.shadow_offset_x = 0;
+        instance->effects.shadow_offset_y = 6;
+        instance->effects.shadow_alpha = 128;
+        instance->effects.shadow_color = 0x00000000u;
+
+        instance->effects.glass_blur_radius = 8;
+        instance->effects.glass_tint = 0x001B222Cu;
+        instance->effects.glass_tint_alpha = 150;
+        instance->effects.glass_highlight = 0x00FFFFFFu;
+        instance->effects.glass_highlight_alpha = 56;
+        theme_storage_ready = 1;
     }
     return instance;
 }
@@ -101,6 +120,7 @@ static void theme_apply_button(Theme *theme, Button *button) {
     button->color = theme->fg;
     button->fg = theme->fg;
     button->fg_color = theme->fg;
+    button->corner_radius = theme->effects.button_radius;
 }
 
 static void theme_apply_textinput(Theme *theme, TextInput *input) {

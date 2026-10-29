@@ -1,4 +1,6 @@
 #include "widgets.h"
+#include "gfx_effects.h"
+#include "theme.h"
 
 static const uint8_t widget_font8x16[256][16] = {
     [32] = {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00},
@@ -324,6 +326,7 @@ Button *button_create_impl(const char *label, void (*on_click)()) {
     button->background = button->bg_color;
     button->background_color = button->bg_color;
     button->on_click = on_click;
+    button->corner_radius = theme_default()->effects.button_radius;
     button->w = (int)strlen(button->label) * 8 + 16;
     button->h = 24;
     button->width = button->w;
@@ -359,8 +362,12 @@ void button_render(Button *button, Surface *surface) {
     button_sync(button);
     if (!button->visible) return;
     uint32_t bg = button->pressed ? 0x202020u : button->bg_color;
-    surface_fill_rect(surface, button->x, button->y, button->w, button->h, bg);
-    surface_draw_rect(surface, button->x, button->y, button->w, button->h, 0xFFFFFFFFu);
+    GfxCanvas canvas = { surface->pixels, surface->width, surface->height, surface->stride, 0 };
+    gfx_fill_round_rect(&canvas, button->x, button->y, button->w, button->h,
+                        button->corner_radius, bg, 255);
+    /* A faint 1px edge reads as material; a hard outline would not. */
+    gfx_stroke_round_rect(&canvas, button->x, button->y, button->w, button->h,
+                          button->corner_radius, 0xFFFFFFu, 64);
     const char *txt = button->label ? button->label : "";
     int tw = (int)strlen(txt) * 8;
     int tx = button->x + (button->w - tw) / 2;

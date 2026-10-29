@@ -103,4 +103,7 @@ void launcher_init(void);
 void launcher_show(void);
 void launcher_hide(void);
 int launcher_handle_key(int key);
+/* The panel is glass with a soft shadow over the surface's current contents:
+   the caller must restore the backdrop beneath the panel and its shadow before
+   every redraw, otherwise both accumulate. */
 void launcher_draw(Surface *surface);

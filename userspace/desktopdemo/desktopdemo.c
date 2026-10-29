@@ -1,5 +1,6 @@
 #include "mini_libc.h"
 #include "compositor.h"
+#include "gfx_effects.h"
 #include "icons.h"
 #include "syscall.h"
 #include "wallclock.h"
@@ -31,20 +32,20 @@ extern void comp_text_render(Window *win, int x, int y, const char *text, uint32
 #define COL_INPUT     0x0080FF80u
 
 typedef struct DesktopTheme {
-    uint32_t bg_top, bg_bottom, taskbar, taskbar_edge, accent;
+    uint32_t bg_top, bg_bottom, taskbar, accent;
     uint32_t win, title, title_focus, text, prompt, dim;
     uint32_t menu, menu_hi, close, min, max, edit_bg, edit_fg;
 } DesktopTheme;
 
 static const DesktopTheme g_theme_dark = {
-    0x00162030u, 0x000C121Cu, 0x001B222Cu, 0x00203040u, 0x00306090u,
+    0x00162030u, 0x000C121Cu, 0x001B222Cu, 0x00306090u,
     0x00101820u, 0x00304050u, 0x00425870u, 0x00D0D8E0u, 0x0060C060u, 0x008090A0u,
     0x00202834u, 0x00384A60u, 0x00E06060u, 0x00E0B050u, 0x0060C060u,
     0x00F0F3F6u, 0x00203040u
 };
 
 static const DesktopTheme g_theme_light = {
-    0x00E8EEF4u, 0x00C8D4E0u, 0x00D0D8E0u, 0x00B0BCC8u, 0x004080C0u,
+    0x00E8EEF4u, 0x00C8D4E0u, 0x00D0D8E0u, 0x004080C0u,
     0x00101820u, 0x00304050u, 0x00425870u, 0x00D0D8E0u, 0x0060C060u, 0x008090A0u,
     0x00202834u, 0x00384A60u, 0x00E06060u, 0x00E0B050u, 0x0060C060u,
     0x00F0F3F6u, 0x00203040u
@@ -83,7 +84,6 @@ static DesktopTheme g_th;
 #define COL_BG_TOP   (g_th.bg_top)
 #define COL_BG_BOTTOM (g_th.bg_bottom)
 #define COL_TASKBAR  (g_th.taskbar)
-#define COL_TASKBAR_E (g_th.taskbar_edge)
 
 static int g_theme;
 
@@ -126,6 +126,7 @@ static App g_apps[MAX_APPS];
 static int g_focus = -1;
 static int SW, SH;
 static Window *g_bg;
+static Window *g_taskbar;
 static Window *g_menu;
 static int g_menu_open = 0;
 static int g_mx = -1, g_my = -1, g_btn = 0;
@@ -142,12 +143,6 @@ static void draw_app_content(App *a);
 
 /* ---------------- basic drawing ---------------- */
 
-static void set_px(Window *win, int x, int y, uint32_t color) {
-    if (!win || !win->surface) return;
-    if (x < 0 || y < 0 || x >= win->w || y >= win->h) return;
-    ((uint32_t *)win->surface)[y * win->w + x] = color;
-}
-
 static void fill_rect(Window *win, int x, int y, int w, int h, uint32_t color) {
     if (!win) return;
     if (x < 0) { w += x; x = 0; }
@@ -159,23 +154,16 @@ static void fill_rect(Window *win, int x, int y, int w, int h, uint32_t color) {
             ((uint32_t *)win->surface)[yy * win->w + xx] = color;
 }
 
-static void fill_circle(Window *win, int cx, int cy, int r, uint32_t color) {
-    for (int dy = -r; dy <= r; ++dy)
-        for (int dx = -r; dx <= r; ++dx)
-            if (dx * dx + dy * dy <= r * r) set_px(win, cx + dx, cy + dy, color);
+/* Anti-aliased rounded rectangle; a square with radius = size / 2 is a disc. */
+static void rounded_rect(Window *win, int x, int y, int w, int h, int r, uint32_t color) {
+    if (!win || !win->surface) return;
+    GfxCanvas canvas = { (uint32_t *)win->surface, win->w, win->h, win->w,
+                         win->style.material == COMP_MATERIAL_GLASS };
+    gfx_fill_round_rect(&canvas, x, y, w, h, r, color & 0x00FFFFFFu, 255);
 }
 
-static void rounded_rect(Window *win, int x, int y, int w, int h, int r, uint32_t color) {
-    for (int yy = 0; yy < h; ++yy)
-        for (int xx = 0; xx < w; ++xx) {
-            int dx = 0, dy = 0;
-            if (xx < r && yy < r) { dx = r - xx; dy = r - yy; }
-            else if (xx >= w - r && yy < r) { dx = xx - (w - r - 1); dy = r - yy; }
-            else if (xx < r && yy >= h - r) { dx = r - xx; dy = yy - (h - r - 1); }
-            else if (xx >= w - r && yy >= h - r) { dx = xx - (w - r - 1); dy = yy - (h - r - 1); }
-            if (dx * dx + dy * dy > r * r) continue;
-            set_px(win, x + xx, y + yy, color);
-        }
+static void fill_circle(Window *win, int cx, int cy, int r, uint32_t color) {
+    rounded_rect(win, cx - r, cy - r, 2 * r + 1, 2 * r + 1, r, color);
 }
 
 static void draw_cursor(uint32_t *buf, int w, int h, int mx, int my) {
@@ -286,11 +274,11 @@ static void blit_icon(Window *win, int x, int y, const uint32_t *icon, int size)
             int dx = x + px, dy = y + py;
             if (dx < 0 || dy < 0 || dx >= win->w || dy >= win->h) continue;
             uint32_t *d = &dst[dy * win->w + dx];
-            uint32_t db = *d;
-            uint32_t rr = (r * a + ((db >> 16) & 0xFF) * (255 - a)) / 255;
-            uint32_t gg = (g * a + ((db >> 8) & 0xFF) * (255 - a)) / 255;
-            uint32_t bb = (b * a + (db & 0xFF) * (255 - a)) / 255;
-            *d = (rr << 16) | (gg << 8) | bb;
+            uint32_t rgb = (r << 16) | (g << 8) | b;
+            if (win->style.material == COMP_MATERIAL_GLASS)
+                *d = gfx_over(*d, 0xFF000000u | rgb, a);
+            else
+                *d = gfx_mix(*d, rgb, a) & 0x00FFFFFFu;
         }
     }
 }
@@ -335,17 +323,34 @@ static int app_is_running(int kind) {
     return 0;
 }
 
+/* The taskbar is its own glass window; surface alpha 0 is bare glass. */
+#define GLASS_CLEAR 0x00000000u
+#define GLASS_INK   0xFF000000u
+
 static void draw_taskbar(void) {
     int ty = SH - TASKBAR_H;
-    fill_rect(g_bg, 0, ty, SW, TASKBAR_H, COL_TASKBAR);
-    fill_rect(g_bg, 0, ty, SW, 2, COL_TASKBAR_E);
-    draw_icon_os(g_bg, tb_logo_x(), tb_logo_y(), 32);
+    fill_rect(g_taskbar, 0, 0, SW, TASKBAR_H, GLASS_CLEAR);
+    draw_icon_os(g_taskbar, tb_logo_x(), tb_logo_y() - ty, 32);
     for (int k = 0; k < APP_KIND_COUNT; ++k) {
-        draw_kind_icon(g_bg, k, tb_icon_x(k), tb_y(), tb_icon_s());
+        draw_kind_icon(g_taskbar, k, tb_icon_x(k), tb_y() - ty, tb_icon_s());
         if (app_is_running(k))
-            fill_rect(g_bg, tb_icon_x(k), ty + TASKBAR_H - 3, tb_icon_s(), 3, COL_ACCENT);
+            fill_rect(g_taskbar, tb_icon_x(k), TASKBAR_H - 3, tb_icon_s(), 3, GLASS_INK | COL_ACCENT);
     }
-    draw_clock(g_bg, SW - 16, ty + 20);
+    draw_clock(g_taskbar, SW - 16, 20);
+}
+
+static void style_glass(Window *win, uint32_t tint, int radius, int shadow) {
+    CompWindowStyle style;
+    comp_style_glass(&style);
+    style.glass_tint = tint;
+    style.corner_radius = radius;
+    style.shadow = shadow;
+    comp_set_window_style(win, &style);
+}
+
+static void style_chrome(void) {
+    style_glass(g_taskbar, COL_TASKBAR, 0, 0);
+    style_glass(g_menu, COL_MENU, 12, 1);
 }
 
 static void draw_background(void) {
@@ -363,6 +368,7 @@ static void draw_background(void) {
     }
     comp_text_render(g_bg, 24, 20, "HydrogenOS Desktop v0", COL_TEXT);
     fill_rect(g_bg, 24, 42, 160, 2, COL_ACCENT);
+    style_chrome();
     draw_taskbar();
 }
 
@@ -373,7 +379,7 @@ static void draw_background(void) {
 #define MENU_ROW 44
 
 static int menu_x(void) { return 12; }
-static int menu_y(void) { return SH - TASKBAR_H - MENU_H; }
+static int menu_y(void) { return SH - TASKBAR_H - MENU_H - 8; }
 
 static const char *menu_label(int i) {
     switch (i) {
@@ -387,8 +393,7 @@ static const char *menu_label(int i) {
 
 static void draw_menu(void) {
     Window *w = g_menu;
-    fill_rect(w, 0, 0, MENU_W, MENU_H, COL_MENU);
-    fill_rect(w, 0, 0, MENU_W, 1, 0x00203040u);
+    fill_rect(w, 0, 0, MENU_W, MENU_H, GLASS_CLEAR);
     comp_text_render(w, 16, 10, "Applications", COL_DIM);
     for (int i = 0; i < 5; ++i) {
         int y = 34 + i * MENU_ROW;
@@ -891,19 +896,30 @@ static void app_close(App *a) {
     comp_damage_rect(g_bg, 0, SH - TASKBAR_H, SW, TASKBAR_H);
 }
 
+/* Floating windows get rounded corners and a shadow; maximized ones are
+   flush with the screen edges. */
+static void style_app_window(Window *win, int maximized) {
+    CompWindowStyle style;
+    comp_style_window(&style);
+    if (maximized) style.corner_radius = 0;
+    comp_set_window_style(win, &style);
+}
+
 static void app_maximize(App *a) {
     Window *w = a->win;
     if (!w) return;
     if (!a->maximized) {
-        a->rx = w->x; a->ry = w->y; a->rw = w->w; a->rh = w->h;
-        comp_damage_rect(g_bg, w->x, w->y, w->w, w->h);
-        w->x = 0; w->y = 0; w->w = SW; w->h = SH - TASKBAR_H;
+        int rx = w->x, ry = w->y, rw = w->w, rh = w->h;
+        if (comp_resize_window(w, SW, SH - TASKBAR_H) != 0) return;
+        a->rx = rx; a->ry = ry; a->rw = rw; a->rh = rh;
+        w->x = 0; w->y = 0;
         a->maximized = 1;
     } else {
-        comp_damage_rect(g_bg, w->x, w->y, w->w, w->h);
-        w->x = a->rx; w->y = a->ry; w->w = a->rw; w->h = a->rh;
+        if (comp_resize_window(w, a->rw, a->rh) != 0) return;
+        w->x = a->rx; w->y = a->ry;
         a->maximized = 0;
     }
+    style_app_window(w, a->maximized);
     draw_app_content(a);
     comp_damage_rect(g_bg, w->x, w->y, w->w, w->h);
 }
@@ -937,6 +953,7 @@ static int app_open_new(int kind) {
     a->win = comp_create_window(x, y, w, h);
     if (!a->win) { a->used = 0; return -1; }
     a->win->bg_color = (kind == APP_EDIT || kind == APP_FILES || kind == APP_SETTINGS) ? COL_EDIT_BG : COL_WIN;
+    style_app_window(a->win, 0);
 
     const char *t = "Terminal";
     if (kind == APP_EDIT) t = "Editor";
@@ -1135,10 +1152,8 @@ static void handle_drag(int mx, int my) {
             if (w->x + nw > SW) nw = SW - w->x;
             if (w->y + nh > SH - TASKBAR_H) nh = SH - TASKBAR_H - w->y;
             if (nw == w->w && nh == w->h) continue;
-            comp_damage_rect(g_bg, w->x, w->y, w->w, w->h);
-            w->w = nw; w->h = nh;
+            if (comp_resize_window(w, nw, nh) != 0) continue;
             draw_app_content(a);
-            comp_damage_rect(g_bg, w->x, w->y, w->w, w->h);
         }
     }
 }
@@ -1179,9 +1194,13 @@ int main(void) {
     if (!g_bg || !g_bg->surface) return 1;
     g_bg->bg_color = COL_BG_TOP;
 
+    g_taskbar = comp_create_window(0, SH - TASKBAR_H, SW, TASKBAR_H);
+    if (!g_taskbar || !g_taskbar->surface) return 1;
+
     g_menu = comp_create_window(menu_x(), menu_y(), MENU_W, MENU_H);
     if (!g_menu || !g_menu->surface) return 1;
     g_menu->visible = 0;
+    style_chrome();
     draw_menu();
 
     draw_background();
@@ -1264,9 +1283,8 @@ int main(void) {
         unsigned long now_sec = time_ms() / 1000;
         if (now_sec != g_last_sec) {
             g_last_sec = now_sec;
-            fill_rect(g_bg, SW - 16 - CLOCK_W - 2, SH - TASKBAR_H + 16, CLOCK_W + 4, 20,
-                      COL_TASKBAR);
-            draw_clock(g_bg, SW - 16, SH - TASKBAR_H + 20);
+            fill_rect(g_taskbar, SW - 16 - CLOCK_W - 2, 16, CLOCK_W + 4, 20, GLASS_CLEAR);
+            draw_clock(g_taskbar, SW - 16, 20);
             comp_damage_rect(g_bg, SW - 16 - CLOCK_W - 2, SH - TASKBAR_H + 16, CLOCK_W + 4, 20);
             dirty = 1;
         }

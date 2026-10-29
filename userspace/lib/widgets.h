@@ -118,6 +118,7 @@ typedef struct Button {
 
     int hovered;
     int pressed;
+    int corner_radius;
 } Button;
 typedef Button button_t;
 typedef Button Button_t;

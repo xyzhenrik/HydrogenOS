@@ -1,5 +1,7 @@
 #include "taskbar.h"
 #include "wallclock.h"
+#include "gfx_effects.h"
+#include "theme.h"
 
 #ifdef taskbar_init
 #undef taskbar_init
@@ -175,12 +177,15 @@ void taskbar_draw(Surface *surface) {
     if (bar_h > h) bar_h = h;
     int bar_y = h - bar_h;
 
-    /* Background */
-    taskbar_fill_rect(surface, 0, bar_y, w, bar_h, 0xFF20242Au);
-    /* Top border */
-    taskbar_fill_rect(surface, 0, bar_y, w, 1, 0xFF3A3F4Au);
-    /* Subtle highlight */
-    taskbar_fill_rect(surface, 0, bar_y + 1, w, 1, 0xFF2A2F3Au);
+    const ThemeEffects *fx = &theme_default()->effects;
+    int stride = surface->stride > 0 ? surface->stride : w;
+    GfxCanvas canvas = { surface->pixels, w, h, stride, 0 };
+    GfxGlass glass = { fx->glass_blur_radius, 0, fx->glass_tint, fx->glass_tint_alpha,
+                       fx->glass_highlight, fx->glass_highlight_alpha };
+    if (gfx_glass_apply(&canvas, 0, bar_y, w, bar_h, &glass) != 0) {
+        /* No scratch memory for the blur: fall back to the flat tint. */
+        taskbar_fill_rect(surface, 0, bar_y, w, bar_h, fx->glass_tint);
+    }
 
     /* App icons */
     int x = 8;
@@ -190,9 +195,9 @@ void taskbar_draw(Surface *surface) {
         if (x + icon_size + 4 > w) break;
         const char *name = taskbar_apps[i] ? taskbar_apps[i] : "App";
         uint32_t col = taskbar_app_color(name);
-        /* icon tile */
-        taskbar_fill_rect(surface, x, bar_y + 4, icon_size, icon_size, col);
-        taskbar_fill_rect(surface, x + 1, bar_y + 5, icon_size - 2, icon_size - 2, 0x33FFFFFFu);
+        gfx_fill_round_rect(&canvas, x, bar_y + 4, icon_size, icon_size, fx->button_radius, col, 255);
+        gfx_stroke_round_rect(&canvas, x, bar_y + 4, icon_size, icon_size, fx->button_radius,
+                              fx->glass_highlight, fx->glass_highlight_alpha);
         /* first letter */
         char letter[2];
         letter[0] = name[0] ? name[0] : '?';
@@ -210,7 +215,7 @@ void taskbar_draw(Surface *surface) {
     int cx = w - text_w - 12;
     if (cx < 0) cx = 0;
     int cy = bar_y + (bar_h - 8) / 2;
-    /* clock pill */
-    taskbar_fill_rect(surface, cx - 6, bar_y + 6, text_w + 12, bar_h - 12, 0xFF2A2F3Au);
+    gfx_fill_round_rect(&canvas, cx - 6, bar_y + 6, text_w + 12, bar_h - 12, (bar_h - 12) / 2,
+                        fx->glass_highlight, fx->glass_highlight_alpha / 2);
     taskbar_draw_text(surface, cx, cy, buf, 0xFFE0E0E0u);
 }

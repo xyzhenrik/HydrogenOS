@@ -10,6 +10,9 @@
 #define TASKBAR_MAX_APPS 32
 
 void taskbar_init(void);
+/* The taskbar band is glass over the surface's current contents: the caller
+   must restore the backdrop beneath the band before every redraw, otherwise
+   the previous taskbar is blurred and tinted again. */
 void taskbar_draw(Surface *surface);
 void taskbar_add_app(const char *name);
 /* Re-samples the wall clock (uptime if the RTC is unavailable) for the next draw. */
