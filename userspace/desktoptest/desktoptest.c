@@ -368,7 +368,7 @@ static const char *test_taskbar(void) {
     taskbar_init();
     taskbar_add_app("Files");
     taskbar_add_app("Shell");
-    taskbar_clock_update(1500UL);
+    taskbar_clock_update();
     taskbar_draw(surface);
 
     bar_y = 120 - TASKBAR_HEIGHT;
@@ -382,7 +382,7 @@ static const char *test_taskbar(void) {
     if (tile_pixel == 0 || tile_pixel == 0xFF20242Au) {
         return "taskbar app tile";
     }
-    /* Clock pill sits left of the "1500 ms" text, which starts at x=252. */
+    /* Clock pill spans at least x=238..307 for the shortest label ("up 00:00"). */
     clock_pixel = surface->pixels[(bar_y + 7) * surface->stride + 247];
     if (clock_pixel != 0xFF2A2F3Au) {
         return "taskbar clock";

@@ -21,6 +21,7 @@ void fb_console_clear(void);
 #include "tty.h"
 #include "stat.h"
 #include "dirent.h"
+#include "rtc.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -121,6 +122,17 @@ uint64_t syscall_handle(regs_t *r) {
     case SYS_SET_LAYOUT: {
         keyboard_set_layout((int)r->rdi);
         return (uint64_t)keyboard_get_layout();
+    }
+    case SYS_RTC_TIME: {
+        hydrogen_rtc_time_t *out = (hydrogen_rtc_time_t *)(uintptr_t)r->rdi;
+        if (!user_range_ok(out, sizeof(*out)))
+            return (uint64_t)-EFAULT;
+        hydrogen_rtc_time_t now;
+        int rc = rtc_now(&now);
+        if (rc != 0)
+            return (uint64_t)(int64_t)rc;
+        *out = now;
+        return 0;
     }
     case SYS_SYSINFO: {
         uint32_t *o = (uint32_t *)(uintptr_t)r->rdi;

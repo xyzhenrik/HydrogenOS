@@ -1,15 +1,13 @@
 #include "taskbar.h"
+#include "wallclock.h"
 
 #ifdef taskbar_init
 #undef taskbar_init
 #endif
-#ifdef taskbar_clock_update
-#undef taskbar_clock_update
-#endif
 
 static char *taskbar_apps[TASKBAR_MAX_APPS];
 static int taskbar_app_count = 0;
-static unsigned long taskbar_clock_ms = 0;
+static char taskbar_clock_label[32];
 static int taskbar_ready = 0;
 
 static char *taskbar_strdup(const char *s) {
@@ -118,6 +116,8 @@ static void taskbar_draw_text(Surface *surface, int x, int y, const char *text, 
         unsigned char ch = (unsigned char)text[i];
         if (ch == '\n') { cx = x; y += 8; continue; }
         if (ch < 32 || ch > 127) { cx += 8; continue; }
+        /* The 8x8 font carries no lowercase glyphs. */
+        if (ch >= 'a' && ch <= 'z') ch = (unsigned char)(ch - 'a' + 'A');
         const unsigned char *glyph = taskbar_font8x8[ch - 32];
         for (int row = 0; row < 8; ++row) {
             unsigned char bits = glyph[row];
@@ -136,7 +136,7 @@ void taskbar_init(void) {
         taskbar_apps[i] = 0;
     }
     taskbar_app_count = 0;
-    taskbar_clock_ms = time_ms();
+    taskbar_clock_update();
     taskbar_ready = 1;
 }
 
@@ -147,8 +147,15 @@ void taskbar_add_app(const char *name) {
     taskbar_apps[taskbar_app_count++] = d;
 }
 
-void taskbar_clock_update(unsigned long time_ms) {
-    taskbar_clock_ms = time_ms;
+void taskbar_clock_update(void) {
+    CivilTime now;
+    if (wallclock_now(&now, 0, 0) == 0 &&
+        time_format(taskbar_clock_label, sizeof(taskbar_clock_label),
+                    TIME_FORMAT_SHORT, &now) > 0)
+        return;
+    unsigned long minutes = time_ms() / 60000;
+    snprintf(taskbar_clock_label, sizeof(taskbar_clock_label), "up %02lu:%02lu",
+             minutes / 60, minutes % 60);
 }
 
 static uint32_t taskbar_app_color(const char *name) {
@@ -198,8 +205,7 @@ void taskbar_draw(Surface *surface) {
     }
 
     /* Clock on right */
-    char buf[64];
-    snprintf(buf, sizeof(buf), "%lu ms", taskbar_clock_ms);
+    const char *buf = taskbar_clock_label;
     int text_w = (int)strlen(buf) * 8;
     int cx = w - text_w - 12;
     if (cx < 0) cx = 0;

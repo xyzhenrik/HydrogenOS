@@ -12,14 +12,8 @@
 void taskbar_init(void);
 void taskbar_draw(Surface *surface);
 void taskbar_add_app(const char *name);
-void taskbar_clock_update(unsigned long time_ms);
-
-#define TASKBAR_CLOCK_UPDATE_IMPL(has, ...) TASKBAR_CLOCK_UPDATE_IMPL_X(has, __VA_ARGS__)
-#define TASKBAR_CLOCK_UPDATE_IMPL_X(has, ...) TASKBAR_CLOCK_UPDATE_IMPL_##has(__VA_ARGS__)
-#define TASKBAR_CLOCK_UPDATE_IMPL_(...) taskbar_clock_update(time_ms())
-#define TASKBAR_CLOCK_UPDATE_IMPL_1(...) taskbar_clock_update(__VA_ARGS__)
-
-#define taskbar_clock_update(...) TASKBAR_CLOCK_UPDATE_IMPL(__VA_OPT__(1), __VA_ARGS__)
+/* Re-samples the wall clock (uptime if the RTC is unavailable) for the next draw. */
+void taskbar_clock_update(void);
 
 #define taskbar_init(...) taskbar_init()
 
@@ -33,6 +27,6 @@ void taskbar_clock_update(unsigned long time_ms);
 #define taskbar_push_app(name) taskbar_add_app(name)
 #define taskbar_add_application(name) taskbar_add_app(name)
 
-#define taskbar_update_clock(...) taskbar_clock_update(__VA_ARGS__)
-#define taskbar_clock(...) taskbar_clock_update(__VA_ARGS__)
-#define taskbar_set_clock(...) taskbar_clock_update(__VA_ARGS__)
+#define taskbar_update_clock() taskbar_clock_update()
+#define taskbar_clock() taskbar_clock_update()
+#define taskbar_set_clock() taskbar_clock_update()

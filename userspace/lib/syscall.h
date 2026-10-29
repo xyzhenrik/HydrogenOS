@@ -45,6 +45,7 @@
 #define SYS_FB_CLEAR 42
 #define SYS_SYSINFO 43
 #define SYS_SET_LAYOUT 44
+#define SYS_RTC_TIME 54
 
 #define PRIO_IDLE   0
 #define PRIO_NORMAL 1
@@ -298,4 +299,10 @@ static inline long sys_sysinfo(sysinfo_t *out) {
 
 static inline long sys_set_layout(int layout) {
     return syscall1(SYS_SET_LAYOUT, layout);
+}
+
+struct hydrogen_rtc_time;
+
+static inline long sys_rtc_time(struct hydrogen_rtc_time *out) {
+    return syscall1(SYS_RTC_TIME, (long)out);
 }

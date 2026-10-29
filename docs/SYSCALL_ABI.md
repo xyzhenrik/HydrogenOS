@@ -82,9 +82,11 @@ Beispiel: `-2` entspricht `ENOENT`.
 | 21 | sys_poll | `int fd, uint32_t events` | Sofortige Readiness-Abfrage fuer einen Handle |
 | 22 | sys_poll_wait | `int fd, uint32_t events, int64_t timeout_ms` | Blockierend auf Handle-Readiness warten |
 | 23 | sys_poll_many | `struct poll_fd* fds, uint32_t count, int64_t timeout_ms` | Mehrere FDs gleichzeitig pollen/warten |
+| 54 | sys_rtc_time | `struct hydrogen_rtc_time* out` | UTC-Wanduhr: Epoch-Sekunden, Millisekunden und aufgeschluesselte Felder (Jahr, Monat 1-12, Tag, Stunde, Minute, Sekunde, Wochentag 0=Sonntag); `-EFAULT` bei ungueltigem Pointer, `-EIO` wenn die CMOS-RTC beim Boot nicht lesbar war |
 
 > Weitere Syscalls werden fortlaufend ergaenzt. Neue Syscalls erhalten **neue Nummern**; bestehende Nummern werden nie umgebogen.
 > Aktuell implementiert: `sys_exit`, `sys_write`, `sys_read`, `sys_open`, `sys_close`, `sys_lseek`, `sys_spawn`, `sys_spawn_with_stdio`, `sys_wait`, `sys_getpid`, `sys_yield`, `sys_sleep`, `sys_time_ms`, `sys_tty_set_color`, `sys_pipe`, `sys_handle_set_inherit`, `sys_dup`, `sys_dup2`, `sys_dup3`, `sys_poll`, `sys_poll_wait`, `sys_poll_many` (und ein undokumentiertes `sys_putchar` fuer Debug-Ausgaben).
+> `sys_rtc_time` liest die CMOS-RTC einmal beim Boot (Jahrhundert-Register aus der ACPI-FADT, sonst 20xx) und fuehrt die Wanduhr danach ueber den monotonen Timer fort; Layout siehe `kernel/include/rtc_time.h`.
 > Der aktuelle Kernel behandelt `sys_wait` als blockierendes Warten auf einen direkten Child-Prozess; unbekannte oder fremde PIDs liefern `-ENOENT`.
 
 ## Error Codes (Subset)

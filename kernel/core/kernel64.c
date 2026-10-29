@@ -22,6 +22,7 @@
 #include "paging.h"
 #include "pic.h"
 #include "pit.h"
+#include "rtc.h"
 #include "pmm.h"
 #include "process.h"
 #include "serial.h"
@@ -523,6 +524,8 @@ void kmain64(uint64_t magic, uint64_t multiboot_info_addr) {
   pic_remap(0x20, 0x28);
   pit_init(100);
   time_init(100);
+  if (rtc_init() != 0)
+    serial_write("[RTC] CMOS clock unreadable, wall time unavailable\n");
   outb(0x21, 0xF8); // IRQ0, IRQ1, IRQ2 frei
   outb(0xA1, 0xEF); // IRQ12 frei
   keyboard_init();
