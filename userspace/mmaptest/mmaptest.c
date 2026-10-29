@@ -53,8 +53,8 @@ static int all_bytes(const unsigned char *p, unsigned long len, unsigned char v)
 static int check_errors(void) {
     if (sys_mmap(0, 0, PROT_RW, 0) != RC_EINVAL)
         return fail("len 0 accepted");
-    if (sys_mmap(0, PAGE_SIZE, 0, 0) != RC_EINVAL)
-        return fail("prot none accepted");
+    if (sys_mmap(0, PAGE_SIZE, MMAP_PROT_EXEC, 0) != RC_EINVAL)
+        return fail("exec-only accepted");
     if (sys_mmap(0, PAGE_SIZE, MMAP_PROT_WRITE, 0) != RC_EINVAL)
         return fail("write-only accepted");
     if (sys_mmap(0, PAGE_SIZE, PROT_RW | 0x8u, 0) != RC_EINVAL)
@@ -112,7 +112,7 @@ static int check_basic(void) {
     if (!in_area(ro, PAGE_SIZE) || !all_bytes((unsigned char *)ro, PAGE_SIZE, 0))
         return fail("read-only map");
 
-    long code = sys_mmap(0, PAGE_SIZE, PROT_RW | MMAP_PROT_EXEC, 0);
+    long code = sys_mmap(0, PAGE_SIZE, PROT_RW | MMAP_PROT_EXEC, MMAP_FLAG_ALLOW_WX);
     if (!in_area(code, PAGE_SIZE))
         return fail("exec map");
     static const unsigned char ret_42[] = { 0xB8, 0x2A, 0x00, 0x00, 0x00, 0xC3 };

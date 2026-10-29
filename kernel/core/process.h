@@ -35,6 +35,10 @@ enum {
     PROCESS_DUP3_CLOSE_ON_SPAWN = 1u << 1,
 };
 
+/* Exit status of a process killed by a CPU exception in user mode
+ * (128 + SIGSEGV, matching the shell convention for fatal signals). */
+#define PROCESS_EXIT_FAULTED 139
+
 typedef enum process_state {
     PROCESS_RUNNABLE = 0,
     PROCESS_BLOCKED_WAIT = 1,

@@ -53,6 +53,7 @@
 #define SYS_NET_PING 51
 #define SYS_SPAWN_ARGS 52
 #define SYS_TRY_WAIT 53
+#define SYS_MPROTECT 55
 #define SYS_LINK 63
 #define SYS_SYMLINK 64
 #define SYS_READLINK 65
@@ -91,6 +92,10 @@
 #define MMAP_PROT_READ  (1u << 0)
 #define MMAP_PROT_WRITE (1u << 1)
 #define MMAP_PROT_EXEC  (1u << 2)
+#define MMAP_PROT_NONE  0u
+
+/* Without this flag sys_mmap and sys_mprotect refuse WRITE|EXEC (W^X). */
+#define MMAP_FLAG_ALLOW_WX (1u << 1)
 
 static inline long syscall6(long n, long a1, long a2, long a3, long a4, long a5, long a6) {
     long ret;
@@ -300,6 +305,11 @@ static inline long sys_mmap(void *hint, unsigned long len, unsigned int prot,
 
 static inline long sys_munmap(void *addr, unsigned long len) {
     return syscall2(SYS_MUNMAP, (long)addr, (long)len);
+}
+
+static inline long sys_mprotect(void *addr, unsigned long len, unsigned int prot,
+                                unsigned int flags) {
+    return syscall4(SYS_MPROTECT, (long)addr, (long)len, (long)prot, (long)flags);
 }
 
 /* sys_fb_info() result when the boot path provided no linear framebuffer. */

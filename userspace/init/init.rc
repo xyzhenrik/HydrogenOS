@@ -31,6 +31,7 @@ service rtctest oneshot /rtctest 100 restart=on-failure stdout=capture "RTC PASS
 service proctest oneshot /proctest 100 restart=on-failure stdout=capture "PROC PASS\n" bootprobe
 service dirtest oneshot /dirtest 100 restart=on-failure stdout=capture "DIRTEST PASS\n" bootprobe
 service mmaptest oneshot /mmaptest 100 restart=on-failure stdout=capture "MMAP PASS\n" bootprobe
+service mprotecttest oneshot /mprotecttest 100 restart=on-failure stdout=capture "MPROTECT PASS\n" bootprobe
 service powercheck oneshot /powercheck 100 restart=on-failure stdout=capture "POWERCHECK PASS\n" bootprobe
 service nettest oneshot /nettest 100 restart=on-failure stdout=capture "NET PASS\n" bootprobe
 service shelltest oneshot /shelltest 100 restart=on-failure stdout=capture "SHELL PASS\n" bootprobe
@@ -38,4 +39,4 @@ service libctest oneshot /libctest 100 restart=on-failure stdout=capture "LIBC P
 service cwdcheck oneshot /cwdcheck 100 restart=on-failure stdout=capture "cwdcheck: cwd ok\n" bootprobe
 service linktest oneshot /linktest 100 restart=on-failure stdout=capture "LINK PASS\n" bootprobe
 service logtest oneshot /logtest 100 restart=on-failure stdout=capture "SYSLOG PASS\n" stderr=syslog bootprobe syslogd
-service desktopdemo daemon /desktopdemo 100 restart=always stderr=syslog login pkgtest bootprobe handoffcheck stdiocheck stdiobadbind dupcheck handlelimitcheck fileoffsetcheck seekcheck pollcheck logcollector pipeconsumer stdionullcheck fstest desktoptest pollwaitcheck pollmanycheck dupfallbackcheck rtctest proctest dirtest mmaptest powercheck nettest shelltest cwdcheck libctest linktest logtest
+service desktopdemo daemon /desktopdemo 100 restart=always stderr=syslog login pkgtest bootprobe handoffcheck stdiocheck stdiobadbind dupcheck handlelimitcheck fileoffsetcheck seekcheck pollcheck logcollector pipeconsumer stdionullcheck fstest desktoptest pollwaitcheck pollmanycheck dupfallbackcheck rtctest proctest dirtest mmaptest powercheck nettest shelltest cwdcheck libctest linktest logtest mprotecttest

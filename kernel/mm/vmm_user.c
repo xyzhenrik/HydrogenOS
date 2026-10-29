@@ -8,8 +8,9 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* Bounds kernel-heap use per process; adjacent regions merge, so real
- * workloads stay far below this. */
+/* Bounds kernel-heap use per process; adjacent regions with equal protection
+ * merge, but every guard page keeps its neighbours apart, so a process holds
+ * at most about half this many guarded large allocations. */
 #define VMM_USER_MAX_REGIONS 4096u
 #define VMM_USER_PROT_MASK \
     (VMM_USER_PROT_READ | VMM_USER_PROT_WRITE | VMM_USER_PROT_EXEC)
@@ -33,12 +34,25 @@ static size_t page_round_up(size_t length) {
 }
 
 static uint64_t prot_to_page_flags(uint32_t prot) {
+    if (prot == 0)
+        return PAGE_PROT_NONE;
     uint64_t flags = PAGE_USER;
     if (prot & VMM_USER_PROT_WRITE)
         flags |= PAGE_RW;
     if (!(prot & VMM_USER_PROT_EXEC))
         flags |= PAGE_NO_EXEC;
     return flags;
+}
+
+static int prot_check(uint32_t prot, uint32_t flags) {
+    if ((flags & ~VMM_USER_FLAG_ALLOW_WX) || (prot & ~VMM_USER_PROT_MASK))
+        return -EINVAL;
+    if (prot != 0 && !(prot & VMM_USER_PROT_READ))
+        return -EINVAL;
+    if ((prot & VMM_USER_PROT_WRITE) && (prot & VMM_USER_PROT_EXEC) &&
+        !(flags & VMM_USER_FLAG_ALLOW_WX))
+        return -EACCES;
+    return 0;
 }
 
 static int range_is_free(const VmmUserSpace *space, uintptr_t start,
@@ -112,10 +126,11 @@ int vmm_user_map(VmmUserSpace *space, uint64_t *pml4, uintptr_t hint,
                  uintptr_t *out_addr) {
     if (!space || !pml4 || !out_addr)
         return -EINVAL;
-    if (flags != 0 || length == 0)
+    if (length == 0)
         return -EINVAL;
-    if ((prot & ~VMM_USER_PROT_MASK) || !(prot & VMM_USER_PROT_READ))
-        return -EINVAL;
+    int rc = prot_check(prot, flags);
+    if (rc != 0)
+        return rc;
     if (hint & (VMM_USER_PAGE_SIZE - 1))
         return -EINVAL;
     if (length > VMM_USER_MMAP_LIMIT - VMM_USER_MMAP_BASE)
@@ -236,6 +251,105 @@ int vmm_user_unmap(VmmUserSpace *space, uint64_t *pml4, uintptr_t addr,
             r->start = end;
         link = &r->next;
     }
+    return 0;
+}
+
+/* Splits the region containing `point` into two at that address; `spare` is
+ * the descriptor for the upper half. Returns 1 if it was consumed. */
+static int split_at(VmmUserSpace *space, uintptr_t point, VmmUserRegion *spare) {
+    for (VmmUserRegion *r = space->regions; r && r->start < point; r = r->next) {
+        if (r->end <= point)
+            continue;
+        spare->start = point;
+        spare->end = r->end;
+        spare->prot = r->prot;
+        spare->next = r->next;
+        r->end = point;
+        r->next = spare;
+        space->region_count++;
+        return 1;
+    }
+    return 0;
+}
+
+/* Re-joins neighbouring regions with equal protection around [start, end]. */
+static void merge_around(VmmUserSpace *space, uintptr_t start, uintptr_t end) {
+    VmmUserRegion *prev;
+    VmmUserRegion *next;
+    find_neighbors(space, start, &prev, &next);
+    VmmUserRegion *r = prev ? prev : space->regions;
+    while (r && r->next && r->start <= end) {
+        VmmUserRegion *following = r->next;
+        if (r->end == following->start && r->prot == following->prot) {
+            r->end = following->end;
+            r->next = following->next;
+            kfree(following);
+            space->region_count--;
+        } else {
+            r = following;
+        }
+    }
+}
+
+int vmm_user_protect(VmmUserSpace *space, uint64_t *pml4, uintptr_t addr,
+                     size_t length, uint32_t prot, uint32_t flags) {
+    if (!space || !pml4)
+        return -EINVAL;
+    if (length == 0 || (addr & (VMM_USER_PAGE_SIZE - 1)))
+        return -EINVAL;
+    if (addr < VMM_USER_MMAP_BASE || addr >= VMM_USER_MMAP_LIMIT ||
+        length > VMM_USER_MMAP_LIMIT - addr)
+        return -EINVAL;
+    int rc = prot_check(prot, flags);
+    if (rc != 0)
+        return rc;
+    /* Cannot pass the limit: both addr and the limit are page aligned. */
+    uintptr_t end = addr + page_round_up(length);
+
+    /* The range must be covered without gaps; every page that is not a whole
+     * region needs one split, so at most two extra descriptors are used. */
+    uintptr_t covered = addr;
+    uint32_t splits = 0;
+    for (const VmmUserRegion *r = space->regions; r && r->start < end; r = r->next) {
+        if (r->end <= addr)
+            continue;
+        if (r->start > covered)
+            break;
+        if (r->start < addr)
+            splits++;
+        if (r->end > end)
+            splits++;
+        covered = r->end;
+    }
+    if (covered < end)
+        return -ENOMEM;
+    if (space->region_count + splits > VMM_USER_MAX_REGIONS)
+        return -ENOMEM;
+
+    VmmUserRegion *spares[2] = {0, 0};
+    for (uint32_t i = 0; i < splits; ++i) {
+        spares[i] = (VmmUserRegion *)kalloc(sizeof(*spares[i]));
+        if (!spares[i]) {
+            while (i > 0)
+                kfree(spares[--i]);
+            return -ENOMEM;
+        }
+    }
+
+    paging_user_protect_range(pml4, addr, end - addr, prot_to_page_flags(prot));
+
+    uint32_t used = 0;
+    if (split_at(space, addr, spares[used]))
+        used++;
+    if (split_at(space, end, spares[used]))
+        used++;
+    for (VmmUserRegion *r = space->regions; r && r->start < end; r = r->next) {
+        if (r->start >= addr)
+            r->prot = prot;
+    }
+    merge_around(space, addr, end);
+    for (uint32_t i = used; i < splits; ++i)
+        kfree(spares[i]);
     return 0;
 }
 

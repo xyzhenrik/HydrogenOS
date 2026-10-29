@@ -89,6 +89,7 @@ Beispiel: `-2` entspricht `ENOENT`.
 | 50 | sys_net_info | `struct net_info* out` | MAC, IPv4-Konfiguration, Link-Status und Frame-Zaehler der Netzwerkschnittstelle |
 | 51 | sys_net_ping | `uint32_t ipv4, int64_t timeout_ms` | ICMP-Echo senden und blockierend auf die Antwort warten; liefert RTT in ms |
 | 54 | sys_rtc_time | `struct hydrogen_rtc_time* out` | UTC-Wanduhr: Epoch-Sekunden, Millisekunden und aufgeschluesselte Felder (Jahr, Monat 1-12, Tag, Stunde, Minute, Sekunde, Wochentag 0=Sonntag); `-EFAULT` bei ungueltigem Pointer, `-EIO` wenn die CMOS-RTC beim Boot nicht lesbar war |
+| 55 | sys_mprotect | `void* addr, size_t len, uint32_t prot, uint32_t flags` | Schutz eines vollstaendig gemappten Bereichs aendern (inkl. `PROT_NONE`) |
 
 | 52 | sys_spawn_args | `const char* path, const char* const* argv, const char* const* envp, int stdin_fd, int stdout_fd, int stderr_fd` | Prozess mit argv/envp und explizitem Child-stdio starten |
 | 53 | sys_try_wait | `int pid, int* status` | Nicht blockierend pruefen, ob ein direkter Child-Prozess beendet ist |
@@ -106,11 +107,16 @@ Beispiel: `-2` entspricht `ENOENT`.
 ## Anonymer Speicher (sys_mmap / sys_munmap)
 - Alle Mappings liegen in einem eigenen Fenster `0x0000_0080_0000_0000 .. 0x0000_7000_0000_0000` (ab PML4-Slot 1) und kollidieren daher nie mit ELF-Segmenten oder dem User-Stack.
 - Seitengranular: `len` wird auf 4 KiB aufgerundet, Seiten werden sofort alloziert und genullt.
-- `prot`: `MMAP_PROT_READ (1)`, `MMAP_PROT_WRITE (2)`, `MMAP_PROT_EXEC (4)`. `READ` ist Pflicht; ohne `EXEC` werden die Seiten per NX nicht ausfuehrbar markiert (sofern die CPU NX kann).
+- `prot`: `MMAP_PROT_READ (1)`, `MMAP_PROT_WRITE (2)`, `MMAP_PROT_EXEC (4)` oder `MMAP_PROT_NONE (0)`. Ausser bei `NONE` ist `READ` Pflicht; ohne `EXEC` werden die Seiten per NX nicht ausfuehrbar markiert (sofern die CPU NX kann).
+- `PROT_NONE`-Seiten sind angelegt (Frame vorhanden, zaehlt zum Speicherverbrauch), aber jeder Zugriff aus dem User-Mode loest einen Fault aus. Typischer Einsatz: Guard-Pages.
+- W^X: `WRITE|EXEC` zusammen wird mit `-EACCES` abgelehnt, ausser `flags` enthaelt `MMAP_FLAG_ALLOW_WX (2)`.
 - `hint`: `0` oder seitenausgerichtete Wunschadresse; ist der Bereich im Fenster frei, wird er genommen, sonst waehlt der Kernel den niedrigsten freien Bereich.
-- `flags` ist reserviert und muss `0` sein.
-- Fehler: `-EINVAL` (len 0, unbekannte/fehlende prot-Bits, flags != 0, unausgerichteter hint/addr, Bereich ausserhalb des Fensters), `-ENOMEM` (kein Adressraum, kein physischer Speicher oder Region-Limit erreicht). Ein fehlgeschlagenes `sys_mmap` hinterlaesst keine Teil-Mappings.
+- `flags` ist `0` oder `MMAP_FLAG_ALLOW_WX (2)`; alle anderen Bits sind reserviert.
+- Fehler: `-EINVAL` (len 0, unbekannte/fehlende prot-Bits, unbekannte flags, unausgerichteter hint/addr, Bereich ausserhalb des Fensters), `-EACCES` (`WRITE|EXEC` ohne `MMAP_FLAG_ALLOW_WX`), `-ENOMEM` (kein Adressraum, kein physischer Speicher oder Region-Limit erreicht). Ein fehlgeschlagenes `sys_mmap` hinterlaesst keine Teil-Mappings.
 - `sys_munmap` darf Teile eines Mappings entfernen (Kopf, Ende, Mitte); nicht gemappte Teile des Bereichs werden ignoriert.
+- `sys_mprotect` aendert `prot` fuer `[addr, addr+len)` (`len` auf Seiten aufgerundet). Der Bereich muss lueckenlos in Mappings liegen: ausserhalb des Fensters oder unausgerichtet `-EINVAL`, nicht vollstaendig gemappt `-ENOMEM`. Mappings werden bei Bedarf geteilt und gleich geschuetzte Nachbarn wieder zusammengefuehrt; reicht das Region-Limit fuer eine Teilung nicht, kommt `-ENOMEM`. `prot`/`flags` gelten wie bei `sys_mmap`. Bei einem Fehler bleibt alles unveraendert; der Seiteninhalt bleibt bei jeder Schutzaenderung erhalten.
+- Ein Zugriff, den die Seitenrechte verbieten (Schreiben auf `READ`, jeder Zugriff auf `NONE`, Ausfuehren ohne `EXEC`, Zugriff auf ungemappte Seiten), beendet den Prozess mit Exit-Status `139` (128 + SIGSEGV); der Kernel meldet den Fault auf der Konsole. Der User-Stack hat eine `PROT_NONE`-Guard-Page unter sich (ausserhalb des mmap-Fensters, nicht per `sys_mprotect` aenderbar), und `malloc` haengt an jedes grosse Mapping (ab 128 KiB) eine `PROT_NONE`-Seite; dadurch zaehlt jede solche Allokation zwei Regionen, und `malloc` liefert bei erschoepftem Region-Limit 0.
+- Syscalls mit User-Puffern, die eine `PROT_NONE`-Seite beruehren, schlagen mit `-EFAULT` fehl. Schreibzugriffe des Kernels auf `READ`-Seiten werden noch nicht abgefangen (CR0.WP ist aus).
 - Beim Prozess-Exit werden alle Mappings automatisch freigegeben.
 - Die frueheren Nummern 34/35 (brk-artiges Mapping) sind stillgelegt und werden nicht wiederverwendet.
 ## Netzwerk (sys_net_info / sys_net_ping)

@@ -238,6 +238,27 @@ static process_t *load_user_process(const uint8_t *elf, size_t elf_size,
 
   const uintptr_t user_stack = 0x0000000080100000;
   const size_t stack_pages = 16;
+  /* A PROT_NONE page below the stack makes an overflow fault instead of
+   * running into whatever lies beneath, so the image must not reach it. */
+  for (size_t i = 0; i <= stack_pages; ++i) {
+    if (paging_is_mapped(user_stack - 0x1000 + i * 0x1000)) {
+      kputs("user: image overlaps stack guard\n");
+      paging_switch(prev_pml4);
+      process_destroy(proc);
+      return 0;
+    }
+  }
+  uintptr_t guard_phys = pmm_alloc_page();
+  if (!guard_phys ||
+      paging_user_map_page(user_pml4, user_stack - 0x1000, guard_phys,
+                           PAGE_PROT_NONE) != 0) {
+    if (guard_phys)
+      pmm_free_page(guard_phys);
+    kputs("user: no memory for stack guard\n");
+    paging_switch(prev_pml4);
+    process_destroy(proc);
+    return 0;
+  }
   for (size_t i = 0; i < stack_pages; ++i) {
     uintptr_t phys = pmm_alloc_page();
     if (!phys) {

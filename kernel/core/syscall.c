@@ -49,6 +49,10 @@ static int user_range_ok(const void *ptr, size_t len) {
     uintptr_t end = start + len - 1;
     if (end < start) return 0;
     if (end >= (uintptr_t)KERNEL_VMA_BASE) return 0;
+    /* Kernel accesses ignore page rights (CR0.WP is off), so guard pages must
+     * be refused here or a syscall buffer could run straight through them. */
+    if (paging_user_range_has_prot_none(paging_current_pml4(), start, len))
+        return 0;
     return 1;
 }
 
@@ -199,17 +203,21 @@ static void user_return_to_kernel(regs_t *r, uint64_t status) {
     user_return_rsp = 0;
 }
 
+void syscall_terminate_current(regs_t *r, uint64_t status) {
+    process_t *exiting = process_current();
+    int is_bootstrap = (exiting == bootstrap_proc);
+    process_mark_exited(exiting, (int)status);
+    if (is_bootstrap && !process_has_runnable_other_than(exiting)) {
+        bootstrap_proc = 0;
+        user_return_to_kernel(r, status);
+        process_destroy(exiting);
+    }
+}
+
 uint64_t syscall_handle(regs_t *r) {
     switch (r->rax) {
     case SYS_EXIT: {
-        process_t *exiting = process_current();
-        int is_bootstrap = (exiting == bootstrap_proc);
-        process_mark_exited(exiting, (int)r->rdi);
-        if (is_bootstrap && !process_has_runnable_other_than(exiting)) {
-            bootstrap_proc = 0;
-            user_return_to_kernel(r, r->rdi);
-            process_destroy(exiting);
-        }
+        syscall_terminate_current(r, r->rdi);
         return 0;
     }
     case SYS_SET_LAYOUT: {
@@ -1025,6 +1033,16 @@ uint64_t syscall_handle(regs_t *r) {
         return (uint64_t)(int64_t)vmm_user_unmap(&proc->vm, proc->pml4,
                                                  (uintptr_t)r->rdi,
                                                  (size_t)r->rsi);
+    }
+    case SYS_MPROTECT: {
+        process_t *proc = process_current();
+        if (!proc || !proc->pml4 || proc->pml4 == paging_kernel_pml4())
+            return (uint64_t)-EPERM;
+        return (uint64_t)(int64_t)vmm_user_protect(&proc->vm, proc->pml4,
+                                                   (uintptr_t)r->rdi,
+                                                   (size_t)r->rsi,
+                                                   (uint32_t)r->rdx,
+                                                   (uint32_t)r->r10);
     }
     case SYS_NET_INFO: {
         net_info_t *out = (net_info_t *)(uintptr_t)r->rdi;
