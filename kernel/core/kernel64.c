@@ -510,6 +510,9 @@ void kmain64(uint64_t magic, uint64_t multiboot_info_addr) {
   paging_init();
   process_init(paging_kernel_pml4());
 
+  /* Display drivers probe the PCI registry, so enumerate before fb_init. */
+  pci_init();
+  pci_dump_devices();
   int fb_ok = fb_init((uintptr_t)multiboot_info_addr);
   if (fb_ok == 0) {
     fb_clear(0x00101010);
@@ -528,8 +531,6 @@ void kmain64(uint64_t magic, uint64_t multiboot_info_addr) {
   keyboard_init();
   mouse_init();
   ata_init();
-  pci_init();
-  pci_dump_devices();
   block_init();
   block_cache_init();
   initrd_setup((uintptr_t)multiboot_info_addr);

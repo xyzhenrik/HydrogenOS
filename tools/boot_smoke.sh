@@ -10,7 +10,7 @@ LOG_FILE="$BUILD_DIR/boot_smoke.log"
 SUCCESS_STR="HydrogenOS bootet"
 # BOOT_MODE=iso boots through GRUB (needs grub-mkrescue + xorriso) and gets a
 # VBE framebuffer. BOOT_MODE=kernel uses QEMU's multiboot loader directly; it
-# provides no VBE mode, so the desktop markers depend on a native display driver.
+# provides no VBE mode, so the desktop runs on the native BGA (std VGA) driver.
 BOOT_MODE="${BOOT_MODE:-}"
 if [ -z "$BOOT_MODE" ]; then
   if command -v grub-mkrescue >/dev/null 2>&1 && command -v xorriso >/dev/null 2>&1; then
@@ -19,10 +19,7 @@ if [ -z "$BOOT_MODE" ]; then
     BOOT_MODE=kernel
   fi
 fi
-REQUIRE_DESKTOP="${REQUIRE_DESKTOP:-}"
-if [ -z "$REQUIRE_DESKTOP" ]; then
-  if [ "$BOOT_MODE" = "iso" ]; then REQUIRE_DESKTOP=1; else REQUIRE_DESKTOP=0; fi
-fi
+REQUIRE_DESKTOP="${REQUIRE_DESKTOP:-1}"
 
 if [ "$ARCH" = "x86_64" ]; then
   SUCCESS_STR="init: shell start"
@@ -43,6 +40,7 @@ if [ "$ARCH" = "x86_64" ] && [ "$BOOT_MODE" = "kernel" ]; then
     -initrd "$ROOT_DIR/build/$ARCH/initrd.cpio" \
     -drive if=virtio,format=raw,file="$ROOT_DIR/build/$ARCH/disk.img" \
     -m 256M \
+    -vga std \
     -serial stdio \
     -display none \
     -no-reboot -no-shutdown \
