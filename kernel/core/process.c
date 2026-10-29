@@ -1,4 +1,5 @@
 #include "process.h"
+#include "core/perf.h"
 #include "core/time.h"
 #include "errno.h"
 #include "keyboard.h"
@@ -748,6 +749,8 @@ static void process_fill_info(const process_t *p, process_info_t *out) {
     out->is_current = (p == current_proc);
     out->handle_count = process_count_handles(p);
     out->user_pages = (uint32_t)paging_count_user_pages(p->pml4);
+    out->user_cycles = p->user_cycles;
+    out->kernel_cycles = p->kernel_cycles;
     for (uint32_t i = 0; i < PROCESS_NAME_CAP; ++i) {
         out->name[i] = p->name[i];
         if (p->name[i] == '\0')
@@ -1103,6 +1106,9 @@ process_t *process_create(uint64_t *pml4, uint32_t parent_pid) {
     p->waiting_socket_fd = -1;
     vmm_user_init(&p->vm);
     signal_state_init(&p->signals);
+    p->user_cycles = 0;
+    p->kernel_cycles = 0;
+    p->perf_was_blocked = 0;
     process_clear_poll_wait(p);
     p->kernel_wait_fn = 0;
     p->kernel_wait_arg = 0;
@@ -2188,6 +2194,8 @@ regs_t *process_schedule(regs_t *r) {
         return r;
     }
 
+    perf_sched_enter(prev, prev->alive && prev->state != PROCESS_RUNNABLE);
+
     if (prev->alive) {
         process_set_frame(prev, r);
         if (prev->timeslice_ms > 0) {
@@ -2239,6 +2247,7 @@ regs_t *process_schedule(regs_t *r) {
             if (next->timeslice_ms == 0) {
                 next->timeslice_ms = process_timeslice_for_prio(next->priority);
             }
+            perf_sched_dispatch(prev, next);
             if (prev && prev != next && !prev->alive) {
                 process_destroy(prev);
             }
@@ -2252,8 +2261,10 @@ regs_t *process_schedule(regs_t *r) {
             process_destroy(prev);
             prev = 0;
         }
+        perf_idle_enter();
         /* sti directly followed by hlt cannot lose a wakeup interrupt. */
         __asm__ volatile("sti\n\thlt\n\tcli");
+        perf_idle_leave();
         process_update_timed_waits();
     }
 }

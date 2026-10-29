@@ -1,6 +1,7 @@
 #include "isr.h"
 #include "apic.h"
 #include "console.h"
+#include "core/perf.h"
 #include "core/time.h"
 #include "keyboard.h"
 #include "mouse.h"
@@ -82,9 +83,11 @@ static int isr_user_fault(const regs_t *r) {
     return 1;
 }
 
-regs_t *isr_handler(regs_t *r) {
+static regs_t *isr_dispatch(regs_t *r) {
     if (r->int_no == 128) {
+        uint64_t number = r->rax;
         r->rax = syscall_handle(r);
+        perf_syscall_done(number);
         if (process_current() != process_kernel()) {
             return isr_reschedule(r);
         }
@@ -147,4 +150,11 @@ regs_t *isr_handler(regs_t *r) {
     }
 
     return r;
+}
+
+regs_t *isr_handler(regs_t *r) {
+    int from_user = perf_trap_enter(r);
+    regs_t *next = isr_dispatch(r);
+    perf_trap_exit(from_user, next);
+    return next;
 }

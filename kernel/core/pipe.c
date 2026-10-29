@@ -1,5 +1,7 @@
 #include "pipe.h"
 
+#include "core/perf.h"
+
 enum {
     KERNEL_PIPE_POOL_SIZE = 64,
     KERNEL_PIPE_BUFFER_CAP = KERNEL_PIPE_CAPACITY,
@@ -105,6 +107,7 @@ int kernel_pipe_read(kernel_pipe_t *pipe, uint8_t *out, uint32_t out_sz,
         pipe->size--;
         (*out_len)++;
     }
+    perf_count_pipe_read(*out_len);
     if (*out_len == 0 && pipe->writers > 0) {
         return 1;
     }
@@ -122,6 +125,7 @@ int kernel_pipe_write(kernel_pipe_t *pipe, const uint8_t *in, uint32_t in_sz,
         pipe->size++;
         (*out_len)++;
     }
+    perf_count_pipe_write(*out_len);
     if (*out_len == 0 && pipe->size >= KERNEL_PIPE_BUFFER_CAP) {
         return 1;
     }

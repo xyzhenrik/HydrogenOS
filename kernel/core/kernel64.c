@@ -1,6 +1,7 @@
 #include <stdint.h>
 
 #include "console.h"
+#include "core/perf.h"
 #include "core/time.h"
 #include "drivers/ata.h"
 #include "drivers/pci.h"
@@ -540,6 +541,7 @@ void kmain64(uint64_t magic, uint64_t multiboot_info_addr) {
   pic_remap(0x20, 0x28);
   pit_init(100);
   time_init(100);
+  perf_init();
   acpi_init();
   if (rtc_init() != 0)
     serial_write("[RTC] CMOS clock unreadable, wall time unavailable\n");

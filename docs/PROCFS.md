@@ -5,7 +5,7 @@ mounts at `/proc` during `vfs_init`, right after the root filesystem.
 It has no backing store: every `read`/`stat` renders the file from live
 kernel state. Offsets are honoured against that fresh rendering, so a reader
 that needs a consistent snapshot should fetch the file with one large read
-(all files fit in 1 KiB).
+(all files fit in 2 KiB).
 
 Writes, `mkdir`, `unlink` and `rename` below `/proc` fail.
 
@@ -16,8 +16,11 @@ Writes, `mkdir`, `unlink` and `rename` below `/proc` fail.
 | `/proc/meminfo`      | file | physical memory and kernel heap usage      |
 | `/proc/uptime`       | file | seconds since boot, `"<s>.<cc>\n"`         |
 | `/proc/version`      | file | `"HydrogenOS <version> <arch>\n"`          |
+| `/proc/stat`         | file | system-wide performance counters           |
+| `/proc/interrupts`   | file | per-vector interrupt counts                |
 | `/proc/<pid>/`       | dir  | one per live process, listed in pid order  |
 | `/proc/<pid>/status` | file | per-process status                         |
+| `/proc/<pid>/stat`   | file | per-process CPU accounting                 |
 
 Only canonical decimal pids resolve (`/proc/07` does not). Processes that
 have exited are not listed, even while their exit status is still unreaped.
@@ -46,6 +49,25 @@ not by line number; new fields may be appended.
 `HeapFree`, `HeapLargestFree` (B; block headers excluded, so
 `HeapUsed + HeapFree == HeapTotal`).
 
+`/proc/<pid>/stat` (changes on every read, hence separate from `status`):
+
+| Field          | Meaning                                                  |
+|----------------|----------------------------------------------------------|
+| `Name`, `Pid`, `State` | as in `status`                                   |
+| `Tsc`          | TSC at render time; the time base for the two below      |
+| `UserCycles`   | TSC ticks the process spent in user mode                 |
+| `KernelCycles` | TSC ticks the kernel spent working for it (syscalls, its interrupts, scheduling) |
+
+`/proc/stat` mirrors the counters of `sys_perf_read` (see `docs/PERF.md`):
+`Tsc`, `TscKHz`, `CpuUser`, `CpuKernel`, `CpuIdle`, `CtxSwitches`,
+`Wakeups`, `IdleEntries`, `Syscalls`, `Interrupts`, `PageFaults`,
+`PipeReadBytes`, `PipeWriteBytes`, `NetRxPackets`, `NetTxPackets`,
+`NetRxBytes`, `NetTxBytes`.
+
+`/proc/interrupts` has one line `<vector>: <count> <name>` per vector that has
+fired, counts right-aligned, e.g. `  32:        10231 timer`. Vector 128 is
+the syscall entry; vectors below 32 are CPU exceptions.
+
 ## Kernel interface
 
 procfs reads the process table only through the snapshot accessors in
@@ -55,6 +77,8 @@ into a `process_info_t` and never hand out `process_t` pointers.
 ## Userspace
 
 - `/ps` prints one line per process from `/proc/<pid>/status`.
+- `/top` refreshes a CPU-share table from `/proc/<pid>/stat`, `/perfstat`
+  reports the performance counters (docs/PERF.md).
 - `/proctest` is the boot test (`PROC PASS`): it checks its own status,
   chunked and seeked reads, `meminfo`, `uptime`, `version`, the `/proc`
   listing and rejection of invalid paths and writes.
