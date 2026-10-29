@@ -239,6 +239,40 @@ int64_t signal_sigaction(process_t *p, int sig, uint64_t act_user,
     return 0;
 }
 
+int64_t signal_sigprocmask(process_t *p, int how, uint64_t set,
+                           uint64_t old_user) {
+    signal_state_t *state = &p->signals;
+    uint32_t previous = state->blocked;
+    uint32_t updated;
+
+    if (how != SIG_BLOCK && how != SIG_UNBLOCK && how != SIG_SETMASK)
+        return -EINVAL;
+    if ((set & ~(uint64_t)SIGNAL_VALID_MASK) != 0)
+        return -EINVAL;
+    if (old_user &&
+        user_range_validate((const void *)(uintptr_t)old_user,
+                            sizeof(previous), USER_ACCESS_WRITE) != 0)
+        return -EFAULT;
+
+    switch (how) {
+    case SIG_BLOCK:
+        updated = previous | (uint32_t)set;
+        break;
+    case SIG_UNBLOCK:
+        updated = previous & ~(uint32_t)set;
+        break;
+    default:
+        updated = (uint32_t)set;
+        break;
+    }
+    state->blocked = updated & ~SIGNAL_BIT(SIGKILL);
+
+    if (old_user)
+        return copy_to_user((void *)(uintptr_t)old_user, &previous,
+                            sizeof(previous));
+    return 0;
+}
+
 int signal_from_exception(uint64_t vector) {
     switch (vector) {
     case 0:  /* divide error */

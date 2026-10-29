@@ -22,6 +22,11 @@
 
 #define SIGNAL_COUNT 32
 
+/* "how" argument of SYS_SIGPROCMASK. */
+#define SIG_BLOCK   0
+#define SIG_UNBLOCK 1
+#define SIG_SETMASK 2
+
 #define SIG_DFL 0ULL
 #define SIG_IGN 1ULL
 

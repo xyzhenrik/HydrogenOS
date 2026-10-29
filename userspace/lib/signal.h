@@ -22,6 +22,11 @@
 
 #define SIGNAL_BIT(sig) (1u << (sig))
 
+/* "how" argument of sigprocmask. */
+#define SIG_BLOCK   0
+#define SIG_UNBLOCK 1
+#define SIG_SETMASK 2
+
 /* Exit statuses of processes killed by a signal carry this flag. */
 #define SIGNAL_STATUS_SIGNALED 0x40000000
 #define WIFSIGNALED(status) (((status) & SIGNAL_STATUS_SIGNALED) != 0)
@@ -51,6 +56,11 @@ void sigreturn_trampoline(void);
 
 long sigaction(int sig, const sigaction_t *act, sigaction_t *old);
 long kill(int pid, int sig);
+
+/* Changes the calling process's blocked-signal mask and stores the previous
+ * one in *old (if not 0). A blocked signal stays pending until it is
+ * unblocked; SIGKILL cannot be blocked. A query is SIG_BLOCK with set 0. */
+long sigprocmask(int how, unsigned int set, unsigned int *old);
 
 /* Installs a handler with the sigreturn trampoline as its return path. */
 long signal_install(int sig, signal_handler_t handler);

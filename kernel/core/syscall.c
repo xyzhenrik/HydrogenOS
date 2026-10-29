@@ -1098,6 +1098,9 @@ uint64_t syscall_handle(regs_t *r) {
     case SYS_SIGACTION:
         return (uint64_t)signal_sigaction(process_current(), (int)r->rdi,
                                           r->rsi, r->rdx);
+    case SYS_SIGPROCMASK:
+        return (uint64_t)signal_sigprocmask(process_current(), (int)r->rdi,
+                                            r->rsi, r->rdx);
     case SYS_SIGRETURN:
         /* The restored rax becomes the result of the interrupted code. */
         if (signal_return(process_current(), r) != 0)

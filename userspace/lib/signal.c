@@ -43,6 +43,10 @@ long kill(int pid, int sig) {
     return sys_kill(pid, sig);
 }
 
+long sigprocmask(int how, unsigned int set, unsigned int *old) {
+    return sys_sigprocmask(how, set, old);
+}
+
 long signal_install(int sig, signal_handler_t handler) {
     sigaction_t act = {
         .handler = (unsigned long)handler,

@@ -42,6 +42,14 @@ int64_t signal_kill(uint32_t pid, int sig);
 int64_t signal_sigaction(struct process *p, int sig, uint64_t act_user,
                          uint64_t old_user);
 
+/* Changes p's blocked-signal mask (SIG_BLOCK, SIG_UNBLOCK or SIG_SETMASK with
+ * the signals in set) and stores the previous mask at old_user if it is not
+ * 0. SIGKILL is never blocked. Signals that become deliverable run when p
+ * returns to user mode. -EINVAL for a bad "how" or unknown signals in set,
+ * -EFAULT for an unmapped old_user. */
+int64_t signal_sigprocmask(struct process *p, int how, uint64_t set,
+                           uint64_t old_user);
+
 /* Restores p from the sigcontext at the user stack pointer of r. On success r
  * holds the restored state; an invalid context kills p with SIGSEGV and
  * returns -EFAULT. */
