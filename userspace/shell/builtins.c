@@ -48,8 +48,8 @@ static int builtin_help(int argc, char **argv) {
     (void)argc;
     (void)argv;
     out_str(1,
-            "Builtins: cat cd cp echo env exit export false help jobs ls mkdir mv\n"
-            "          pwd rm sleep time touch true unset wait\n"
+            "Builtins: cat cd cp echo env exit export false help jobs ln ls mkdir mv\n"
+            "          pwd readlink rm sleep time touch true unset wait\n"
             "Diagnostics: pipe piperun pipenoinherit pipeblock pipefull\n"
             "          pipebroken pipeeof pollpipe pollwaitpipe pollmanypipe\n"
             "Syntax:   a | b   a && b   a || b   a ; b   a &\n"
@@ -115,12 +115,27 @@ static int builtin_cat(int argc, char **argv) {
     return status;
 }
 
+/* Appends " -> target" if path is a symlink. */
+static void print_link_target(const char *path) {
+    char target[COPY_PATH_MAX];
+    long length = sys_readlink(path, target, sizeof(target) - 1);
+    if (length <= 0)
+        return;
+    target[length] = 0;
+    out_str(1, " -> ");
+    out_str(1, target);
+}
+
 static void list_directory(const char *path) {
     dirent_t entry;
+    char full[COPY_PATH_MAX + DIRENT_NAME_MAX + 2];
     for (int pos = 0; readdir_pos(path, pos, &entry) == 1; ++pos) {
         out_str(1, entry.d_name);
         if (entry.d_type == 4)
             out_char(1, '/');
+        if (entry.d_type == 10 &&
+            snprintf(full, sizeof(full), "%s/%s", path, entry.d_name) < (int)sizeof(full))
+            print_link_target(full);
         out_char(1, '\n');
     }
 }
@@ -140,6 +155,7 @@ static int builtin_ls(int argc, char **argv) {
         }
         if (!S_ISDIR(st.st_mode)) {
             out_str(1, argv[i]);
+            print_link_target(argv[i]);
             out_char(1, '\n');
             continue;
         }
@@ -228,6 +244,40 @@ static int builtin_mv(int argc, char **argv) {
         return STATUS_FAILURE;
     }
     return 0;
+}
+
+static int builtin_ln(int argc, char **argv) {
+    int symbolic = argc > 1 && str_eq(argv[1], "-s");
+    int first = symbolic ? 2 : 1;
+    if (argc - first != 2)
+        return usage("ln", "usage: ln [-s] <target> <link>");
+    long rc = symbolic ? sys_symlink(argv[first], argv[first + 1])
+                       : sys_link(argv[first], argv[first + 1]);
+    if (rc != 0) {
+        out_error("ln", argv[first + 1],
+                  symbolic ? "cannot create symbolic link" : "cannot create hard link");
+        return STATUS_FAILURE;
+    }
+    return 0;
+}
+
+static int builtin_readlink(int argc, char **argv) {
+    int status = 0;
+    if (argc < 2)
+        return usage("readlink", "usage: readlink <link>...");
+    for (int i = 1; i < argc; ++i) {
+        char target[COPY_PATH_MAX];
+        long length = sys_readlink(argv[i], target, sizeof(target) - 1);
+        if (length <= 0) {
+            out_error("readlink", argv[i], "not a symbolic link");
+            status = STATUS_FAILURE;
+            continue;
+        }
+        target[length] = 0;
+        out_str(1, target);
+        out_char(1, '\n');
+    }
+    return status;
 }
 
 static int write_all(int fd, const char *buf, size_t len) {
@@ -488,10 +538,12 @@ static const BuiltinEntry builtins[] = {
     {"false", builtin_false},
     {"help", builtin_help},
     {"jobs", builtin_jobs},
+    {"ln", builtin_ln},
     {"ls", builtin_ls},
     {"mkdir", builtin_mkdir},
     {"mv", builtin_mv},
     {"pwd", builtin_pwd},
+    {"readlink", builtin_readlink},
     {"rm", builtin_rm},
     {"sleep", builtin_sleep},
     {"time", builtin_time},

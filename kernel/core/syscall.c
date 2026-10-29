@@ -134,6 +134,20 @@ static int copy_resolved_user_path(process_t *proc, const char *uptr,
     return 0;
 }
 
+/* Like copy_resolved_user_path, but also expands symlinks (see vfs_resolve).
+   Returns 0 or a negative errno value. */
+static int copy_followed_user_path(process_t *proc, const char *uptr,
+                                   char *dst, size_t dst_sz, int follow_final) {
+    if (copy_resolved_user_path(proc, uptr, dst, dst_sz) != 0)
+        return -EFAULT;
+    if (!vfs_is_ready())
+        return 0;
+    int rc = vfs_resolve(dst, follow_final, dst, (uint32_t)dst_sz);
+    if (rc == 0 || rc == -ELOOP || rc == -ENAMETOOLONG)
+        return rc;
+    return -EIO;
+}
+
 /* Filesystem drivers return negative errno values; anything outside the
    set a namespace operation can legitimately report is surfaced as EIO.
    EPERM is deliberately excluded: it equals the bare -1 the VFS layer
@@ -151,6 +165,10 @@ static uint64_t fs_status(int rc) {
     case -EBUSY:
     case -EROFS:
     case -EMLINK:
+    case -EXDEV:
+    case -ELOOP:
+    case -ENAMETOOLONG:
+    case -EOPNOTSUPP:
         return (uint64_t)(int64_t)rc;
     default:
         return (uint64_t)-EIO;
@@ -389,8 +407,9 @@ uint64_t syscall_handle(regs_t *r) {
             return (uint64_t)-ENOENT;
         process_t *proc = process_current();
         char kpath[PROCESS_HANDLE_PATH_CAP];
-        if (copy_resolved_user_path(proc, path, kpath, sizeof(kpath)) != 0)
-            return (uint64_t)-EFAULT;
+        int path_rc = copy_followed_user_path(proc, path, kpath, sizeof(kpath), 1);
+        if (path_rc != 0)
+            return (uint64_t)(int64_t)path_rc;
         int handle = process_handle_open_file(proc, kpath, flags);
         if (handle == PROCESS_RESOURCE_NO_HANDLE_SLOT)
             return (uint64_t)-EMFILE;
@@ -547,8 +566,9 @@ uint64_t syscall_handle(regs_t *r) {
         if (!path)
             return (uint64_t)-EFAULT;
         char kpath[PROCESS_CWD_CAP];
-        if (copy_resolved_user_path(proc, path, kpath, sizeof(kpath)) != 0)
-            return (uint64_t)-EFAULT;
+        int path_rc = copy_followed_user_path(proc, path, kpath, sizeof(kpath), 1);
+        if (path_rc != 0)
+            return (uint64_t)(int64_t)path_rc;
         uint64_t pid = 0;
         int rc = user_spawn_from_vfs(kpath, r, &pid);
         if (rc != 0)
@@ -564,8 +584,9 @@ uint64_t syscall_handle(regs_t *r) {
         if (!path)
             return (uint64_t)-EFAULT;
         char kpath[PROCESS_CWD_CAP];
-        if (copy_resolved_user_path(proc, path, kpath, sizeof(kpath)) != 0)
-            return (uint64_t)-EFAULT;
+        int path_rc = copy_followed_user_path(proc, path, kpath, sizeof(kpath), 1);
+        if (path_rc != 0)
+            return (uint64_t)(int64_t)path_rc;
         uint64_t pid = 0;
         int rc = user_spawn_with_stdio_from_vfs(kpath, r, &pid,
                                                 stdin_fd, stdout_fd, stderr_fd);
@@ -584,8 +605,9 @@ uint64_t syscall_handle(regs_t *r) {
         if (!path)
             return (uint64_t)-EFAULT;
         char kpath[PROCESS_CWD_CAP];
-        if (copy_resolved_user_path(proc, path, kpath, sizeof(kpath)) != 0)
-            return (uint64_t)-EFAULT;
+        int path_rc = copy_followed_user_path(proc, path, kpath, sizeof(kpath), 1);
+        if (path_rc != 0)
+            return (uint64_t)(int64_t)path_rc;
         spawn_args_t *args = (spawn_args_t *)kalloc(sizeof(spawn_args_t));
         if (!args)
             return (uint64_t)-ENOMEM;
@@ -737,12 +759,16 @@ uint64_t syscall_handle(regs_t *r) {
     case SYS_STAT: {
         const char *path = (const char *)(uintptr_t)r->rdi;
         hydrogen_stat_t *buf = (hydrogen_stat_t *)(uintptr_t)r->rsi;
+        uint32_t flags = (uint32_t)r->rdx;
         process_t *proc = process_current();
         char kpath[PROCESS_CWD_CAP];
         if (!path)
             return (uint64_t)-EFAULT;
-        if (copy_resolved_user_path(proc, path, kpath, sizeof(kpath)) != 0)
-            return (uint64_t)-EFAULT;
+        if ((flags & ~(uint32_t)STAT_NOFOLLOW) != 0)
+            return (uint64_t)-EINVAL;
+        int path_rc = copy_followed_user_path(proc, path, kpath, sizeof(kpath), (flags & STAT_NOFOLLOW) == 0);
+        if (path_rc != 0)
+            return (uint64_t)(int64_t)path_rc;
         if (!buf || !user_range_ok(buf, sizeof(hydrogen_stat_t)))
             return (uint64_t)-EFAULT;
         if (!vfs_is_ready())
@@ -784,8 +810,9 @@ uint64_t syscall_handle(regs_t *r) {
         char kpath[PROCESS_CWD_CAP];
         if (!path)
             return (uint64_t)-EFAULT;
-        if (copy_resolved_user_path(proc, path, kpath, sizeof(kpath)) != 0)
-            return (uint64_t)-EFAULT;
+        int path_rc = copy_followed_user_path(proc, path, kpath, sizeof(kpath), 1);
+        if (path_rc != 0)
+            return (uint64_t)(int64_t)path_rc;
         if (!buf || !user_range_ok(buf, sizeof(hydrogen_dirent_t)))
             return (uint64_t)-EFAULT;
         if (!vfs_is_ready())
@@ -820,8 +847,9 @@ uint64_t syscall_handle(regs_t *r) {
         if (!path)
             return (uint64_t)-EFAULT;
         char newcwd[PROCESS_CWD_CAP];
-        if (copy_resolved_user_path(proc, path, newcwd, sizeof(newcwd)) != 0)
-            return (uint64_t)-EFAULT;
+        int path_rc = copy_followed_user_path(proc, path, newcwd, sizeof(newcwd), 1);
+        if (path_rc != 0)
+            return (uint64_t)(int64_t)path_rc;
         if (!vfs_is_ready())
             return (uint64_t)-ENOENT;
         vfs_stat_t st;
@@ -844,8 +872,9 @@ uint64_t syscall_handle(regs_t *r) {
         if (!path)
             return (uint64_t)-EFAULT;
         char kpath[PROCESS_CWD_CAP];
-        if (copy_resolved_user_path(proc, path, kpath, sizeof(kpath)) != 0)
-            return (uint64_t)-EFAULT;
+        int path_rc = copy_followed_user_path(proc, path, kpath, sizeof(kpath), 0);
+        if (path_rc != 0)
+            return (uint64_t)(int64_t)path_rc;
         if (!vfs_is_ready())
             return (uint64_t)-EIO;
         return fs_status(vfs_mkdir(kpath));
@@ -856,8 +885,9 @@ uint64_t syscall_handle(regs_t *r) {
         if (!path)
             return (uint64_t)-EFAULT;
         char kpath[PROCESS_CWD_CAP];
-        if (copy_resolved_user_path(proc, path, kpath, sizeof(kpath)) != 0)
-            return (uint64_t)-EFAULT;
+        int path_rc = copy_followed_user_path(proc, path, kpath, sizeof(kpath), 0);
+        if (path_rc != 0)
+            return (uint64_t)(int64_t)path_rc;
         if (!vfs_is_ready())
             return (uint64_t)-EIO;
         return fs_status(vfs_rmdir(kpath));
@@ -868,8 +898,9 @@ uint64_t syscall_handle(regs_t *r) {
         if (!path)
             return (uint64_t)-EFAULT;
         char kpath[PROCESS_CWD_CAP];
-        if (copy_resolved_user_path(proc, path, kpath, sizeof(kpath)) != 0)
-            return (uint64_t)-EFAULT;
+        int path_rc = copy_followed_user_path(proc, path, kpath, sizeof(kpath), 0);
+        if (path_rc != 0)
+            return (uint64_t)(int64_t)path_rc;
         if (!vfs_is_ready())
             return (uint64_t)-EIO;
         return fs_status(vfs_unlink(kpath));
@@ -882,13 +913,81 @@ uint64_t syscall_handle(regs_t *r) {
             return (uint64_t)-EFAULT;
         char kold[PROCESS_CWD_CAP];
         char knew[PROCESS_CWD_CAP];
-        if (copy_resolved_user_path(proc, old_path, kold, sizeof(kold)) != 0)
-            return (uint64_t)-EFAULT;
-        if (copy_resolved_user_path(proc, new_path, knew, sizeof(knew)) != 0)
-            return (uint64_t)-EFAULT;
+        int old_rc = copy_followed_user_path(proc, old_path, kold, sizeof(kold), 0);
+        if (old_rc != 0)
+            return (uint64_t)(int64_t)old_rc;
+        int new_rc = copy_followed_user_path(proc, new_path, knew, sizeof(knew), 0);
+        if (new_rc != 0)
+            return (uint64_t)(int64_t)new_rc;
         if (!vfs_is_ready())
             return (uint64_t)-EIO;
         return fs_status(vfs_rename(kold, knew));
+    }
+    case SYS_LINK: {
+        const char *old_path = (const char *)(uintptr_t)r->rdi;
+        const char *new_path = (const char *)(uintptr_t)r->rsi;
+        process_t *proc = process_current();
+        if (!old_path || !new_path)
+            return (uint64_t)-EFAULT;
+        char kold[PROCESS_CWD_CAP];
+        char knew[PROCESS_CWD_CAP];
+        int old_rc = copy_followed_user_path(proc, old_path, kold, sizeof(kold), 0);
+        if (old_rc != 0)
+            return (uint64_t)(int64_t)old_rc;
+        int new_rc = copy_followed_user_path(proc, new_path, knew, sizeof(knew), 0);
+        if (new_rc != 0)
+            return (uint64_t)(int64_t)new_rc;
+        if (!vfs_is_ready())
+            return (uint64_t)-EIO;
+        return fs_status(vfs_link(kold, knew));
+    }
+    case SYS_SYMLINK: {
+        const char *target = (const char *)(uintptr_t)r->rdi;
+        const char *link_path = (const char *)(uintptr_t)r->rsi;
+        process_t *proc = process_current();
+        if (!target || !link_path)
+            return (uint64_t)-EFAULT;
+        /* The target is stored verbatim and only interpreted when followed. */
+        char ktarget[VFS_PATH_MAX];
+        char klink[PROCESS_CWD_CAP];
+        if (user_str_copy(target, ktarget, sizeof(ktarget)) != 0)
+            return (uint64_t)-EFAULT;
+        int link_rc = copy_followed_user_path(proc, link_path, klink, sizeof(klink), 0);
+        if (link_rc != 0)
+            return (uint64_t)(int64_t)link_rc;
+        if (!vfs_is_ready())
+            return (uint64_t)-EIO;
+        return fs_status(vfs_symlink(ktarget, klink));
+    }
+    case SYS_READLINK: {
+        const char *path = (const char *)(uintptr_t)r->rdi;
+        char *buf = (char *)(uintptr_t)r->rsi;
+        size_t cap = (size_t)r->rdx;
+        process_t *proc = process_current();
+        if (!path)
+            return (uint64_t)-EFAULT;
+        if (cap == 0)
+            return (uint64_t)-EINVAL;
+        if (!user_range_ok(buf, cap))
+            return (uint64_t)-EFAULT;
+        char kpath[PROCESS_CWD_CAP];
+        int path_rc = copy_followed_user_path(proc, path, kpath, sizeof(kpath), 0);
+        if (path_rc != 0)
+            return (uint64_t)(int64_t)path_rc;
+        if (!vfs_is_ready())
+            return (uint64_t)-EIO;
+        char ktarget[VFS_PATH_MAX];
+        int len = vfs_readlink(kpath, ktarget, sizeof(ktarget));
+        if (len == -EINVAL || len == -ENOENT || len == -ENOTDIR)
+            return (uint64_t)(int64_t)len;
+        if (len < 0)
+            return (uint64_t)-EIO;
+        /* Like readlink(2), the result is truncated to the buffer and not
+           NUL-terminated. */
+        size_t copied = (size_t)len < cap ? (size_t)len : cap;
+        for (size_t i = 0; i < copied; ++i)
+            buf[i] = ktarget[i];
+        return copied;
     }
     case SYS_WRITEF: {
         const char *path = (const char *)(uintptr_t)r->rdi;
@@ -898,8 +997,9 @@ uint64_t syscall_handle(regs_t *r) {
         if (!path)
             return (uint64_t)-EFAULT;
         char kpath[PROCESS_CWD_CAP];
-        if (copy_resolved_user_path(proc, path, kpath, sizeof(kpath)) != 0)
-            return (uint64_t)-EFAULT;
+        int path_rc = copy_followed_user_path(proc, path, kpath, sizeof(kpath), 1);
+        if (path_rc != 0)
+            return (uint64_t)(int64_t)path_rc;
         if (size > 0 && !user_range_ok(data, size))
             return (uint64_t)-EFAULT;
         if (!vfs_is_ready())

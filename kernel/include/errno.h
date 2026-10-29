@@ -11,6 +11,7 @@
 #define EFAULT     14
 #define EBUSY      16
 #define EEXIST     17
+#define EXDEV      18
 #define ENODEV     19
 #define ENOTDIR    20
 #define EISDIR     21
@@ -23,8 +24,11 @@
 #define EMLINK     31
 #define EPIPE      32
 #define ERANGE     34
+#define ENAMETOOLONG 36
 #define ENOSYS     38
 #define ENOTEMPTY  39
+#define ELOOP      40
+#define EOPNOTSUPP 95
 #define ENETDOWN   100
 #define ENETUNREACH 101
 #define ETIMEDOUT  110

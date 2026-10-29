@@ -6,6 +6,10 @@ int stat(const char *path, stat_t *buf) {
     return (int)sys_stat(path, buf);
 }
 
+int lstat(const char *path, stat_t *buf) {
+    return (int)sys_lstat(path, buf);
+}
+
 int fstat(int fd, stat_t *buf) {
     return (int)sys_fstat(fd, buf);
 }

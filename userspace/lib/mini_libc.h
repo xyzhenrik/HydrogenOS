@@ -47,6 +47,7 @@ typedef struct stat {
 #define S_IFLNK  0120000
 #define S_ISREG(m)  (((m) & S_IFMT) == S_IFREG)
 #define S_ISDIR(m)  (((m) & S_IFMT) == S_IFDIR)
+#define S_ISLNK(m)  (((m) & S_IFMT) == S_IFLNK)
 
 #define DIRENT_NAME_MAX 255
 
@@ -62,6 +63,7 @@ long open(const char *path, int flags);
 long close(int fd);
 long lseek(int fd, long off, int whence);
 int stat(const char *path, stat_t *buf);
+int lstat(const char *path, stat_t *buf);
 int fstat(int fd, stat_t *buf);
 int readdir_pos(const char *path, int pos, dirent_t *out);
 long pipe(int fds[2]);
