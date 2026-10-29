@@ -2,6 +2,7 @@
 
 #include <stdint.h>
 
+#include "credentials.h"
 #include "isr.h"
 #include "signal.h"
 #include "vmm_user.h"
@@ -80,6 +81,7 @@ enum {
     PROCESS_RESOURCE_NO_KERNEL_RESOURCE = -3,
     PROCESS_RESOURCE_IO_ERROR = -4,
     PROCESS_RESOURCE_INVALID = -5,
+    PROCESS_RESOURCE_ACCESS = -6,
 };
 
 enum {
@@ -123,6 +125,7 @@ typedef struct process {
     uint64_t *pml4;
     uint32_t pid;
     uint32_t parent_pid;
+    credentials_t cred;          /* inherited from the creating process */
     char name[PROCESS_NAME_CAP]; /* executable basename, for diagnostics only */
     char cwd[PROCESS_CWD_CAP];  /* current working directory, always absolute, default "/" */
     process_handle_entry_t handles[PROCESS_MAX_HANDLE];

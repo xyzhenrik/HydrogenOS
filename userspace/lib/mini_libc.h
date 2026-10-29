@@ -42,6 +42,8 @@ typedef struct stat {
     uint32_t st_size;
     uint32_t st_nlink;
     uint32_t st_ino;
+    uint32_t st_uid;
+    uint32_t st_gid;
     uint64_t st_mtime;
 } stat_t;
 
@@ -49,6 +51,9 @@ typedef struct stat {
 #define S_IFREG  0100000
 #define S_IFDIR  0040000
 #define S_IFLNK  0120000
+/* The permission bits of st_mode: read, write and execute for owner, group
+   and everyone else. */
+#define S_IRWXUGO 0777
 #define S_ISREG(m)  (((m) & S_IFMT) == S_IFREG)
 #define S_ISDIR(m)  (((m) & S_IFMT) == S_IFDIR)
 #define S_ISLNK(m)  (((m) & S_IFMT) == S_IFLNK)

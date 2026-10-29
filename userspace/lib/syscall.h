@@ -64,6 +64,12 @@
 #define SYS_LINK 63
 #define SYS_SYMLINK 64
 #define SYS_READLINK 65
+#define SYS_GETUID 74
+#define SYS_SETUID 75
+#define SYS_GETGID 76
+#define SYS_SETGID 77
+#define SYS_CHMOD 78
+#define SYS_CHOWN 79
 
 #define PRIO_IDLE   0
 #define PRIO_NORMAL 1
@@ -299,6 +305,37 @@ static inline long sys_symlink(const char *target, const char *link_path) {
    number of bytes copied or -errno (-22 EINVAL if path is not a symlink). */
 static inline long sys_readlink(const char *path, char *buf, unsigned long cap) {
     return syscall3(SYS_READLINK, (long)path, (long)buf, (long)cap);
+}
+
+static inline long sys_getuid(void) {
+    return syscall1(SYS_GETUID, 0);
+}
+
+static inline long sys_getgid(void) {
+    return syscall1(SYS_GETGID, 0);
+}
+
+/* Root may become any user; everyone else only the one they already are
+   (-1 EPERM). A process that gave up root cannot get it back. */
+static inline long sys_setuid(unsigned int uid) {
+    return syscall1(SYS_SETUID, (long)uid);
+}
+
+static inline long sys_setgid(unsigned int gid) {
+    return syscall1(SYS_SETGID, (long)gid);
+}
+
+/* mode holds the permission bits, 0777 at most. Only the owner or root may
+   change them. */
+static inline long sys_chmod(const char *path, unsigned int mode) {
+    return syscall2(SYS_CHMOD, (long)path, (long)mode);
+}
+
+/* Root only. An id of ID_UNCHANGED leaves that part of the owner as it is. */
+#define ID_UNCHANGED 0xFFFFFFFFu
+
+static inline long sys_chown(const char *path, unsigned int uid, unsigned int gid) {
+    return syscall3(SYS_CHOWN, (long)path, (long)uid, (long)gid);
 }
 
 static inline long sys_writef(const char *path, const void *data, unsigned long size) {

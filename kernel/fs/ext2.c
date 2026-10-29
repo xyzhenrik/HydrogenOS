@@ -48,6 +48,12 @@
 #define EXT2_FT_SOCK     6
 #define EXT2_FT_SYMLINK  7
 
+#define EXT2_PERMISSION_MASK 0777
+
+/* Where Linux keeps the upper halves of the 32-bit owner ids. */
+#define EXT2_OSD2_UID_HIGH 4
+#define EXT2_OSD2_GID_HIGH 6
+
 #define EXT2_INDEX_FL 0x00001000
 
 #define EXT2_FEATURE_INCOMPAT_FILETYPE      0x0002
@@ -274,6 +280,30 @@ static uint32_t fs_timestamp(void) {
 static int is_dir(const ext2_inode_t *ino) { return (ino->i_mode & EXT2_S_IFMT) == EXT2_S_IFDIR; }
 static int is_file(const ext2_inode_t *ino) { return (ino->i_mode & EXT2_S_IFMT) == EXT2_S_IFREG; }
 static int is_symlink(const ext2_inode_t *ino) { return (ino->i_mode & EXT2_S_IFMT) == EXT2_S_IFLNK; }
+
+static uint32_t osd2_u16(const ext2_inode_t *ino, uint32_t at) {
+    return (uint32_t)ino->i_osd2[at] | (uint32_t)ino->i_osd2[at + 1] << 8;
+}
+
+static void osd2_set_u16(ext2_inode_t *ino, uint32_t at, uint32_t value) {
+    ino->i_osd2[at] = (uint8_t)value;
+    ino->i_osd2[at + 1] = (uint8_t)(value >> 8);
+}
+
+static uint32_t inode_uid(const ext2_inode_t *ino) {
+    return ino->i_uid | osd2_u16(ino, EXT2_OSD2_UID_HIGH) << 16;
+}
+
+static uint32_t inode_gid(const ext2_inode_t *ino) {
+    return ino->i_gid | osd2_u16(ino, EXT2_OSD2_GID_HIGH) << 16;
+}
+
+static void inode_set_owner(ext2_inode_t *ino, uint32_t uid, uint32_t gid) {
+    ino->i_uid = (uint16_t)uid;
+    ino->i_gid = (uint16_t)gid;
+    osd2_set_u16(ino, EXT2_OSD2_UID_HIGH, uid >> 16);
+    osd2_set_u16(ino, EXT2_OSD2_GID_HIGH, gid >> 16);
+}
 
 static uint32_t group_of_inode(uint32_t ino) { return (ino - 1) / sb.s_inodes_per_group; }
 
@@ -1067,6 +1097,9 @@ int ext2_stat(const char *path, vfs_stat_t *out) {
     out->size = ino.i_size;
     out->nlink = ino.i_links_count;
     out->ino = ino_num;
+    out->mode = ino.i_mode & EXT2_PERMISSION_MASK;
+    out->uid = inode_uid(&ino);
+    out->gid = inode_gid(&ino);
     return 0;
 }
 
@@ -1500,4 +1533,36 @@ int ext2_symlink(const char *target, const char *path) {
         return sync_result(rc);
     }
     return sync_result(0);
+}
+
+/* Attribute changes act on the inode that path itself names; callers expand
+   a final symlink first. */
+static int attributes_load(const char *path, uint32_t *ino_num, ext2_inode_t *ino) {
+    int rc = write_check(path);
+    if (rc != 0) return rc;
+    return resolve_path(path, ino_num, ino);
+}
+
+static int attributes_store(uint32_t ino_num, ext2_inode_t *ino) {
+    ino->i_ctime = fs_timestamp();
+    return sync_result(write_inode(ino_num, ino));
+}
+
+int ext2_chmod(const char *path, uint32_t mode) {
+    if ((mode & ~(uint32_t)EXT2_PERMISSION_MASK) != 0) return -EINVAL;
+    uint32_t ino_num = 0;
+    ext2_inode_t ino;
+    int rc = attributes_load(path, &ino_num, &ino);
+    if (rc != 0) return rc;
+    ino.i_mode = (uint16_t)((ino.i_mode & EXT2_S_IFMT) | mode);
+    return attributes_store(ino_num, &ino);
+}
+
+int ext2_chown(const char *path, uint32_t uid, uint32_t gid) {
+    uint32_t ino_num = 0;
+    ext2_inode_t ino;
+    int rc = attributes_load(path, &ino_num, &ino);
+    if (rc != 0) return rc;
+    inode_set_owner(&ino, uid, gid);
+    return attributes_store(ino_num, &ino);
 }

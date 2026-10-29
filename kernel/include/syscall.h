@@ -66,6 +66,12 @@
 #define SYS_LINK 63
 #define SYS_SYMLINK 64
 #define SYS_READLINK 65
+#define SYS_GETUID 74
+#define SYS_SETUID 75
+#define SYS_GETGID 76
+#define SYS_SETGID 77
+#define SYS_CHMOD 78
+#define SYS_CHOWN 79
 #define SYS_PUTCHAR 255
 
 uint64_t syscall_handle(regs_t *r);

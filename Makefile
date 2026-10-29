@@ -107,6 +107,8 @@ USER_SCHEDTEST_OBJ = $(BUILD_DIR)/user_schedtest.o
 USER_SCHEDTEST_ELF = $(BUILD_DIR)/user_schedtest.elf
 USER_SIGTEST_OBJ = $(BUILD_DIR)/user_sigtest.o
 USER_SIGTEST_ELF = $(BUILD_DIR)/user_sigtest.elf
+USER_PERMTEST_OBJ = $(BUILD_DIR)/user_permtest.o
+USER_PERMTEST_ELF = $(BUILD_DIR)/user_permtest.elf
 USER_PING_OBJ = $(BUILD_DIR)/user_ping.o
 USER_PING_ELF = $(BUILD_DIR)/user_ping.elf
 USER_LINKTEST_OBJ = $(BUILD_DIR)/user_linktest.o
@@ -162,7 +164,7 @@ USER_DESKTOPTEST_FILEMANAGER_OBJ = $(BUILD_DIR)/user_desktoptest_filemanager.o
 USER_GFX_EFFECTS_OBJ = $(BUILD_DIR)/user_gfx_effects.o
 USER_INIT_OBJ = $(BUILD_DIR)/user_init.o
 USER_INIT_ELF = $(BUILD_DIR)/user_init.elf
-USER_SHELL_MODULES = shell line_editor lexer parser expand env exec jobs builtins diag output
+USER_SHELL_MODULES = shell line_editor lexer parser expand env exec jobs builtins diag output account
 USER_SHELL_OBJS = $(foreach m,$(USER_SHELL_MODULES),$(BUILD_DIR)/user_shell_$(m).o)
 USER_SHELL_ELF = $(BUILD_DIR)/user_shell.elf
 USER_SHELLTEST_OBJ = $(BUILD_DIR)/user_shelltest.o
@@ -180,18 +182,18 @@ USER_RTCTEST_OBJ = $(BUILD_DIR)/user_rtctest.o
 USER_RTCTEST_ELF = $(BUILD_DIR)/user_rtctest.elf
 USER_LIBC_CORE_OBJ = $(BUILD_DIR)/user_libc_core.o
 USER_MALLOC_OBJ = $(BUILD_DIR)/user_malloc.o
-USER_LIBC_MODULES = string stdlib sort stdio format clock environ errno signal
+USER_LIBC_MODULES = string stdlib sort stdio format clock environ errno signal passwd
 USER_LIBC_MODULE_OBJS = $(foreach m,$(USER_LIBC_MODULES),$(BUILD_DIR)/user_libc_$(m).o)
 USER_LIBCTEST_OBJ = $(BUILD_DIR)/user_libctest.o
 USER_LIBCTEST_ELF = $(BUILD_DIR)/user_libctest.elf
 OBJS = $(BUILD_DIR)/boot.o $(BUILD_DIR)/kernel.o $(BUILD_DIR)/console.o $(BUILD_DIR)/serial.o $(BUILD_DIR)/panic.o \
        $(BUILD_DIR)/paging.o $(BUILD_DIR)/time.o $(BUILD_DIR)/pmm.o $(BUILD_DIR)/kheap.o $(BUILD_DIR)/string.o \
-       $(BUILD_DIR)/vmm_user.o $(BUILD_DIR)/syscall.o $(BUILD_DIR)/process.o $(BUILD_DIR)/signal.o $(BUILD_DIR)/pipe.o $(BUILD_DIR)/spawn_args.o $(BUILD_DIR)/usercopy.o \
+       $(BUILD_DIR)/vmm_user.o $(BUILD_DIR)/syscall.o $(BUILD_DIR)/process.o $(BUILD_DIR)/credentials.o $(BUILD_DIR)/signal.o $(BUILD_DIR)/pipe.o $(BUILD_DIR)/spawn_args.o $(BUILD_DIR)/usercopy.o \
        $(BUILD_DIR)/keyboard.o $(BUILD_DIR)/mouse.o $(BUILD_DIR)/elf_loader.o \
        $(BUILD_DIR)/ata.o $(BUILD_DIR)/pci.o $(BUILD_DIR)/virtio.o $(BUILD_DIR)/virtio_blk.o $(BUILD_DIR)/virtio_gpu.o $(BUILD_DIR)/bochs_display.o $(BUILD_DIR)/virtio_input.o $(BUILD_DIR)/virtio_net.o $(BUILD_DIR)/msi.o $(BUILD_DIR)/block.o $(BUILD_DIR)/block_cache.o $(BUILD_DIR)/mbr.o \
        $(BUILD_DIR)/net.o $(BUILD_DIR)/ethernet.o $(BUILD_DIR)/arp.o $(BUILD_DIR)/ipv4.o $(BUILD_DIR)/icmp.o \
        $(BUILD_DIR)/udp.o $(BUILD_DIR)/socket.o \
-       $(BUILD_DIR)/ext2.o $(BUILD_DIR)/vfs.o $(BUILD_DIR)/ramfs.o $(BUILD_DIR)/procfs.o \
+       $(BUILD_DIR)/ext2.o $(BUILD_DIR)/vfs.o $(BUILD_DIR)/vfs_access.o $(BUILD_DIR)/ramfs.o $(BUILD_DIR)/procfs.o \
        $(BUILD_DIR)/framebuffer.o $(BUILD_DIR)/fb_console.o $(BUILD_DIR)/font8x16.o $(BUILD_DIR)/renderer2d.o $(BUILD_DIR)/psf2.o $(BUILD_DIR)/ttf.o $(BUILD_DIR)/tty.o \
        $(BUILD_DIR)/gdt.o $(BUILD_DIR)/gdt_asm.o \
        $(BUILD_DIR)/idt.o $(BUILD_DIR)/isr.o $(BUILD_DIR)/isr_c.o $(BUILD_DIR)/isr_stubs.o \
@@ -400,6 +402,10 @@ $(BUILD_DIR)/ext2.o: kernel/fs/ext2.c kernel/fs/ext2.h kernel/fs/vfs.h kernel/dr
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/vfs.o: kernel/fs/vfs.c kernel/fs/vfs.h kernel/fs/ext2.h kernel/fs/ramfs.h kernel/fs/procfs.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/vfs_access.o: kernel/fs/vfs_access.c kernel/fs/vfs_access.h kernel/fs/vfs.h kernel/core/credentials.h kernel/include/errno.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
@@ -675,6 +681,13 @@ $(USER_SIGTEST_OBJ): userspace/sigtest/sigtest.c userspace/lib/signal.h userspac
 
 $(USER_SIGTEST_ELF): $(USER_SIGTEST_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
 	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_SIGTEST_OBJ)
+
+$(USER_PERMTEST_OBJ): userspace/permtest/permtest.c userspace/lib/passwd.h userspace/lib/syscall.h userspace/lib/mini_libc.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(USER_PERMTEST_ELF): $(USER_PERMTEST_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
+	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_PERMTEST_OBJ)
 
 $(USER_PING_OBJ): userspace/ping/ping.c userspace/lib/syscall.h userspace/lib/mini_libc.h
 	mkdir -p $(BUILD_DIR)
@@ -979,7 +992,7 @@ $(USER_FAULTTEST_OBJ): userspace/faulttest/faulttest.c userspace/lib/syscall.h u
 $(USER_FAULTTEST_ELF): $(USER_FAULTTEST_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
 	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_FAULTTEST_OBJ)
 
-$(INITRD): $(USER_HELLO_ELF) $(USER_ECHO_ELF) $(USER_CAT_ELF) $(USER_TIME_ELF) $(USER_SLEEP_ELF) $(USER_PIPEREAD_ELF) $(USER_PIPEDELAYREAD_ELF) $(USER_PIPEPRODUCER_ELF) $(USER_PIPECONSUMER_ELF) $(USER_LOGPRODUCER_A_ELF) $(USER_LOGPRODUCER_B_ELF) $(USER_LOGCOLLECTOR_ELF) $(USER_BOOTPROBE_ELF) $(USER_HANDOFFCHECK_ELF) $(USER_STDIOCHECK_ELF) $(USER_STDIOBADBIND_ELF) $(USER_STDIONULLCHECK_ELF) $(USER_DUPCHECK_ELF) $(USER_HANDLELIMITCHECK_ELF) $(USER_FILEOFFSETCHECK_ELF) $(USER_SEEKCHECK_ELF) $(USER_POLLCHECK_ELF) $(USER_POLLWAITCHECK_ELF) $(USER_POLLWAKEWRITER_ELF) $(USER_POLLMANYCHECK_ELF) $(USER_CWDCHECK_ELF) $(USER_DUPFALLBACKCHECK_ELF) $(USER_FSTEST_ELF) $(USER_LOGIN_ELF) $(USER_PKGTEST_ELF) $(USER_LOGSINK_WRITER_A_ELF) $(USER_LOGSINK_WRITER_B_ELF) $(USER_TEEWRITER_ELF) $(USER_TEEREADER_A_ELF) $(USER_TEEREADER_B_ELF) $(USER_MMAPTEST_ELF) $(USER_COMPOSITOR_ELF) $(USER_DESKTOPDEMO_ELF) $(USER_DESKTOPTEST_ELF) $(USER_INIT_ELF) $(USER_SHELL_ELF) $(USER_SHELLTEST_ELF) $(INIT_CONFIG) tools/mkinitrd.py $(USER_DATE_ELF) $(USER_RTCTEST_ELF) $(USER_PS_ELF) $(USER_PROCTEST_ELF) $(USER_DIRTEST_ELF) $(USER_POWEROFF_ELF) $(USER_REBOOT_ELF) $(USER_POWERCHECK_ELF) $(USER_NETTEST_ELF) $(USER_PING_ELF) $(USER_LIBCTEST_ELF) $(USER_LINKTEST_ELF) $(USER_SYSLOGD_ELF) $(USER_LOGREAD_ELF) $(USER_LOGTEST_ELF) $(USER_MPROTECTTEST_ELF) $(USER_NSLOOKUP_ELF) $(USER_UDPTEST_ELF) $(USER_FAULTTEST_ELF) $(USER_SCHEDTEST_ELF) $(USER_SIGTEST_ELF)
+$(INITRD): $(USER_HELLO_ELF) $(USER_ECHO_ELF) $(USER_CAT_ELF) $(USER_TIME_ELF) $(USER_SLEEP_ELF) $(USER_PIPEREAD_ELF) $(USER_PIPEDELAYREAD_ELF) $(USER_PIPEPRODUCER_ELF) $(USER_PIPECONSUMER_ELF) $(USER_LOGPRODUCER_A_ELF) $(USER_LOGPRODUCER_B_ELF) $(USER_LOGCOLLECTOR_ELF) $(USER_BOOTPROBE_ELF) $(USER_HANDOFFCHECK_ELF) $(USER_STDIOCHECK_ELF) $(USER_STDIOBADBIND_ELF) $(USER_STDIONULLCHECK_ELF) $(USER_DUPCHECK_ELF) $(USER_HANDLELIMITCHECK_ELF) $(USER_FILEOFFSETCHECK_ELF) $(USER_SEEKCHECK_ELF) $(USER_POLLCHECK_ELF) $(USER_POLLWAITCHECK_ELF) $(USER_POLLWAKEWRITER_ELF) $(USER_POLLMANYCHECK_ELF) $(USER_CWDCHECK_ELF) $(USER_DUPFALLBACKCHECK_ELF) $(USER_FSTEST_ELF) $(USER_LOGIN_ELF) $(USER_PKGTEST_ELF) $(USER_LOGSINK_WRITER_A_ELF) $(USER_LOGSINK_WRITER_B_ELF) $(USER_TEEWRITER_ELF) $(USER_TEEREADER_A_ELF) $(USER_TEEREADER_B_ELF) $(USER_MMAPTEST_ELF) $(USER_COMPOSITOR_ELF) $(USER_DESKTOPDEMO_ELF) $(USER_DESKTOPTEST_ELF) $(USER_INIT_ELF) $(USER_SHELL_ELF) $(USER_SHELLTEST_ELF) $(INIT_CONFIG) tools/mkinitrd.py $(USER_DATE_ELF) $(USER_RTCTEST_ELF) $(USER_PS_ELF) $(USER_PROCTEST_ELF) $(USER_DIRTEST_ELF) $(USER_POWEROFF_ELF) $(USER_REBOOT_ELF) $(USER_POWERCHECK_ELF) $(USER_NETTEST_ELF) $(USER_PING_ELF) $(USER_LIBCTEST_ELF) $(USER_LINKTEST_ELF) $(USER_SYSLOGD_ELF) $(USER_LOGREAD_ELF) $(USER_LOGTEST_ELF) $(USER_MPROTECTTEST_ELF) $(USER_NSLOOKUP_ELF) $(USER_UDPTEST_ELF) $(USER_FAULTTEST_ELF) $(USER_SCHEDTEST_ELF) $(USER_SIGTEST_ELF) $(USER_PERMTEST_ELF)
 	mkdir -p $(BUILD_DIR)
 	python3 tools/mkinitrd.py $@ \
 		user=$(USER_HELLO_ELF) \
@@ -1017,6 +1030,7 @@ $(INITRD): $(USER_HELLO_ELF) $(USER_ECHO_ELF) $(USER_CAT_ELF) $(USER_TIME_ELF) $
 		nettest=$(USER_NETTEST_ELF) \
 		schedtest=$(USER_SCHEDTEST_ELF) \
 		sigtest=$(USER_SIGTEST_ELF) \
+		permtest=$(USER_PERMTEST_ELF) \
 		ping=$(USER_PING_ELF) \
 		linktest=$(USER_LINKTEST_ELF) \
 		syslogd=$(USER_SYSLOGD_ELF) \
@@ -1053,6 +1067,10 @@ $(BUILD_DIR)/syscall.o: kernel/core/syscall.c kernel/core/usercopy.h kernel/core
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/process.o: kernel/core/process.c kernel/core/usercopy.h kernel/core/process.h kernel/core/pipe.h kernel/fs/vfs.h kernel/mm/paging.h kernel/mm/kheap.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/credentials.o: kernel/core/credentials.c kernel/core/credentials.h kernel/include/errno.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
@@ -1161,15 +1179,20 @@ $(DISK_IMG): $(FS_FILES)
 	@if command -v mke2fs >/dev/null 2>&1; then \
 		rm -rf $(BUILD_DIR)/stagedisk; mkdir -p $(BUILD_DIR)/stagedisk; \
 		if [ -d $(FS_DIR) ]; then cp -a $(FS_DIR)/. $(BUILD_DIR)/stagedisk/ 2>/dev/null || true; fi; \
-		mkdir -p $(BUILD_DIR)/stagedisk/bin $(BUILD_DIR)/stagedisk/etc $(BUILD_DIR)/stagedisk/tmp $(BUILD_DIR)/stagedisk/home $(BUILD_DIR)/stagedisk/var/log; \
+		mkdir -p $(BUILD_DIR)/stagedisk/bin $(BUILD_DIR)/stagedisk/etc $(BUILD_DIR)/stagedisk/tmp $(BUILD_DIR)/stagedisk/home/user $(BUILD_DIR)/stagedisk/var/log; \
+		find $(BUILD_DIR)/stagedisk -type d -exec chmod 755 {} +; \
+		find $(BUILD_DIR)/stagedisk -type f -exec chmod 644 {} +; \
+		chmod 777 $(BUILD_DIR)/stagedisk/tmp; \
 		for f in $(BUILD_DIR)/user_*.elf; do \
 			[ -e "$$f" ] || continue; \
 			n=$$(basename $$f .elf); n=$${n#user_}; \
-			cp $$f $(BUILD_DIR)/stagedisk/$$n; \
+			install -m 755 $$f $(BUILD_DIR)/stagedisk/$$n; \
 		done; \
-		cp $(INIT_CONFIG) $(BUILD_DIR)/stagedisk/init.rc; \
+		install -m 644 $(INIT_CONFIG) $(BUILD_DIR)/stagedisk/init.rc; \
 		rm -f $(DISK_IMG); \
-		mke2fs -t ext2 -F -b 1024 -d $(BUILD_DIR)/stagedisk $(DISK_IMG) 16M; \
+		mke2fs -t ext2 -F -b 1024 -E root_owner=0:0 -d $(BUILD_DIR)/stagedisk $(DISK_IMG) 16M; \
+		{ find $(BUILD_DIR)/stagedisk -mindepth 1 -printf 'sif /%P uid 0\nsif /%P gid 0\n'; \
+		  printf 'sif /home/user uid 1000\nsif /home/user gid 1000\n'; } | debugfs -w -f - $(DISK_IMG) >/dev/null; \
 	else \
 		dd if=/dev/zero of=$(DISK_IMG) bs=1M count=16; \
 	fi

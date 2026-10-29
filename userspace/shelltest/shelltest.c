@@ -90,6 +90,21 @@ static const ShellCase cases[] = {
      "wait %1; echo $?\n"
      "kill 99999 2>&1; echo $?\n",
      "143\n137\nkill: 99999: no such process\n1\n", 0},
+    {"accounts",
+     "id; whoami\n"
+     "echo data > /tmp/shelltest.acl\n"
+     "chmod 640 /tmp/shelltest.acl; ls -l /tmp/shelltest.acl\n"
+     "chmod u+x,go-r /tmp/shelltest.acl; ls -l /tmp/shelltest.acl\n"
+     "chown user:user /tmp/shelltest.acl; ls -l /tmp/shelltest.acl\n"
+     "chmod 1777 /tmp/shelltest.acl 2>&1; echo $?\n"
+     "chown nobody /tmp/shelltest.acl 2>&1; echo $?\n"
+     "rm /tmp/shelltest.acl\n",
+     "uid=0(root) gid=0(root)\nroot\n"
+     "-rw-r----- 1 root root 5 /tmp/shelltest.acl\n"
+     "-rwx------ 1 root root 5 /tmp/shelltest.acl\n"
+     "-rwx------ 1 user user 5 /tmp/shelltest.acl\n"
+     "chmod: 1777: invalid mode\n2\n"
+     "chown: nobody: invalid owner\n2\n", 0},
     {"exit",
      "echo before; exit 3; echo after\n"
      "echo never\n",

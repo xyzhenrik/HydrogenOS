@@ -217,6 +217,15 @@ int vfs_read_file(const char *path, uint8_t *out, uint32_t out_sz, uint32_t *out
     return vfs_read_file_at(path, 0, out, out_sz, out_len);
 }
 
+/* ramfs and procfs store no attributes: everything belongs to root. The
+   initrd is all executables and only root may modify ramfs, so its files are
+   0755; procfs is read-only. */
+static void set_fixed_attrs(vfs_stat_t *out, uint32_t dir_mode, uint32_t file_mode) {
+    out->mode = out->type == 2 ? dir_mode : file_mode;
+    out->uid = 0;
+    out->gid = 0;
+}
+
 int vfs_stat(const char *path, vfs_stat_t *out) {
     if (!ready || !out) return -1;
     const char *sub = 0;
@@ -229,9 +238,15 @@ int vfs_stat(const char *path, vfs_stat_t *out) {
         return 0;
     }
     if (m->fs == VFS_FS_RAMFS) {
-        return ramfs_stat(sub, out);
+        if (ramfs_stat(sub, out) != 0) return -1;
+        set_fixed_attrs(out, 0755, 0755);
+        return 0;
     }
-    if (m->fs == VFS_FS_PROCFS) return procfs_stat(sub, out);
+    if (m->fs == VFS_FS_PROCFS) {
+        if (procfs_stat(sub, out) != 0) return -1;
+        set_fixed_attrs(out, 0555, 0444);
+        return 0;
+    }
     return -1;
 }
 
@@ -244,17 +259,19 @@ int vfs_stat_full(const char *path, hydrogen_stat_t *out) {
     vfs_stat_t st;
     if (vfs_stat(path, &st) != 0) return -1;
     if (st.type == 2) {
-        out->st_mode  = S_IFDIR | 0755;
+        out->st_mode  = S_IFDIR | st.mode;
         out->st_nlink = st.nlink ? st.nlink : 2;
     } else if (st.type == 3) {
-        out->st_mode  = S_IFLNK | 0777;
+        out->st_mode  = S_IFLNK | st.mode;
         out->st_nlink = st.nlink ? st.nlink : 1;
     } else {
-        out->st_mode  = S_IFREG | 0644;
+        out->st_mode  = S_IFREG | st.mode;
         out->st_nlink = st.nlink ? st.nlink : 1;
     }
     out->st_size  = st.size;
     out->st_ino   = st.ino;
+    out->st_uid   = st.uid;
+    out->st_gid   = st.gid;
     out->st_mtime = 0;
     return 0;
 }
@@ -532,6 +549,24 @@ int vfs_readlink(const char *path, char *buf, uint32_t cap) {
     if (!m) return -ENOENT;
     if (m->fs == VFS_FS_EXT2) return ext2_readlink(sub, buf, cap);
     return -EINVAL;
+}
+
+int vfs_chmod(const char *path, uint32_t mode) {
+    if (!ready || !path) return -EINVAL;
+    const char *sub = 0;
+    const vfs_mount_t *m = mount_for_path(path, &sub);
+    if (!m) return -ENOENT;
+    if (m->fs == VFS_FS_EXT2) return ext2_chmod(sub, mode);
+    return -EOPNOTSUPP;
+}
+
+int vfs_chown(const char *path, uint32_t uid, uint32_t gid) {
+    if (!ready || !path) return -EINVAL;
+    const char *sub = 0;
+    const vfs_mount_t *m = mount_for_path(path, &sub);
+    if (!m) return -ENOENT;
+    if (m->fs == VFS_FS_EXT2) return ext2_chown(sub, uid, gid);
+    return -EOPNOTSUPP;
 }
 
 int vfs_write_file(const char *path, const uint8_t *data, uint32_t size) {
