@@ -1,7 +1,11 @@
 #pragma once
 
+#include "stdio.h"
+#include "stdlib.h"
+#include "string.h"
+#include "time.h"
+
 #include <stddef.h>
-#include <stdarg.h>
 #include <stdint.h>
 
 #define SPAWN_STDIO_CLEAR   (-1)
@@ -82,21 +86,7 @@ long wait_pid(int pid, int *status);
 long try_wait_pid(int pid, int *status);
 void yield_cpu(void);
 void tty_set_color(unsigned char fg, unsigned char bg);
-int puts(const char *s);
-void *memcpy(void *dst, const void *src, size_t n);
-void *memset(void *dst, int c, size_t n);
-size_t strlen(const char *s);
-void *malloc(size_t size);
-void free(void *ptr);
-void *calloc(size_t count, size_t size);
-void *realloc(void *ptr, size_t size);
 void sleep_ms(unsigned long ms);
 unsigned long time_ms(void);
 char *getcwd(char *buf, size_t size);
 int   chdir(const char *path);
-
-int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap);
-int snprintf(char *buf, size_t size, const char *fmt, ...);
-int sprintf(char *buf, const char *fmt, ...);
-int printf(const char *fmt, ...);
-int fprintf(int fd, const char *fmt, ...);

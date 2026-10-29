@@ -86,7 +86,7 @@ int main(void) {
     for (;;) {
         int rc = readdir_pos("/proc", pos, &entry);
         if (rc < 0) {
-            fprintf(2, "ps: cannot read /proc\n");
+            dprintf(2, "ps: cannot read /proc\n");
             return 1;
         }
         if (rc == 0)

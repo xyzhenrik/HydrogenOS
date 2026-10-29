@@ -16,7 +16,7 @@
 #define NETTEST_SILENT_TIMEOUT_MS 300
 
 static int fail(const char *what, long value) {
-    fprintf(2, "nettest: FAIL %s (%ld)\n", what, value);
+    dprintf(2, "nettest: FAIL %s (%ld)\n", what, value);
     return 1;
 }
 
@@ -58,7 +58,7 @@ static int check_gateway_ping(void) {
     if (rc < 0)
         return fail("ping gateway", rc);
     /* stdout is compared verbatim by init; diagnostics go to stderr. */
-    fprintf(2, "nettest: gateway rtt %ld ms\n", rc);
+    dprintf(2, "nettest: gateway rtt %ld ms\n", rc);
     return 0;
 }
 

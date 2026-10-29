@@ -7,11 +7,11 @@
  * flags word is reserved and must be rejected before any transition. */
 int main(void) {
     if (syscall1(SYS_SHUTDOWN, 1) != -ERROR_INVALID) {
-        fprintf(2, "powercheck: shutdown accepted reserved flags\n");
+        dprintf(2, "powercheck: shutdown accepted reserved flags\n");
         return 1;
     }
     if (syscall1(SYS_REBOOT, 1) != -ERROR_INVALID) {
-        fprintf(2, "powercheck: reboot accepted reserved flags\n");
+        dprintf(2, "powercheck: reboot accepted reserved flags\n");
         return 1;
     }
     printf("POWERCHECK PASS\n");
