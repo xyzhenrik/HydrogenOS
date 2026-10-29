@@ -105,6 +105,7 @@ if [ "$FOUND" -eq 1 ]; then
   grep -q "stdout captured: dupfallbackcheck: implicit stdout live" "$LOG_FILE" || MISSING="$MISSING DUPFALLBACK_PASS"
   grep -q "RTC PASS" "$LOG_FILE" || MISSING="$MISSING RTC_PASS"
   grep -q "PROC PASS" "$LOG_FILE" || MISSING="$MISSING PROC_PASS"
+  grep -q "DIRTEST PASS" "$LOG_FILE" || MISSING="$MISSING DIRTEST_PASS"
   if [ "$REQUIRE_DESKTOP" = "1" ]; then
     grep -qE "compositor: ready|COMP READY" "$LOG_FILE" || MISSING="$MISSING COMPOSITOR_READY"
     grep -q "FRAME CHECKSUM:" "$LOG_FILE" || MISSING="$MISSING FRAME_CHECKSUM"

@@ -16,6 +16,7 @@ int ramfs_stat(const char *path, vfs_stat_t *out);
 
 /* Write operations */
 int ramfs_mkdir(const char *path);
+int ramfs_rmdir(const char *path);
 int ramfs_create(const char *path, const uint8_t *data, uint32_t size);
 int ramfs_unlink(const char *path);
 int ramfs_rename(const char *old_path, const char *new_path);

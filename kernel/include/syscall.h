@@ -48,6 +48,7 @@
 #define SYS_SYSINFO 43
 #define SYS_SET_LAYOUT 44
 #define SYS_RTC_TIME 54
+#define SYS_RMDIR 47
 #define SYS_PUTCHAR 255
 
 uint64_t syscall_handle(regs_t *r);

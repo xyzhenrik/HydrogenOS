@@ -2,6 +2,7 @@
 #include "ext2.h"
 #include "ramfs.h"
 #include "procfs.h"
+#include "errno.h"
 
 typedef enum vfs_fs_type {
     VFS_FS_NONE = 0,
@@ -190,10 +191,7 @@ int vfs_list_dir(const char *path, vfs_dir_cb cb, void *ctx) {
     const char *sub = 0;
     const vfs_mount_t *m = mount_for_path(path, &sub);
     if (!m) return -1;
-    if (m->fs == VFS_FS_EXT2) {
-        if (is_root_path(sub)) return ext2_list_root(cb, ctx);
-        return ext2_list_dir(sub, cb, ctx);
-    }
+    if (m->fs == VFS_FS_EXT2) return ext2_list_dir(sub, cb, ctx);
     if (m->fs == VFS_FS_RAMFS) {
         if (is_root_path(sub)) return ramfs_list_root(cb, ctx);
         return ramfs_list_dir(sub, cb, ctx);
@@ -291,8 +289,8 @@ int vfs_readdir(const char *path, int *pos, hydrogen_dirent_t *out) {
     ctx.current = 0;
     ctx.found   = 0;
     ctx.out     = out;
-    vfs_list_dir(path, readdir_cb, &ctx);
-    if (!ctx.found) return 0;
+    int rc = vfs_list_dir(path, readdir_cb, &ctx);
+    if (!ctx.found) return rc != 0 ? -1 : 0;
     (*pos)++;
     return 1;
 }
@@ -363,6 +361,17 @@ int vfs_mkdir(const char *path) {
     if (!m) return -1;
     if (m->fs == VFS_FS_RAMFS) return ramfs_mkdir(sub);
     if (m->fs == VFS_FS_EXT2) return ext2_mkdir(sub);
+    return -1;
+}
+
+int vfs_rmdir(const char *path) {
+    if (!ready || !path) return -1;
+    const char *sub = 0;
+    const vfs_mount_t *m = mount_for_path(path, &sub);
+    if (!m) return -1;
+    if (is_root_path(sub)) return -EBUSY;
+    if (m->fs == VFS_FS_RAMFS) return ramfs_rmdir(sub);
+    if (m->fs == VFS_FS_EXT2) return ext2_rmdir(sub);
     return -1;
 }
 
