@@ -4,6 +4,7 @@
 
 #include "core/process.h"
 #include "core/time.h"
+#include "fs/dcache.h"
 #include "kheap.h"
 #include "pmm.h"
 #include "version.h"
@@ -18,6 +19,7 @@ typedef enum procfs_node_kind {
     PROCFS_NODE_MEMINFO,
     PROCFS_NODE_UPTIME,
     PROCFS_NODE_VERSION,
+    PROCFS_NODE_DCACHE,
     PROCFS_NODE_PID_DIR,
     PROCFS_NODE_PID_STATUS,
 } procfs_node_kind_t;
@@ -41,6 +43,7 @@ static const procfs_static_file_t static_files[] = {
     { "meminfo", PROCFS_NODE_MEMINFO },
     { "uptime", PROCFS_NODE_UPTIME },
     { "version", PROCFS_NODE_VERSION },
+    { "dcache", PROCFS_NODE_DCACHE },
 };
 
 #define PROCFS_STATIC_FILE_COUNT \
@@ -242,6 +245,19 @@ static void render_version(procfs_buffer_t *b) {
     buf_put_str(b, HYDROGEN_OS_NAME " " HYDROGEN_VERSION " " HYDROGEN_ARCH "\n");
 }
 
+static void render_dcache(procfs_buffer_t *b) {
+    dcache_stats_t stats;
+    dcache_get_stats(&stats);
+    buf_put_field_u64(b, "Entries", stats.entries, 0);
+    buf_put_field_u64(b, "Capacity", stats.capacity, 0);
+    buf_put_field_u64(b, "Hits", stats.hits, 0);
+    buf_put_field_u64(b, "NegativeHits", stats.negative_hits, 0);
+    buf_put_field_u64(b, "Misses", stats.misses, 0);
+    buf_put_field_u64(b, "Insertions", stats.insertions, 0);
+    buf_put_field_u64(b, "Evictions", stats.evictions, 0);
+    buf_put_field_u64(b, "Invalidations", stats.invalidations, 0);
+}
+
 static int render_status(procfs_buffer_t *b, uint32_t pid) {
     process_info_t info;
     if (process_get_info(pid, &info) != 0)
@@ -268,6 +284,9 @@ static int render(const procfs_node_t *node, procfs_buffer_t *b) {
         return 0;
     case PROCFS_NODE_VERSION:
         render_version(b);
+        return 0;
+    case PROCFS_NODE_DCACHE:
+        render_dcache(b);
         return 0;
     case PROCFS_NODE_PID_STATUS:
         return render_status(b, node->pid);

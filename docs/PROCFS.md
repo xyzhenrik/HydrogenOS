@@ -16,6 +16,7 @@ Writes, `mkdir`, `unlink` and `rename` below `/proc` fail.
 | `/proc/meminfo`      | file | physical memory and kernel heap usage      |
 | `/proc/uptime`       | file | seconds since boot, `"<s>.<cc>\n"`         |
 | `/proc/version`      | file | `"HydrogenOS <version> <arch>\n"`          |
+| `/proc/dcache`       | file | directory entry cache counters (`docs/DCACHE.md`) |
 | `/proc/<pid>/`       | dir  | one per live process, listed in pid order  |
 | `/proc/<pid>/status` | file | per-process status                         |
 

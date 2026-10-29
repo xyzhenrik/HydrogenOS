@@ -2,6 +2,7 @@
 #include "drivers/block.h"
 #include "drivers/block_cache.h"
 #include "drivers/mbr.h"
+#include "fs/dcache.h"
 #include "mm/kheap.h"
 #include "errno.h"
 
@@ -612,6 +613,8 @@ static int inode_release_xattr(ext2_inode_t *ino) {
 /* Free an inode whose last link has already been removed. */
 static int inode_destroy(uint32_t ino_num, ext2_inode_t *ino) {
     int dir = is_dir(ino);
+    /* The number is about to be reused; nothing cached may refer to it. */
+    dcache_invalidate_inode(DCACHE_FS_EXT2, ino_num);
     int rc = inode_release_blocks(ino);
     if (rc == 0) rc = inode_release_xattr(ino);
     if (rc != 0) return rc;
@@ -747,6 +750,7 @@ static int visit_insert(ext2_dir_entry_t *ent, const ext2_dir_pos_t *pos, void *
 static int dir_add_entry(uint32_t dir_ino, ext2_inode_t *dir, const char *name, uint32_t len,
                          uint32_t child_ino, uint8_t file_type) {
     if (len == 0 || len > EXT2_NAME_LEN) return -EINVAL;
+    dcache_invalidate_entry(DCACHE_FS_EXT2, dir_ino, name, len);
     int rc;
     /* Entries are inserted linearly, which would leave an htree index
        stale; dropping the flag turns the directory into a valid linear
@@ -787,7 +791,9 @@ static int visit_remove(ext2_dir_entry_t *ent, const ext2_dir_pos_t *pos, void *
     return rc != 0 ? rc : 1;
 }
 
-static int dir_remove_entry(const ext2_inode_t *dir, const char *name, uint32_t len) {
+static int dir_remove_entry(uint32_t dir_ino, const ext2_inode_t *dir, const char *name,
+                            uint32_t len) {
+    dcache_invalidate_entry(DCACHE_FS_EXT2, dir_ino, name, len);
     dir_name_ctx_t c = { name, len, 0, 0 };
     int rc = dir_walk(dir, visit_remove, &c);
     if (rc < 0) return rc;
@@ -811,8 +817,9 @@ static int visit_retarget(ext2_dir_entry_t *ent, const ext2_dir_pos_t *pos, void
 }
 
 /* Point an existing entry at a different inode. */
-static int dir_retarget_entry(const ext2_inode_t *dir, const char *name, uint32_t len,
-                              uint32_t new_ino, uint8_t file_type) {
+static int dir_retarget_entry(uint32_t dir_ino, const ext2_inode_t *dir, const char *name,
+                              uint32_t len, uint32_t new_ino, uint8_t file_type) {
+    dcache_invalidate_entry(DCACHE_FS_EXT2, dir_ino, name, len);
     dir_retarget_ctx_t c = { name, len, new_ino, file_type };
     int rc = dir_walk(dir, visit_retarget, &c);
     if (rc < 0) return rc;
@@ -859,6 +866,22 @@ static const char *path_end(const char *path) {
     return path;
 }
 
+/* Read-path lookup through the dentry cache. The mutating operations call
+   dir_lookup directly so that their decisions never depend on cached state. */
+static int dir_lookup_cached(uint32_t dir_ino, const ext2_inode_t *dir, const char *name,
+                             uint32_t len, uint32_t *out_ino) {
+    if (!is_dir(dir)) return -ENOTDIR;
+    switch (dcache_lookup(DCACHE_FS_EXT2, dir_ino, name, len, out_ino)) {
+    case DCACHE_HIT_POSITIVE: return 0;
+    case DCACHE_HIT_NEGATIVE: return -ENOENT;
+    case DCACHE_MISS: break;
+    }
+    int rc = dir_lookup(dir, name, len, out_ino);
+    if (rc == 0) dcache_insert(DCACHE_FS_EXT2, dir_ino, name, len, *out_ino);
+    else if (rc == -ENOENT) dcache_insert_negative(DCACHE_FS_EXT2, dir_ino, name, len);
+    return rc;
+}
+
 static int resolve_range(const char *path, const char *end, uint32_t *out_ino, ext2_inode_t *out) {
     uint32_t ino = EXT2_ROOT_INO;
     int rc = read_inode(ino, out);
@@ -868,7 +891,7 @@ static int resolve_range(const char *path, const char *end, uint32_t *out_ino, e
     uint32_t len = 0;
     while (next_component(&cursor, end, &name, &len)) {
         uint32_t child = 0;
-        rc = dir_lookup(out, name, len, &child);
+        rc = dir_lookup_cached(ino, out, name, len, &child);
         if (rc != 0) return rc;
         rc = read_inode(child, out);
         if (rc != 0) return rc;
@@ -929,6 +952,7 @@ static int check_not_ancestor(uint32_t ancestor, uint32_t start) {
 int ext2_mount_auto(void) {
     mounted = 0;
     writable = 0;
+    dcache_invalidate_fs(DCACHE_FS_EXT2);
     if (groups) {
         kfree(groups);
         groups = 0;
@@ -1274,7 +1298,7 @@ int ext2_rmdir(const char *path) {
     if (rc < 0) return rc;
     if (rc == 0) return -ENOTEMPTY;
 
-    rc = dir_remove_entry(&parent, name, len);
+    rc = dir_remove_entry(parent_ino, &parent, name, len);
     if (rc != 0) return sync_result(rc);
     if (parent.i_links_count > 1) parent.i_links_count--;
     rc = write_inode(parent_ino, &parent);
@@ -1302,7 +1326,7 @@ int ext2_unlink(const char *path) {
     if (rc != 0) return rc;
     if (is_dir(&ino)) return -EISDIR;
 
-    rc = dir_remove_entry(&parent, name, len);
+    rc = dir_remove_entry(parent_ino, &parent, name, len);
     if (rc != 0) return sync_result(rc);
     if (ino.i_links_count > 1) {
         ino.i_links_count--;
@@ -1372,17 +1396,18 @@ int ext2_rename(const char *old_path, const char *new_path) {
 
     uint8_t ftype = dirent_file_type(src.i_mode);
     if (replace) {
-        rc = dir_retarget_entry(np, new_name, new_len, src_ino, ftype);
+        rc = dir_retarget_entry(new_parent, np, new_name, new_len, src_ino, ftype);
     } else {
         rc = dir_add_entry(new_parent, np, new_name, new_len, src_ino, ftype);
     }
     if (rc != 0) return sync_result(rc);
 
-    rc = dir_remove_entry(op, old_name, old_len);
+    rc = dir_remove_entry(old_parent, op, old_name, old_len);
     if (rc != 0) return sync_result(rc);
 
     if (moves_dir) {
         dir_retarget_ctx_t c = { "..", 2, new_parent, dirent_file_type(EXT2_S_IFDIR) };
+        dcache_invalidate_entry(DCACHE_FS_EXT2, src_ino, "..", 2);
         rc = dir_walk(&src, visit_retarget, &c);
         if (rc < 0) return sync_result(rc);
         if (rc == 0) return sync_result(-EIO);
