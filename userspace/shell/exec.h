@@ -13,4 +13,3 @@ int exec_exit_requested(void);
 
 /* Interactive shells announce background jobs and finished jobs. */
 void exec_set_interactive(int interactive);
-int exec_is_interactive(void);

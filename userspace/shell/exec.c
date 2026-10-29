@@ -52,14 +52,15 @@ static ShellProgram program;
 static PreparedCommand prepared[SHELL_MAX_STAGES];
 static char envp_storage[SHELL_EXPAND_CAP];
 static const char *envp_vector[ENV_MAX_VARIABLES + 1];
-static char subshell_command[SHELL_EXPAND_CAP];
+/* One byte of slack for the terminator: the child shell rejects logical
+ * lines longer than SHELL_LINE_MAX. */
+static char subshell_command[SHELL_LINE_MAX + 1];
 static char resolved_path[SHELL_PATH_MAX];
 
 int exec_last_status(void) { return last_status; }
 void exec_request_exit(void) { exit_requested = 1; }
 int exec_exit_requested(void) { return exit_requested; }
 void exec_set_interactive(int value) { interactive = value; }
-int exec_is_interactive(void) { return interactive; }
 
 static int expand_token(const char *line, const ShellToken *token,
                         PreparedCommand *cmd, char **out,
@@ -298,31 +299,70 @@ static int resolve_external(const char *name) {
     return -1;
 }
 
-/* Quotes argv so that a child shell's "-c" sees exactly these words again:
- * every word is single-quoted and embedded quotes become '\''. */
+/* Appends text to subshell_command in single quotes, so that a child
+ * shell's "-c" sees it as one word again; embedded quotes become '\''.
+ * Fails when the result would exceed what the child shell accepts. */
+static int append_quoted(size_t *len, const char *text, size_t text_len) {
+    if (*len + 2 > SHELL_LINE_MAX)
+        return -1;
+    subshell_command[(*len)++] = '\'';
+    for (size_t i = 0; i < text_len; ++i) {
+        if (text[i] == '\'') {
+            if (*len + 4 + 1 > SHELL_LINE_MAX)
+                return -1;
+            memcpy(subshell_command + *len, "'\\''", 4);
+            *len += 4;
+        } else {
+            if (*len + 1 + 1 > SHELL_LINE_MAX)
+                return -1;
+            subshell_command[(*len)++] = text[i];
+        }
+    }
+    subshell_command[(*len)++] = '\'';
+    subshell_command[*len] = 0;
+    return 0;
+}
+
+/* Runs a builtin in a child by re-quoting its argv as a "shell -c" line. */
 static int build_subshell_command(const PreparedCommand *cmd) {
     size_t len = 0;
     for (int i = 0; i < cmd->argc; ++i) {
-        const char *arg = cmd->argv[i];
-        if (len + 4 > sizeof(subshell_command))
-            return -1;
-        if (i > 0)
-            subshell_command[len++] = ' ';
-        subshell_command[len++] = '\'';
-        for (; *arg; ++arg) {
-            if (len + 6 > sizeof(subshell_command))
+        if (i > 0) {
+            if (len + 1 > SHELL_LINE_MAX)
                 return -1;
-            if (*arg == '\'') {
-                memcpy(subshell_command + len, "'\\''", 4);
-                len += 4;
-            } else {
-                subshell_command[len++] = *arg;
-            }
+            subshell_command[len++] = ' ';
         }
-        subshell_command[len++] = '\'';
+        if (append_quoted(&len, cmd->argv[i], strlen(cmd->argv[i])) != 0)
+            return -1;
     }
     subshell_command[len] = 0;
     return 0;
+}
+
+/* Starts path with the plan's stdio and the exported environment, closing the
+ * plan's files either way. Returns the pid, or 0 with the status in *status;
+ * failures are reported on the child's stderr under name. */
+static long spawn_process(const char *name, const char *path,
+                          const char *const *argv, StdioPlan *plan,
+                          int *status) {
+    long pid;
+    if (env_build_envp(envp_storage, sizeof(envp_storage), envp_vector,
+                       sizeof(envp_vector) / sizeof(envp_vector[0])) != 0) {
+        out_error("shell", name, "environment too large");
+        stdio_plan_close(plan);
+        *status = STATUS_FAILURE;
+        return 0;
+    }
+    pid = spawn_args(path, argv, envp_vector, plan->fds[0], plan->fds[1],
+                     plan->fds[2]);
+    if (pid <= 0)
+        out_error_to(plan->fds[2], "shell", name, "cannot execute");
+    stdio_plan_close(plan);
+    if (pid <= 0) {
+        *status = STATUS_CANNOT_EXECUTE;
+        return 0;
+    }
+    return pid;
 }
 
 /* Starts one pipeline stage as a child process. Returns its pid, or 0 when
@@ -333,7 +373,6 @@ static long spawn_command(PreparedCommand *cmd, int in, int out, int err,
     const char *path;
     const char *const *argv;
     StdioPlan plan;
-    long pid;
 
     *status = 0;
     stdio_plan_init(&plan, in, out, err);
@@ -370,23 +409,7 @@ static long spawn_command(PreparedCommand *cmd, int in, int out, int err,
         *status = STATUS_NOT_FOUND;
         return 0;
     }
-    if (env_build_envp(envp_storage, sizeof(envp_storage), envp_vector,
-                       sizeof(envp_vector) / sizeof(envp_vector[0])) != 0) {
-        out_error("shell", cmd->argv[0], "environment too large");
-        stdio_plan_close(&plan);
-        *status = STATUS_FAILURE;
-        return 0;
-    }
-    pid = spawn_args(path, argv, envp_vector, plan.fds[0], plan.fds[1],
-                     plan.fds[2]);
-    if (pid <= 0)
-        out_error_to(plan.fds[2], "shell", cmd->argv[0], "cannot execute");
-    stdio_plan_close(&plan);
-    if (pid <= 0) {
-        *status = STATUS_CANNOT_EXECUTE;
-        return 0;
-    }
-    return pid;
+    return spawn_process(cmd->argv[0], path, argv, &plan, status);
 }
 
 static void announce_job(int id, const int *pids, int count) {
@@ -411,6 +434,48 @@ static int wait_all(const int *pids, int count, long status_pid) {
             result = status;
     }
     return result;
+}
+
+/* Records pids as a job, or waits for them when the job table is full.
+ * Returns the status the shell reports for the command line. */
+static int register_background(const char *line, const ShellPipeline *pipeline,
+                               const int *pids, int count, long status_pid,
+                               int fallback_status) {
+    int id = jobs_add(pids, count, line + pipeline->source_start,
+                      (size_t)(pipeline->source_end - pipeline->source_start));
+    if (id < 0) {
+        out_error("shell", 0, "too many jobs; waiting in the foreground");
+        return status_pid > 0 ? wait_all(pids, count, status_pid)
+                              : fallback_status;
+    }
+    if (interactive)
+        announce_job(id, pids, count);
+    return 0;
+}
+
+/* Runs "a && b || c &" as a single job. The list executes in a child shell,
+ * so it sees the exported environment and starts with $? at 0; shell-local
+ * variables are not carried over. */
+static int run_background_list(const char *line, const ShellPipeline *first) {
+    static const char *subshell_argv[4];
+    size_t len = (size_t)(first->source_end - first->source_start);
+    StdioPlan plan;
+    int status = 0;
+    int pid;
+    memcpy(subshell_command, line + first->source_start, len);
+    subshell_command[len] = 0;
+    subshell_argv[0] = "shell";
+    subshell_argv[1] = "-c";
+    subshell_argv[2] = subshell_command;
+    subshell_argv[3] = 0;
+
+    out_flush();
+    stdio_plan_init(&plan, SPAWN_STDIO_NULL, 1, 2);
+    pid = (int)spawn_process("background list", SHELL_SELF_PATH, subshell_argv,
+                             &plan, &status);
+    if (pid <= 0)
+        return status;
+    return register_background(line, first, &pid, 1, pid, 0);
 }
 
 static int run_pipeline(const char *line, const ShellPipeline *pipeline) {
@@ -470,18 +535,9 @@ static int run_pipeline(const char *line, const ShellPipeline *pipeline) {
         }
     }
 
-    if (pipeline->background && pid_count > 0) {
-        int id = jobs_add(pids, pid_count, line + pipeline->source_start,
-                          (size_t)(pipeline->source_end - pipeline->source_start));
-        if (id < 0) {
-            out_error("shell", 0, "too many jobs; waiting in the foreground");
-            return last_pid > 0 ? wait_all(pids, pid_count, last_pid)
-                                : last_spawn_status;
-        }
-        if (interactive)
-            announce_job(id, pids, pid_count);
-        return 0;
-    }
+    if (pipeline->background && pid_count > 0)
+        return register_background(line, pipeline, pids, pid_count, last_pid,
+                                   last_spawn_status);
     if (last_pid <= 0) {
         wait_all(pids, pid_count, 0);
         return last_spawn_status;
@@ -503,7 +559,12 @@ int exec_line(const char *line) {
             continue;
         if (pipeline->connector == CONNECT_IF_FAILURE && last_status == 0)
             continue;
-        last_status = run_pipeline(line, pipeline);
+        if (pipeline->background && pipeline->list_length > 1) {
+            last_status = run_background_list(line, pipeline);
+            i += pipeline->list_length - 1;
+        } else {
+            last_status = run_pipeline(line, pipeline);
+        }
         if (exit_requested)
             break;
     }

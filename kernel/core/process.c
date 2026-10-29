@@ -1872,19 +1872,16 @@ regs_t *process_schedule(regs_t *r) {
         return &best->frame;
     }
 
-    /* Keep running prev if it is still runnable */
-    if (process_is_runnable(prev)) {
-        if (prev->timeslice_ms == 0) {
-            prev->timeslice_ms = process_timeslice_for_prio(prev->priority);
-        }
-        process_complete_wait(prev);
-        if (process_resume_blocked_io(prev) != 0) {
-            return r;
-        }
-        if (process_resume_blocked_poll(prev) != 0) {
-            return r;
-        }
-        return &prev->frame;
+    /* The loop only breaks with best == prev, and best is always runnable. */
+    if (prev->timeslice_ms == 0) {
+        prev->timeslice_ms = process_timeslice_for_prio(prev->priority);
     }
-    return r;
+    process_complete_wait(prev);
+    if (process_resume_blocked_io(prev) != 0) {
+        return r;
+    }
+    if (process_resume_blocked_poll(prev) != 0) {
+        return r;
+    }
+    return &prev->frame;
 }

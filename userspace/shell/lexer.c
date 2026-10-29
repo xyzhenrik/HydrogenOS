@@ -8,6 +8,11 @@ static int is_operator_char(char c) {
     return c == '|' || c == '&' || c == ';' || c == '<' || c == '>';
 }
 
+/* A backslash before a newline joins two physical lines. */
+static int is_line_continuation(const char *s) {
+    return s[0] == '\\' && s[1] == '\n';
+}
+
 static int is_digit(char c) { return c >= '0' && c <= '9'; }
 
 static int push_token(ShellTokenList *out, const ShellToken *token,
@@ -91,8 +96,14 @@ int lexer_tokenize(const char *line, ShellTokenList *out, const char **error) {
     for (;;) {
         ShellToken token = {0};
         size_t end = pos;
-        while (is_blank(line[pos]))
-            pos++;
+        for (;;) {
+            if (is_blank(line[pos]))
+                pos++;
+            else if (is_line_continuation(line + pos))
+                pos += 2;
+            else
+                break;
+        }
         char c = line[pos];
         if (c == 0 || c == '#')
             break;

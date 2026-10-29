@@ -62,6 +62,22 @@ static const ShellCase cases[] = {
      "jobs\n"
      "rm /shelltest.bg\n",
      "background\n[1] Running  sleep 300\n0\n", 0},
+    {"joblist",
+     "sleep 300 && echo listed > /shelltest.bgl &\n"
+     "jobs\n"
+     "wait\n"
+     "cat /shelltest.bgl\n"
+     "rm /shelltest.bgl\n",
+     "[1] Running  sleep 300 && echo listed > /shelltest.bgl\nlisted\n", 0},
+    {"continuation",
+     "echo con\\\ntinued \\\n  two \"x\\\ny\"\n",
+     "continued two xy\n", 0},
+    {"copy",
+     "echo data > /shelltest.cp\n"
+     "cp /shelltest.cp /./shelltest.cp 2>&1\n"
+     "cat /shelltest.cp\n"
+     "rm /shelltest.cp\n",
+     "cp: /./shelltest.cp: source and destination are the same file\ndata\n", 0},
     {"quoting",
      "echo a\\ b \"c \\\"d\\\" \\$e\" 'f  g' \"\" x # comment\n",
      "a b c \"d\" $e f  g  x\n", 0},

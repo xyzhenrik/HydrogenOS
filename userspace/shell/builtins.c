@@ -13,6 +13,7 @@ enum {
     STATUS_USAGE = 2,
     STATUS_NOT_FOUND = 127,
     COPY_CHUNK = 2048,
+    COPY_PATH_MAX = 256,
 };
 
 static char io_buffer[COPY_CHUNK];
@@ -240,12 +241,73 @@ static int write_all(int fd, const char *buf, size_t len) {
     return 0;
 }
 
+/* Resolves path against the working directory and collapses ".", ".." and
+ * repeated slashes into out. Returns -1 when it does not fit. */
+static int canonical_path(const char *path, char *out, size_t cap) {
+    char joined[2 * COPY_PATH_MAX];
+    size_t len = 0;
+    size_t out_len = 0;
+    if (path[0] != '/') {
+        if (!getcwd(joined, COPY_PATH_MAX))
+            return -1;
+        len = strlen(joined);
+        if (len == 0 || joined[len - 1] != '/')
+            joined[len++] = '/';
+    }
+    if (len + strlen(path) >= sizeof(joined))
+        return -1;
+    memcpy(joined + len, path, strlen(path) + 1);
+
+    for (const char *p = joined; *p;) {
+        size_t seg = 0;
+        while (*p == '/')
+            p++;
+        while (p[seg] && p[seg] != '/')
+            seg++;
+        if (seg == 0)
+            break;
+        if (seg == 1 && p[0] == '.') {
+            /* current directory: nothing to append */
+        } else if (seg == 2 && p[0] == '.' && p[1] == '.') {
+            while (out_len > 0 && out[out_len - 1] != '/')
+                out_len--;
+            if (out_len > 0)
+                out_len--;
+        } else {
+            if (out_len + 1 + seg >= cap)
+                return -1;
+            out[out_len++] = '/';
+            memcpy(out + out_len, p, seg);
+            out_len += seg;
+        }
+        p += seg;
+    }
+    if (out_len == 0)
+        out[out_len++] = '/';
+    out[out_len] = 0;
+    return 0;
+}
+
+static int same_path(const char *a, const char *b) {
+    char canonical_a[COPY_PATH_MAX];
+    char canonical_b[COPY_PATH_MAX];
+    if (canonical_path(a, canonical_a, sizeof(canonical_a)) != 0 ||
+        canonical_path(b, canonical_b, sizeof(canonical_b)) != 0)
+        return 0;
+    return str_eq(canonical_a, canonical_b);
+}
+
 static int builtin_cp(int argc, char **argv) {
     long src;
     long dst;
     int status = 0;
     if (argc != 3)
         return usage("cp", "usage: cp <source> <destination>");
+    /* Opening the destination truncates it, which would empty the source. */
+    if (same_path(argv[1], argv[2])) {
+        out_error("cp", argv[2], "source and destination are the same file");
+        return STATUS_FAILURE;
+    }
     src = open(argv[1], OPEN_READ);
     if (src < 0) {
         out_error("cp", argv[1], "cannot open");

@@ -30,8 +30,11 @@ typedef struct ShellPipeline {
     uint8_t command_count;
     uint8_t connector;
     uint8_t background;
+    /* On the first pipeline of a backgrounded "a && b || c &" list, the number
+     * of pipelines the list spans; otherwise 1. The list runs as one job. */
+    uint8_t list_length;
     uint16_t source_start; /* byte span in the line, used for job listings */
-    uint16_t source_end;
+    uint16_t source_end;   /* for a backgrounded list: through its last pipeline */
 } ShellPipeline;
 
 typedef struct ShellProgram {

@@ -103,7 +103,9 @@ int expand_word(const char *raw, size_t raw_len, int last_status, char *out,
     }
     while (i < raw_len) {
         char c = raw[i];
-        if (c == '\\') {
+        if (c == '\\' && i + 1 < raw_len && raw[i + 1] == '\n') {
+            i += 2;
+        } else if (c == '\\') {
             result->quoted = 1;
             if (i + 1 < raw_len) {
                 put_char(&b, raw[i + 1]);
@@ -122,8 +124,10 @@ int expand_word(const char *raw, size_t raw_len, int last_status, char *out,
             result->quoted = 1;
             i++;
             while (i < raw_len && raw[i] != '"') {
-                if (raw[i] == '\\' && i + 1 < raw_len &&
-                    escapable_in_double_quotes(raw[i + 1])) {
+                if (raw[i] == '\\' && i + 1 < raw_len && raw[i + 1] == '\n') {
+                    i += 2;
+                } else if (raw[i] == '\\' && i + 1 < raw_len &&
+                           escapable_in_double_quotes(raw[i + 1])) {
                     put_char(&b, raw[i + 1]);
                     i += 2;
                 } else if (raw[i] == '$') {

@@ -49,6 +49,7 @@ static int parse_pipeline(const ShellTokenList *tokens, int *index,
     int i = *index;
     pipeline->command_count = 0;
     pipeline->background = 0;
+    pipeline->list_length = 1;
     pipeline->source_start = tokens->tokens[i].start;
     for (;;) {
         const ShellToken *last;
@@ -75,6 +76,7 @@ int parser_parse(const ShellTokenList *tokens, ShellProgram *out,
                  const char **error) {
     int i = 0;
     uint8_t connector = CONNECT_ALWAYS;
+    int list_start = 0; /* first pipeline of the current and/or list */
     out->pipeline_count = 0;
     while (tokens->tokens[i].type != TOKEN_END) {
         ShellPipeline *pipeline;
@@ -94,7 +96,13 @@ int parser_parse(const ShellTokenList *tokens, ShellProgram *out,
             break;
         i++;
         if (type == TOKEN_SEQUENCE || type == TOKEN_BACKGROUND) {
-            pipeline->background = type == TOKEN_BACKGROUND;
+            if (type == TOKEN_BACKGROUND) {
+                ShellPipeline *first = &out->pipelines[list_start];
+                first->background = 1;
+                first->list_length = (uint8_t)(out->pipeline_count - list_start);
+                first->source_end = pipeline->source_end;
+            }
+            list_start = out->pipeline_count;
             connector = CONNECT_ALWAYS;
             continue;
         }
