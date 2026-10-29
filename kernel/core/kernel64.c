@@ -224,6 +224,7 @@ static process_t *load_user_process(const uint8_t *elf, size_t elf_size,
   process_t *proc = process_create(user_pml4, prev_proc ? prev_proc->pid : 0);
   if (!proc) {
     kputs("user: no proc\n");
+    paging_destroy_user_pml4(user_pml4);
     return 0;
   }
   process_set_name(proc, name);

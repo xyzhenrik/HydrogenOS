@@ -17,6 +17,8 @@
 #define CPUID_EXT_FEATURES 0x80000001u
 #define CPUID_EXT_EDX_NX (1u << 20)
 
+#define CR0_WP (1ULL << 16)
+
 #define PAGING_SPAN_2M 0x200000ULL
 #define PAGING_SPAN_1G 0x40000000ULL
 #define PAGING_SPAN_512G 0x8000000000ULL
@@ -119,6 +121,15 @@ static void paging_enable_nx(void) {
     nx_enabled = 1;
 }
 
+/* Without CR0.WP the CPU lets supervisor code write through read-only
+   mappings, so a kernel bug could silently modify read-only user pages. */
+static void paging_enable_write_protect(void) {
+    uint64_t cr0;
+    __asm__ volatile("mov %%cr0, %0" : "=r"(cr0));
+    cr0 |= CR0_WP;
+    __asm__ volatile("mov %0, %%cr0" ::"r"(cr0) : "memory");
+}
+
 void paging_init(void) {
     // In boot.S we created identity mappings; we still build a table
     // structure so we can map later.
@@ -126,6 +137,7 @@ void paging_init(void) {
     current_pml4_tbl = pml4;
     load_cr3((uint64_t)(uintptr_t)current_pml4_tbl);
     paging_enable_nx();
+    paging_enable_write_protect();
 }
 
 uint64_t *paging_kernel_pml4(void) { return kernel_pml4_tbl; }
