@@ -336,7 +336,7 @@ static void cmd_help(void) {
             "touch <path>, mv <src> <dst>, cp <src> <dst>, echo <text>, pipe [text], "
             "piperun [text], pipenoinherit [text], pipeblock [text], pipefull, "
             "pipebroken, pipeeof, pollpipe, pollwaitpipe, pollmanypipe, run "
-            "<path>, cd <path>, pwd, exit\n");
+            "<path>, cd <path>, pwd, poweroff, reboot, exit\n");
 }
 
 static void cmd_pwd(void) {
@@ -1184,6 +1184,10 @@ int main(void) {
       cmd_cd(arg);
     } else if (str_eq(cmd, "pwd")) {
       cmd_pwd();
+    } else if (str_eq(cmd, "poweroff")) {
+      cmd_run("/poweroff");
+    } else if (str_eq(cmd, "reboot")) {
+      cmd_run("/reboot");
     } else if (str_eq(cmd, "exit")) {
       return 0;
     } else {

@@ -82,6 +82,8 @@ Beispiel: `-2` entspricht `ENOENT`.
 | 21 | sys_poll | `int fd, uint32_t events` | Sofortige Readiness-Abfrage fuer einen Handle |
 | 22 | sys_poll_wait | `int fd, uint32_t events, int64_t timeout_ms` | Blockierend auf Handle-Readiness warten |
 | 23 | sys_poll_many | `struct poll_fd* fds, uint32_t count, int64_t timeout_ms` | Mehrere FDs gleichzeitig pollen/warten |
+| 48 | sys_shutdown | `uint32_t flags` (muss 0 sein) | Block-Cache flushen, dann ACPI S5 (Soft-Off). Kehrt nur bei Fehler zurueck: `-ENOSYS` ohne nutzbares `\_S5`/PM1-Register, `-EIO` wenn der Flush scheitert oder S5 nicht greift, `-EINVAL` bei Flags != 0 |
+| 49 | sys_reboot | `uint32_t flags` (muss 0 sein) | Block-Cache flushen, dann FADT-Reset-Register, Fallback 8042-Reset-Puls (`0xFE`), Fallback Triple Fault. Kehrt nur bei Fehler zurueck: `-EIO` wenn der Flush scheitert, `-EINVAL` bei Flags != 0 |
 
 > Weitere Syscalls werden fortlaufend ergaenzt. Neue Syscalls erhalten **neue Nummern**; bestehende Nummern werden nie umgebogen.
 > Aktuell implementiert: `sys_exit`, `sys_write`, `sys_read`, `sys_open`, `sys_close`, `sys_lseek`, `sys_spawn`, `sys_spawn_with_stdio`, `sys_wait`, `sys_getpid`, `sys_yield`, `sys_sleep`, `sys_time_ms`, `sys_tty_set_color`, `sys_pipe`, `sys_handle_set_inherit`, `sys_dup`, `sys_dup2`, `sys_dup3`, `sys_poll`, `sys_poll_wait`, `sys_poll_many` (und ein undokumentiertes `sys_putchar` fuer Debug-Ausgaben).

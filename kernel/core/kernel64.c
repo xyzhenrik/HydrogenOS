@@ -13,6 +13,7 @@
 #include "higher_half.h"
 #include "idt.h"
 #include "arch/x86_64/apic.h"
+#include "arch/x86_64/acpi.h"
 #include "io.h"
 #include "isr.h"
 #include "keyboard.h"
@@ -530,6 +531,7 @@ void kmain64(uint64_t magic, uint64_t multiboot_info_addr) {
   ata_init();
   pci_init();
   pci_dump_devices();
+  acpi_init();
   block_init();
   block_cache_init();
   initrd_setup((uintptr_t)multiboot_info_addr);

@@ -45,6 +45,8 @@
 #define SYS_FB_CLEAR 42
 #define SYS_SYSINFO 43
 #define SYS_SET_LAYOUT 44
+#define SYS_SHUTDOWN 48
+#define SYS_REBOOT 49
 
 #define PRIO_IDLE   0
 #define PRIO_NORMAL 1
@@ -298,4 +300,12 @@ static inline long sys_sysinfo(sysinfo_t *out) {
 
 static inline long sys_set_layout(int layout) {
     return syscall1(SYS_SET_LAYOUT, layout);
+}
+
+static inline long sys_shutdown(void) {
+    return syscall1(SYS_SHUTDOWN, 0);
+}
+
+static inline long sys_reboot(void) {
+    return syscall1(SYS_REBOOT, 0);
 }

@@ -21,6 +21,7 @@ void fb_console_clear(void);
 #include "tty.h"
 #include "stat.h"
 #include "dirent.h"
+#include "power.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -121,6 +122,16 @@ uint64_t syscall_handle(regs_t *r) {
     case SYS_SET_LAYOUT: {
         keyboard_set_layout((int)r->rdi);
         return (uint64_t)keyboard_get_layout();
+    }
+    case SYS_SHUTDOWN: {
+        if (r->rdi != 0)
+            return (uint64_t)-EINVAL;
+        return (uint64_t)(int64_t)power_shutdown();
+    }
+    case SYS_REBOOT: {
+        if (r->rdi != 0)
+            return (uint64_t)-EINVAL;
+        return (uint64_t)(int64_t)power_reboot();
     }
     case SYS_SYSINFO: {
         uint32_t *o = (uint32_t *)(uintptr_t)r->rdi;
