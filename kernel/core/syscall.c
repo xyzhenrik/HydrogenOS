@@ -82,7 +82,9 @@ static int copy_resolved_user_path(process_t *proc, const char *uptr,
 }
 
 /* Filesystem drivers return negative errno values; anything outside the
-   set a namespace operation can legitimately report is surfaced as EIO. */
+   set a namespace operation can legitimately report is surfaced as EIO.
+   EPERM is deliberately excluded: it equals the bare -1 the VFS layer
+   still uses for generic failures. */
 static uint64_t fs_status(int rc) {
     switch (rc) {
     case 0:
@@ -94,7 +96,6 @@ static uint64_t fs_status(int rc) {
     case -ENOSPC:
     case -EINVAL:
     case -EBUSY:
-    case -EPERM:
     case -EROFS:
     case -EMLINK:
         return (uint64_t)(int64_t)rc;

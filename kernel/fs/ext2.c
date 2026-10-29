@@ -1129,7 +1129,9 @@ int ext2_write_file(const char *path, const uint8_t *data, uint32_t size) {
         if (rc == 0) rc = dir_add_entry(parent_ino, &parent, name, len, ino_num,
                                         dirent_file_type(ino.i_mode));
         if (rc != 0) {
-            free_inode(ino_num, 0);
+            /* The slot may already hold a live-looking inode; destroying it
+               writes links_count=0 and dtime before the bitmap bit is cleared. */
+            inode_destroy(ino_num, &ino);
             return sync_result(rc);
         }
     } else {
@@ -1203,7 +1205,8 @@ int ext2_mkdir(const char *path) {
     return sync_result(write_inode(parent_ino, &parent));
 
 fail_blocks:
-    inode_release_blocks(&dir);
+    inode_destroy(ino_num, &dir);
+    return sync_result(rc);
 fail_inode:
     free_inode(ino_num, 1);
     return sync_result(rc);

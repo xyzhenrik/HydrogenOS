@@ -482,7 +482,7 @@ int ramfs_rmdir(const char *path) {
     ramfs_dyn_entry_t *e = dyn_find(name);
     if (!e) {
         vfs_stat_t st;
-        return ramfs_stat(path, &st) == 0 ? -EPERM : -ENOENT;
+        return ramfs_stat(path, &st) == 0 ? -EROFS : -ENOENT;
     }
     if (e->type != 2) return -ENOTDIR;
     if (dyn_has_children(name)) return -ENOTEMPTY;
