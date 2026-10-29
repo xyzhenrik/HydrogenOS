@@ -22,6 +22,7 @@
 #define DNS_ERR_MALFORMED  (-1005) /* response does not parse */
 #define DNS_ERR_NO_ADDRESS (-1006) /* name exists but has no A record */
 #define DNS_ERR_MISMATCH   (-1007) /* response belongs to another query */
+#define DNS_ERR_TRUNCATED  (-1008) /* answer did not fit UDP; TCP is not supported */
 
 /* Encodes a recursive A/IN query for name. Returns the message length,
  * DNS_ERR_NAME for an invalid name, or -1 when cap is too small. */

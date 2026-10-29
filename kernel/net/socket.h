@@ -21,9 +21,9 @@ typedef struct net_sockaddr {
     uint16_t reserved;
 } net_sockaddr_t;
 
-/* Creates an unbound UDP socket holding one reference. Returns 0 or -errno
- * (-ENODEV without a network device, -EAFNOSUPPORT, -EPROTOTYPE,
- * -EPROTONOSUPPORT, -ENFILE when the socket table is full). */
+/* Creates an unbound UDP socket holding one reference. Works without a
+ * network device (loopback needs none). Returns 0 or -errno (-EAFNOSUPPORT,
+ * -EPROTOTYPE, -EPROTONOSUPPORT, -ENFILE when the socket table is full). */
 int net_socket_create(int family, int type, int protocol, net_socket_t **out);
 
 /* Handle duplication and close. Acquire fails with -EMFILE on overflow of the
@@ -36,9 +36,10 @@ void net_socket_release(net_socket_t *socket);
 int net_socket_bind(net_socket_t *socket, uint32_t ipv4, uint16_t port);
 
 /* Sends one datagram, binding an ephemeral port first when the socket is
- * unbound. Returns the payload length or -errno (see udp_output(); -EINVAL for
- * a zero port or a non-unicast destination, -EADDRINUSE when no ephemeral port
- * is free). */
+ * unbound. Returns 0 once sent, a positive ticket when the datagram waits for
+ * neighbour resolution (see udp_send_wait_check()), or -errno (see
+ * udp_output(); -EINVAL for a zero port or a non-unicast destination,
+ * -EADDRINUSE when no ephemeral port is free). */
 int net_socket_sendto(net_socket_t *socket, const uint8_t *data, size_t len,
                       uint32_t ipv4, uint16_t port);
 

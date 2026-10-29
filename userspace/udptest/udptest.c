@@ -5,16 +5,20 @@
 /*
  * udptest - exercises the socket syscalls and the UDP stack.
  *
- * Everything except the last step runs over loopback and needs no external
- * network. The final step queries the QEMU resolver; a missing upstream
- * (timeout, NXDOMAIN, SERVFAIL) is acceptable, a broken send path is not.
+ * Everything except the last steps runs over loopback and needs no external
+ * network, not even a NIC. The wire steps send to the QEMU resolver while a
+ * CPU-bound sibling keeps the scheduler busy; a missing upstream (timeout,
+ * NXDOMAIN, SERVFAIL) or an absent or isolated network (no NIC, link down,
+ * neighbour never answers ARP) is acceptable, a broken send path is not.
  *
- * "udptest send <port>" is the helper child: it sends one datagram to
- * 127.0.0.1:<port> after a short delay.
+ * Helper children: "udptest send <port>" sends one datagram to
+ * 127.0.0.1:<port> after a short delay; "udptest spin <ms>" burns CPU for
+ * that long.
  */
 
 #define ERR_EBADF           (-9)
 #define ERR_EAGAIN          (-11)
+#define ERR_ENODEV          (-19)
 #define ERR_EFAULT          (-14)
 #define ERR_EINVAL          (-22)
 #define ERR_ENFILE          (-23)
@@ -25,19 +29,30 @@
 #define ERR_EAFNOSUPPORT    (-97)
 #define ERR_EADDRINUSE      (-98)
 #define ERR_EADDRNOTAVAIL   (-99)
+#define ERR_ENETDOWN        (-100)
+#define ERR_ENETUNREACH     (-101)
+#define ERR_EHOSTUNREACH    (-113)
 
 #define LOOPBACK       NET_IPV4_ADDR(127, 0, 0, 1)
-#define OWN_ADDRESS    NET_IPV4_ADDR(10, 0, 2, 15)
+#define LOOPBACK_ALT   NET_IPV4_ADDR(127, 0, 0, 2)
 #define FOREIGN        NET_IPV4_ADDR(1, 2, 3, 4)
+#define SILENT_HOST    NET_IPV4_ADDR(10, 0, 2, 99)
 #define BASE_PORT      41000u
 #define EPHEMERAL_LOW  49152u
 #define PAYLOAD_MAX    1472
 #define SOCKET_LIMIT   64
+#define RX_QUEUE_DEPTH 8
+#define UNMAPPED_PTR   ((void *)0x300000000000UL)
+#define KERNEL_IMAGE   ((void *)0x100000UL)
 
 #define SENDER_DELAY_MS   100
 #define WAKE_TIMEOUT_MS   5000
 #define IDLE_POLL_MS      100
 #define DNS_TIMEOUT_MS    2000
+#define SPIN_MS           3500
+
+/* The interface address, or 0 without a network device. */
+static unsigned int own_address;
 
 static int fail(const char *what, long value) {
     fprintf(2, "udptest: FAIL %s (%ld)\n", what, value);
@@ -75,6 +90,14 @@ static int run_sender(unsigned int port) {
         return 1;
     sleep_ms(SENDER_DELAY_MS);
     return send_text((int)fd, LOOPBACK, port, "wake") == 4 ? 0 : 1;
+}
+
+static int run_spinner(unsigned int duration_ms) {
+    unsigned long start = time_ms();
+
+    while (time_ms() - start < duration_ms)
+        __asm__ volatile("pause");
+    return 0;
 }
 
 static int check_socket_creation(void) {
@@ -122,7 +145,8 @@ static int check_bind_rules(void) {
     EXPECT("bind foreign address", sys_bind((int)b, FOREIGN, BASE_PORT + 1),
            ERR_EADDRNOTAVAIL);
     EXPECT("bind port range", sys_bind((int)b, 0, 65536), ERR_EINVAL);
-    EXPECT("bind own address", sys_bind((int)b, OWN_ADDRESS, BASE_PORT + 1), 0);
+    EXPECT("bind specific address",
+           sys_bind((int)b, own_address ? own_address : LOOPBACK_ALT, BASE_PORT + 1), 0);
     EXPECT("bind any vs own", sys_bind((int)c, 0, BASE_PORT + 1), ERR_EADDRINUSE);
     EXPECT("close bound socket", close((int)b), 0);
     EXPECT("bind after close", sys_bind((int)c, 0, BASE_PORT + 1), 0);
@@ -143,7 +167,8 @@ static int check_bind_rules(void) {
 }
 
 static int check_loopback(void) {
-    static const unsigned int destinations[] = { LOOPBACK, OWN_ADDRESS };
+    const unsigned int destinations[] = { LOOPBACK, own_address };
+    const unsigned int destination_count = own_address ? 2 : 1;
     char buf[PAYLOAD_MAX + 8];
     unsigned char pattern[PAYLOAD_MAX];
     net_sockaddr_t from;
@@ -156,7 +181,7 @@ static int check_loopback(void) {
         return fail("socket", rx);
     EXPECT("bind", sys_bind((int)rx, 0, BASE_PORT), 0);
 
-    for (unsigned int i = 0; i < 2; ++i) {
+    for (unsigned int i = 0; i < destination_count; ++i) {
         EXPECT("send", send_text((int)tx, destinations[i], BASE_PORT, "hello"), 5);
         EXPECT("poll readable", sys_poll_wait((int)rx, POLL_READ, WAKE_TIMEOUT_MS),
                POLL_READ);
@@ -225,9 +250,7 @@ static int check_queue_bound(void) {
             return fail("queue order", value);
         ++received;
     }
-    if (received < 1 || received >= 20)
-        return fail("bounded queue", received);
-    fprintf(2, "udptest: queue held %d of 20 datagrams\n", received);
+    EXPECT("bounded queue", received, RX_QUEUE_DEPTH);
     close((int)rx);
     close((int)tx);
     return 0;
@@ -258,6 +281,21 @@ static int check_argument_errors(void) {
     EXPECT("recv bad from",
            sys_recvfrom((int)fd, buf, sizeof(buf), NET_MSG_DONTWAIT, (net_sockaddr_t *)8),
            ERR_EFAULT);
+    EXPECT("send unmapped buffer",
+           sys_sendto((int)fd, UNMAPPED_PTR, 4, LOOPBACK, BASE_PORT), ERR_EFAULT);
+    EXPECT("recv unmapped buffer",
+           sys_recvfrom((int)fd, UNMAPPED_PTR, 4, NET_MSG_DONTWAIT, 0), ERR_EFAULT);
+    EXPECT("recv unmapped from",
+           sys_recvfrom((int)fd, buf, sizeof(buf), NET_MSG_DONTWAIT, UNMAPPED_PTR),
+           ERR_EFAULT);
+    EXPECT("recv kernel buffer",
+           sys_recvfrom((int)fd, KERNEL_IMAGE, 4, NET_MSG_DONTWAIT, 0), ERR_EFAULT);
+    EXPECT("bind", sys_bind((int)fd, 0, BASE_PORT + 2), 0);
+    EXPECT("send to self", send_text((int)fd, LOOPBACK, BASE_PORT + 2, "data"), 4);
+    EXPECT("recv unmapped buffer with data queued",
+           sys_recvfrom((int)fd, UNMAPPED_PTR, 4, NET_MSG_DONTWAIT, 0), ERR_EFAULT);
+    EXPECT("datagram survives rejected recv",
+           sys_recvfrom((int)fd, buf, sizeof(buf), NET_MSG_DONTWAIT, 0), 4);
     EXPECT("recv unknown flags", sys_recvfrom((int)fd, buf, sizeof(buf), 0x80, &from),
            ERR_EINVAL);
     EXPECT("bind file", sys_bind((int)file, 0, BASE_PORT), ERR_ENOTSOCK);
@@ -443,6 +481,31 @@ static int check_dns_codec(void) {
     return 0;
 }
 
+/* A network that is absent, down or isolated is not a udptest failure. */
+static int network_unavailable(long rc) {
+    return rc == ERR_ENODEV || rc == ERR_ENETDOWN || rc == ERR_ENETUNREACH ||
+           rc == ERR_EHOSTUNREACH;
+}
+
+/*
+ * A cold neighbour makes the kernel park the datagram until ARP resolves. A
+ * silent host must fail with -EHOSTUNREACH (or -ENETDOWN without link) while
+ * the CPU-bound sibling keeps running; the process must neither hang nor
+ * take the kernel down.
+ */
+static int check_silent_neighbour(void) {
+    long fd = udp_socket();
+    long rc;
+
+    if (fd < 0)
+        return fail("socket", fd);
+    rc = send_text((int)fd, SILENT_HOST, DNS_PORT, "ping");
+    if (rc != 4 && !network_unavailable(rc))
+        return fail("send to silent host", rc);
+    close((int)fd);
+    return 0;
+}
+
 /* One real query through ARP, the NIC and the checksum path. */
 static int check_dns_wire(void) {
     unsigned int address = 0;
@@ -457,25 +520,55 @@ static int check_dns_wire(void) {
     case DNS_ERR_NXDOMAIN:
     case DNS_ERR_SERVFAIL:
     case DNS_ERR_NO_ADDRESS:
+    case DNS_ERR_TRUNCATED:
         fprintf(2, "udptest: resolver answered: %s\n", dns_error_text(rc));
         return 0;
     default:
+        if (network_unavailable(rc)) {
+            fprintf(2, "udptest: no usable network: %s\n", dns_error_text(rc));
+            return 0;
+        }
         return fail("dns query", rc);
     }
 }
 
+static int check_wire_with_busy_sibling(void) {
+    char text[8];
+    const char *argv[] = { "udptest", "spin", text, 0 };
+    long pid;
+
+    snprintf(text, sizeof(text), "%u", SPIN_MS);
+    pid = spawn_args("/udptest", argv, 0, SPAWN_STDIO_NULL, SPAWN_STDIO_NULL,
+                     SPAWN_STDIO_NULL);
+    if (pid < 0)
+        return fail("spawn spinner", pid);
+    if (check_silent_neighbour() != 0 || check_dns_wire() != 0)
+        return 1;
+    return reap(pid);
+}
+
+static unsigned int parse_uint(const char *s) {
+    unsigned int value = 0;
+    for (; *s >= '0' && *s <= '9'; ++s)
+        value = value * 10 + (unsigned int)(*s - '0');
+    return value;
+}
+
 int main(int argc, char **argv) {
-    if (argc == 3 && strlen(argv[1]) == 4 && same_bytes(argv[1], "send", 4)) {
-        unsigned int port = 0;
-        for (const char *p = argv[2]; *p >= '0' && *p <= '9'; ++p)
-            port = port * 10 + (unsigned int)(*p - '0');
-        return run_sender(port);
-    }
+    if (argc == 3 && strlen(argv[1]) == 4 && same_bytes(argv[1], "send", 4))
+        return run_sender(parse_uint(argv[2]));
+    if (argc == 3 && strlen(argv[1]) == 4 && same_bytes(argv[1], "spin", 4))
+        return run_spinner(parse_uint(argv[2]));
+
+    net_info_t info;
+    if (sys_net_info(&info) == 0)
+        own_address = info.ipv4;
 
     if (check_socket_creation() != 0 || check_bind_rules() != 0 ||
         check_loopback() != 0 || check_queue_bound() != 0 ||
         check_argument_errors() != 0 || check_blocking_receive() != 0 ||
-        check_poll() != 0 || check_dns_codec() != 0 || check_dns_wire() != 0)
+        check_poll() != 0 || check_dns_codec() != 0 ||
+        check_wire_with_busy_sibling() != 0)
         return 1;
 
     write(1, "UDP PASS\n", 9);

@@ -54,6 +54,14 @@ static int user_range_ok(const void *ptr, size_t len) {
     return 1;
 }
 
+/* Like user_range_ok, but also requires the pages to be mapped for user mode
+ * (and writable when 'writable'), so the kernel can access them fault-free. */
+static int user_buffer_ok(const process_t *proc, const void *ptr, size_t len,
+                          int writable) {
+    return user_range_ok(ptr, len) && proc && proc->pml4 &&
+           paging_user_range_ok(proc->pml4, (uintptr_t)ptr, len, writable);
+}
+
 /* 0 and the socket behind fd, or -EBADF / -ENOTSOCK. */
 static int socket_from_fd(process_t *proc, int fd, net_socket_t **out) {
     int rc = process_fd_socket(proc, fd, out);
@@ -999,22 +1007,34 @@ uint64_t syscall_handle(regs_t *r) {
                                                   (uint16_t)port);
     }
     case SYS_SENDTO: {
+        process_t *proc = process_current();
         net_socket_t *socket = 0;
         const uint8_t *buf = (const uint8_t *)(uintptr_t)r->rsi;
         size_t len = (size_t)r->rdx;
         uint64_t port = r->r8;
 
-        int rc = socket_from_fd(process_current(), (int)r->rdi, &socket);
+        int rc = socket_from_fd(proc, (int)r->rdi, &socket);
         if (rc != 0)
             return (uint64_t)(int64_t)rc;
         if (len > UDP_PAYLOAD_MAX)
             return (uint64_t)-EMSGSIZE;
-        if (len > 0 && !user_range_ok(buf, len))
+        if (len > 0 && !user_buffer_ok(proc, buf, len, 0))
             return (uint64_t)-EFAULT;
         if (port > NET_PORT_MAX)
             return (uint64_t)-EINVAL;
-        return (uint64_t)(int64_t)net_socket_sendto(socket, buf, len,
-                                                    (uint32_t)r->r10, (uint16_t)port);
+        rc = net_socket_sendto(socket, buf, len, (uint32_t)r->r10, (uint16_t)port);
+        if (rc < 0)
+            return (uint64_t)(int64_t)rc;
+        if (rc == 0)
+            return len;
+
+        /* The datagram waits for neighbour resolution; the scheduler
+         * completes the syscall with the datagram length or an error. */
+        if (process_begin_kernel_wait(proc, udp_send_wait_check, (uintptr_t)rc) != 0) {
+            udp_send_cancel(rc);
+            return (uint64_t)-EINVAL;
+        }
+        return 0;
     }
     case SYS_RECVFROM: {
         process_t *proc = process_current();
@@ -1030,9 +1050,9 @@ uint64_t syscall_handle(regs_t *r) {
             return (uint64_t)(int64_t)rc;
         if ((r->r10 & ~(uint64_t)NET_MSG_DONTWAIT) != 0)
             return (uint64_t)-EINVAL;
-        if (len > 0 && !user_range_ok(buf, len))
+        if (len > 0 && !user_buffer_ok(proc, buf, len, 1))
             return (uint64_t)-EFAULT;
-        if (from && !user_range_ok(from, sizeof(*from)))
+        if (from && !user_buffer_ok(proc, from, sizeof(*from), 1))
             return (uint64_t)-EFAULT;
         rc = net_socket_recvfrom(socket, buf, len, from, &received);
         if (rc == 0)

@@ -14,6 +14,13 @@ void paging_destroy_user_pml4(uint64_t *pml4);
 size_t paging_count_user_pages(const uint64_t *pml4);
 uint64_t *paging_current_pml4(void);
 int paging_is_mapped(uintptr_t virt);
+/*
+ * True when every page of [virt, virt + len) is present and user-accessible
+ * in 'pml4' (and writable when 'writable'). Lets the kernel touch a user
+ * buffer without taking a fault. len must be non-zero.
+ */
+int paging_user_range_ok(const uint64_t *pml4, uintptr_t virt, size_t len,
+                         int writable);
 void paging_map_region_pml4(uint64_t *pml4, uintptr_t phys, uintptr_t virt,
                             size_t size_bytes, uint32_t flags);
 /*

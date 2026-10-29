@@ -8,6 +8,19 @@
 #define NET_IPV4_ADDR(a, b, c, d) \
     (((uint32_t)(a) << 24) | ((uint32_t)(b) << 16) | ((uint32_t)(c) << 8) | (uint32_t)(d))
 
+#define NET_IPV4_LOOPBACK_NET   NET_IPV4_ADDR(127, 0, 0, 0)
+#define NET_IPV4_LOOPBACK_MASK  NET_IPV4_ADDR(255, 0, 0, 0)
+#define NET_IPV4_MULTICAST_NET  NET_IPV4_ADDR(224, 0, 0, 0)
+#define NET_IPV4_MULTICAST_MASK NET_IPV4_ADDR(240, 0, 0, 0)
+
+static inline int net_ipv4_is_loopback(uint32_t ipv4) {
+    return (ipv4 & NET_IPV4_LOOPBACK_MASK) == NET_IPV4_LOOPBACK_NET;
+}
+
+static inline int net_ipv4_is_multicast(uint32_t ipv4) {
+    return (ipv4 & NET_IPV4_MULTICAST_MASK) == NET_IPV4_MULTICAST_NET;
+}
+
 static inline uint16_t net_get16(const uint8_t *p) {
     return (uint16_t)(((uint16_t)p[0] << 8) | p[1]);
 }

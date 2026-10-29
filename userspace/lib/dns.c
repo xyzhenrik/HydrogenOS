@@ -8,6 +8,7 @@
 #define DNS_TYPE_A         1
 #define DNS_CLASS_IN       1
 #define DNS_FLAG_QR        0x8000u
+#define DNS_FLAG_TC        0x0200u
 #define DNS_FLAG_RD        0x0100u
 #define DNS_OPCODE_MASK    0x7800u
 #define DNS_RCODE_MASK     0x000Fu
@@ -196,7 +197,7 @@ int dns_parse_response(const uint8_t *msg, size_t len, uint16_t id,
         }
         pos += data_len;
     }
-    return DNS_ERR_NO_ADDRESS;
+    return (flags & DNS_FLAG_TC) ? DNS_ERR_TRUNCATED : DNS_ERR_NO_ADDRESS;
 }
 
 /* Waits up to timeout_ms for the response to the query with 'id'. Datagrams
@@ -233,10 +234,29 @@ static int await_response(int fd, unsigned int server, uint16_t id,
     }
 }
 
+/* The transaction id has to be unpredictable for an off-path attacker. The
+ * time stamp counter is the best entropy a process can read; the mix keeps its
+ * fast-changing bits and removes the correlation with the uptime. */
+static uint16_t transaction_id(void) {
+    uint32_t low;
+    uint32_t high;
+    uint64_t x;
+
+    __asm__ volatile("rdtsc" : "=a"(low), "=d"(high));
+    x = ((uint64_t)high << 32 | low) ^ ((uint64_t)time_ms() << 20) ^
+        ((uint64_t)sys_getpid() << 48);
+    x ^= x >> 33;
+    x *= 0xFF51AFD7ED558CCDULL;
+    x ^= x >> 33;
+    x *= 0xC4CEB9FE1A85EC53ULL;
+    x ^= x >> 33;
+    return (uint16_t)x;
+}
+
 int dns_resolve_a(unsigned int server, const char *name, unsigned long timeout_ms,
                   unsigned int *out_ipv4) {
     uint8_t query[DNS_MESSAGE_MAX];
-    uint16_t id = (uint16_t)(time_ms() * 40503u);
+    uint16_t id = transaction_id();
     long query_len = dns_build_query(query, sizeof(query), id, name);
 
     if (query_len < 0)
@@ -269,6 +289,7 @@ const char *dns_error_text(int error) {
     case DNS_ERR_MALFORMED:       return "malformed response";
     case DNS_ERR_NO_ADDRESS:      return "no address record";
     case DNS_ERR_MISMATCH:        return "unexpected response";
+    case DNS_ERR_TRUNCATED:       return "response truncated";
     case DNS_ERRNO_ENODEV:        return "no network device";
     case DNS_ERRNO_ENETDOWN:      return "link is down";
     case DNS_ERRNO_ENETUNREACH:   return "network unreachable";

@@ -1,8 +1,6 @@
 #include "socket.h"
 
-#include "core/time.h"
 #include "errno.h"
-#include "net.h"
 #include "net_bytes.h"
 #include "netif.h"
 #include "udp.h"
@@ -13,11 +11,6 @@
 #define NET_SOCKET_RX_DEPTH    8
 #define NET_EPHEMERAL_FIRST    49152u
 #define NET_EPHEMERAL_LAST     65535u
-
-#define NET_IPV4_LOOPBACK_NET  NET_IPV4_ADDR(127, 0, 0, 0)
-#define NET_IPV4_LOOPBACK_MASK NET_IPV4_ADDR(255, 0, 0, 0)
-#define NET_IPV4_MULTICAST_NET  NET_IPV4_ADDR(224, 0, 0, 0)
-#define NET_IPV4_MULTICAST_MASK NET_IPV4_ADDR(240, 0, 0, 0)
 
 typedef struct net_datagram {
     uint32_t src;
@@ -38,23 +31,10 @@ struct net_socket {
 
 /* Single CPU, interrupts disabled inside the stack: no locking needed. */
 static net_socket_t net_sockets[NET_SOCKET_MAX];
-static uint16_t net_next_ephemeral;
 static int net_rx_event;
 
 static int net_address_is_local(uint32_t ipv4) {
-    return ipv4 == 0 || ipv4 == net_interface()->ipv4 ||
-           (ipv4 & NET_IPV4_LOOPBACK_MASK) == NET_IPV4_LOOPBACK_NET;
-}
-
-static int net_destination_is_unicast(uint32_t ipv4) {
-    const net_interface_t *iface = net_interface();
-    uint32_t host_bits = ~iface->netmask;
-    int on_link = (ipv4 & iface->netmask) == (iface->ipv4 & iface->netmask);
-
-    return ipv4 != 0 && ipv4 != 0xFFFFFFFFu &&
-           (ipv4 & NET_IPV4_MULTICAST_MASK) != NET_IPV4_MULTICAST_NET &&
-           !(on_link && ((ipv4 & host_bits) == host_bits ||
-                         (ipv4 & host_bits) == 0));
+    return ipv4 == 0 || net_ipv4_is_own(ipv4);
 }
 
 static int net_port_in_use(uint32_t addr, uint16_t port) {
@@ -67,19 +47,24 @@ static int net_port_in_use(uint32_t addr, uint16_t port) {
     return 0;
 }
 
+/* Unpredictable source ports make blind spoofing of replies harder. The TSC
+ * is the only entropy source the kernel has; a multiplicative hash spreads its
+ * fast-changing low bits over the whole range. */
+static uint32_t net_port_entropy(void) {
+    uint32_t low;
+    uint32_t high;
+
+    __asm__ volatile("rdtsc" : "=a"(low), "=d"(high));
+    return (low ^ (high * 0x9E3779B1u)) * 2654435761u;
+}
+
 static int net_ephemeral_port(uint32_t addr, uint16_t *out_port) {
     const uint32_t span = NET_EPHEMERAL_LAST - NET_EPHEMERAL_FIRST + 1;
-
-    /* Spreading the first port makes source ports harder to guess; the
-     * sequence afterwards is deliberately simple. */
-    if (net_next_ephemeral == 0)
-        net_next_ephemeral = (uint16_t)(NET_EPHEMERAL_FIRST +
-                                        (uint32_t)((time_ms() * 2654435761u) >> 8) % span);
+    uint32_t start = (net_port_entropy() >> 8) % span;
 
     for (uint32_t tries = 0; tries < span; ++tries) {
-        uint16_t port = net_next_ephemeral;
-        net_next_ephemeral = port == NET_EPHEMERAL_LAST ? (uint16_t)NET_EPHEMERAL_FIRST
-                                                        : (uint16_t)(port + 1);
+        uint16_t port = (uint16_t)(NET_EPHEMERAL_FIRST + (start + tries) % span);
+
         if (!net_port_in_use(addr, port)) {
             *out_port = port;
             return 0;
@@ -89,8 +74,6 @@ static int net_ephemeral_port(uint32_t addr, uint16_t *out_port) {
 }
 
 int net_socket_create(int family, int type, int protocol, net_socket_t **out) {
-    if (!net_interface()->up)
-        return -ENODEV;
     if (family != NET_AF_INET)
         return -EAFNOSUPPORT;
     if (type != NET_SOCK_DGRAM)
@@ -144,7 +127,7 @@ int net_socket_sendto(net_socket_t *socket, const uint8_t *data, size_t len,
                       uint32_t ipv4, uint16_t port) {
     int rc;
 
-    if (port == 0 || !net_destination_is_unicast(ipv4))
+    if (port == 0 || !net_ipv4_is_unicast_destination(ipv4))
         return -EINVAL;
     if (len > UDP_PAYLOAD_MAX)
         return -EMSGSIZE;
@@ -153,8 +136,7 @@ int net_socket_sendto(net_socket_t *socket, const uint8_t *data, size_t len,
         if (rc != 0)
             return rc;
     }
-    rc = udp_output(ipv4, socket->local_port, port, data, len);
-    return rc == 0 ? (int)len : rc;
+    return udp_output(ipv4, socket->local_port, port, data, len);
 }
 
 int net_socket_recvfrom(net_socket_t *socket, uint8_t *buf, size_t cap,

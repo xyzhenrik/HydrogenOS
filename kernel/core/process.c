@@ -2105,6 +2105,7 @@ regs_t *process_schedule(regs_t *r) {
         __asm__ volatile("sti\n\thlt\n\tcli");
         process_wake_sleepers();
         process_update_poll_timeouts();
+        process_update_kernel_waits();
         process_update_socket_waits();
     }
 }
