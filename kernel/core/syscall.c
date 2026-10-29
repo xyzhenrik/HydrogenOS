@@ -113,15 +113,19 @@ static int copy_user_spawn_args(const char *const *uargv,
     return 0;
 }
 
+/* Returns 0 or a negative errno value. */
 static int copy_resolved_user_path(process_t *proc, const char *uptr,
                                    char *dst, size_t dst_sz) {
     char raw[PROCESS_CWD_CAP];
     if (!proc || !uptr || !dst || dst_sz == 0)
-        return -1;
-    if (strncpy_from_user(raw, uptr, sizeof(raw)) < 0)
-        return -1;
+        return -EFAULT;
+    long len = strncpy_from_user(raw, uptr, sizeof(raw));
+    if (len == -ERANGE)
+        return -ENAMETOOLONG;
+    if (len < 0)
+        return -EFAULT;
     if (process_resolve_path(proc, raw, dst, (uint32_t)dst_sz) != 0)
-        return -1;
+        return -ENAMETOOLONG;
     return 0;
 }
 
@@ -129,8 +133,9 @@ static int copy_resolved_user_path(process_t *proc, const char *uptr,
    Returns 0 or a negative errno value. */
 static int copy_followed_user_path(process_t *proc, const char *uptr,
                                    char *dst, size_t dst_sz, int follow_final) {
-    if (copy_resolved_user_path(proc, uptr, dst, dst_sz) != 0)
-        return -EFAULT;
+    int copy_rc = copy_resolved_user_path(proc, uptr, dst, dst_sz);
+    if (copy_rc != 0)
+        return copy_rc;
     if (!vfs_is_ready())
         return 0;
     int rc = vfs_resolve(dst, follow_final, dst, (uint32_t)dst_sz);

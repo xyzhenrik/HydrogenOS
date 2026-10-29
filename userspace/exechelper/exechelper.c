@@ -19,7 +19,7 @@ enum {
 
 #define CHAIN_MAP_BYTES (1024ul * 1024ul)
 /* The running image's page tables and stack are not part of the start value. */
-#define FREE_PAGES_SLACK 256ul
+#define FREE_PAGES_SLACK 128ul
 
 static int fail(const char *what, long value) {
     dprintf(2, "EXEC FAIL: helper: %s (%ld)\n", what, value);
@@ -60,6 +60,7 @@ int main(int argc, char **argv) {
     char byte = 0;
     unsigned long remaining;
     unsigned long start_pages;
+    long ready;
     int read_fd, write_fd, cloexec_fd;
 
     if (argc != ARG_COUNT || strcmp(argv[0], "exechelper") != 0)
@@ -77,6 +78,11 @@ int main(int argc, char **argv) {
     read_fd = (int)strtoul(argv[ARG_READ_FD], 0, 10);
     write_fd = (int)strtoul(argv[ARG_WRITE_FD], 0, 10);
     cloexec_fd = (int)strtoul(argv[ARG_CLOEXEC_FD], 0, 10);
+    /* stderr was a close-on-exec pipe end: the slot is closed now and falls
+     * back to the console instead of feeding the pipe. */
+    write(2, "\n", 1);
+    if ((sys_poll(read_fd, POLL_READ) & (long)POLL_READ) != 0)
+        return fail("close-on-exec stderr survived", 0);
     if (write(write_fd, "k", 1) != 1 || read(read_fd, &byte, 1) != 1 ||
         byte != 'k')
         return fail("inherited pipe", 0);

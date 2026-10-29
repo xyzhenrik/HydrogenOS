@@ -2,9 +2,17 @@
 #include "console.h"
 #include "paging.h"
 #include "pmm.h"
+#include "vmm_user.h"
 
 #include <stddef.h>
 #include <stdint.h>
+
+/* The kernel identity map (1 GiB of supervisor 2 MiB pages) counts as mapped
+ * in every address space, so a segment inside it would be written over kernel
+ * memory instead of getting its own pages. */
+#define ELF_USER_IMAGE_MIN 0x40000000ULL
+/* Segments stay below the region handed out by sys_mmap. */
+#define ELF_USER_IMAGE_LIMIT VMM_USER_MMAP_BASE
 
 int elf64_validate(const void *image, size_t size) {
     if (!image || size < sizeof(elf64_ehdr_t))
@@ -48,6 +56,9 @@ int elf64_load_image(const void *image, size_t size) {
         uintptr_t filesz = (uintptr_t)ph[i].p_filesz;
         if (memsz == 0)
             continue;
+        if (vaddr < ELF_USER_IMAGE_MIN || vaddr >= ELF_USER_IMAGE_LIMIT ||
+            memsz > ELF_USER_IMAGE_LIMIT - vaddr)
+            return -1;
 
         size_t pages = (size_t)((seg_off + memsz + 0xFFF) / 0x1000);
         for (size_t p = 0; p < pages; ++p) {

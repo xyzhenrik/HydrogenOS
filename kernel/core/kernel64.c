@@ -336,8 +336,12 @@ static int read_executable(const char *path, uint8_t **out_buf,
   if (!path || !vfs_is_ready())
     return -ENOENT;
   vfs_stat_t st;
-  if (vfs_stat(path, &st) != 0 || st.type != 1 || st.size == 0)
+  if (vfs_stat(path, &st) != 0)
     return -ENOENT;
+  if (st.type != 1)
+    return -EACCES;
+  if (st.size == 0)
+    return -ENOEXEC;
   uint8_t *buf = (uint8_t *)kalloc(st.size);
   if (!buf)
     return -ENOMEM;
