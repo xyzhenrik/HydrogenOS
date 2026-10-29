@@ -1,5 +1,6 @@
 #include "ramfs.h"
 #include "mm/kheap.h"
+#include "errno.h"
 
 typedef struct ramfs_entry {
     const char *name;
@@ -452,9 +453,39 @@ int ramfs_unlink(const char *path) {
     if (!name || name[0] == 0) return -1;
     ramfs_dyn_entry_t *e = dyn_find(name);
     if (!e) return -2; /* -ENOENT */
+    if (e->type == 2) return -EISDIR;
     if (e->data) kfree(e->data);
     e->data = 0;
     e->size = 0;
+    e->used = 0;
+    e->name[0] = 0;
+    return 0;
+}
+
+static int dyn_has_children(const char *dir) {
+    uint32_t n = 0;
+    while (dir[n]) n++;
+    for (int i = 0; i < RAMFS_DYN_MAX; ++i) {
+        if (!dyn_entries[i].used) continue;
+        const char *name = dyn_entries[i].name;
+        uint32_t k = 0;
+        while (k < n && name[k] == dir[k]) k++;
+        if (k == n && name[n] == '/') return 1;
+    }
+    return 0;
+}
+
+int ramfs_rmdir(const char *path) {
+    if (!ready || !path) return -EINVAL;
+    const char *name = strip_slash(path);
+    if (!name || name[0] == 0) return -EBUSY;
+    ramfs_dyn_entry_t *e = dyn_find(name);
+    if (!e) {
+        vfs_stat_t st;
+        return ramfs_stat(path, &st) == 0 ? -EPERM : -ENOENT;
+    }
+    if (e->type != 2) return -ENOTDIR;
+    if (dyn_has_children(name)) return -ENOTEMPTY;
     e->used = 0;
     e->name[0] = 0;
     return 0;

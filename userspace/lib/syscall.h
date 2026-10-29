@@ -45,6 +45,7 @@
 #define SYS_FB_CLEAR 42
 #define SYS_SYSINFO 43
 #define SYS_SET_LAYOUT 44
+#define SYS_RMDIR 47
 
 #define PRIO_IDLE   0
 #define PRIO_NORMAL 1
@@ -233,6 +234,10 @@ static inline long sys_mkdir(const char *path) {
 
 static inline long sys_unlink(const char *path) {
     return syscall1(SYS_UNLINK, (long)path);
+}
+
+static inline long sys_rmdir(const char *path) {
+    return syscall1(SYS_RMDIR, (long)path);
 }
 
 static inline long sys_rename(const char *old_path, const char *new_path) {

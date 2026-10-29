@@ -81,6 +81,28 @@ static int copy_resolved_user_path(process_t *proc, const char *uptr,
     return 0;
 }
 
+/* Filesystem drivers return negative errno values; anything outside the
+   set a namespace operation can legitimately report is surfaced as EIO. */
+static uint64_t fs_status(int rc) {
+    switch (rc) {
+    case 0:
+    case -ENOENT:
+    case -EEXIST:
+    case -ENOTDIR:
+    case -EISDIR:
+    case -ENOTEMPTY:
+    case -ENOSPC:
+    case -EINVAL:
+    case -EBUSY:
+    case -EPERM:
+    case -EROFS:
+    case -EMLINK:
+        return (uint64_t)(int64_t)rc;
+    default:
+        return (uint64_t)-EIO;
+    }
+}
+
 void syscall_set_bootstrap(process_t *proc) {
     bootstrap_proc = proc;
 }
@@ -687,12 +709,19 @@ uint64_t syscall_handle(regs_t *r) {
             return (uint64_t)-EFAULT;
         if (!vfs_is_ready())
             return (uint64_t)-EIO;
-        int rc = vfs_mkdir(kpath);
-        if (rc == -17)
-            return (uint64_t)-EEXIST;
-        if (rc != 0)
+        return fs_status(vfs_mkdir(kpath));
+    }
+    case SYS_RMDIR: {
+        const char *path = (const char *)(uintptr_t)r->rdi;
+        process_t *proc = process_current();
+        if (!path)
+            return (uint64_t)-EFAULT;
+        char kpath[PROCESS_CWD_CAP];
+        if (copy_resolved_user_path(proc, path, kpath, sizeof(kpath)) != 0)
+            return (uint64_t)-EFAULT;
+        if (!vfs_is_ready())
             return (uint64_t)-EIO;
-        return 0;
+        return fs_status(vfs_rmdir(kpath));
     }
     case SYS_UNLINK: {
         const char *path = (const char *)(uintptr_t)r->rdi;
@@ -704,12 +733,7 @@ uint64_t syscall_handle(regs_t *r) {
             return (uint64_t)-EFAULT;
         if (!vfs_is_ready())
             return (uint64_t)-EIO;
-        int rc = vfs_unlink(kpath);
-        if (rc == -2)
-            return (uint64_t)-ENOENT;
-        if (rc != 0)
-            return (uint64_t)-EIO;
-        return 0;
+        return fs_status(vfs_unlink(kpath));
     }
     case SYS_RENAME: {
         const char *old_path = (const char *)(uintptr_t)r->rdi;
@@ -725,12 +749,7 @@ uint64_t syscall_handle(regs_t *r) {
             return (uint64_t)-EFAULT;
         if (!vfs_is_ready())
             return (uint64_t)-EIO;
-        int rc = vfs_rename(kold, knew);
-        if (rc == -2)
-            return (uint64_t)-ENOENT;
-        if (rc != 0)
-            return (uint64_t)-EIO;
-        return 0;
+        return fs_status(vfs_rename(kold, knew));
     }
     case SYS_WRITEF: {
         const char *path = (const char *)(uintptr_t)r->rdi;
@@ -746,12 +765,7 @@ uint64_t syscall_handle(regs_t *r) {
             return (uint64_t)-EFAULT;
         if (!vfs_is_ready())
             return (uint64_t)-EIO;
-        int rc = vfs_write_file(kpath, data, size);
-        if (rc == -17)
-            return (uint64_t)-EEXIST;
-        if (rc != 0)
-            return (uint64_t)-EIO;
-        return 0;
+        return fs_status(vfs_write_file(kpath, data, size));
     }
     case SYS_MMAP: {
         uintptr_t addr = (uintptr_t)r->rdi;
