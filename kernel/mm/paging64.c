@@ -1,5 +1,6 @@
 #include "paging.h"
 #include "msr.h"
+#include "panic.h"
 #include "pmm.h"
 
 #include <stddef.h>
@@ -128,6 +129,8 @@ static void paging_enable_write_protect(void) {
     __asm__ volatile("mov %%cr0, %0" : "=r"(cr0));
     cr0 |= CR0_WP;
     __asm__ volatile("mov %0, %%cr0" ::"r"(cr0) : "memory");
+    __asm__ volatile("mov %%cr0, %0" : "=r"(cr0));
+    ASSERT((cr0 & CR0_WP) != 0);
 }
 
 void paging_init(void) {

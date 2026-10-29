@@ -787,14 +787,16 @@ static void process_complete_wait(process_t *p) {
     if (!p || !p->wait_ready) return;
 
     /* The pointer was validated when the wait began, but the status is only
-       written now. copy_to_user() checks the active address space again, so
-       the write must happen in p's own, and fails with -EFAULT otherwise. */
+       written now, with p's address space active. copy_to_user() checks the
+       mapping again; if it has become invalid the wait fails and the exit
+       record stays with p, so a later wait can still collect the child. */
     p->frame.rax = p->wait_result_pid;
     if (p->waiting_status_ptr != 0 &&
-        (p->pml4 != paging_current_pml4() ||
-         copy_to_user((void *)p->waiting_status_ptr, &p->wait_status,
-                      sizeof(p->wait_status)) != 0)) {
+        copy_to_user((void *)p->waiting_status_ptr, &p->wait_status,
+                     sizeof(p->wait_status)) != 0) {
         p->frame.rax = (uint64_t)-PROCESS_ERR_EFAULT;
+    } else {
+        exit_record_claim(&p->child_exit_records, p->wait_result_pid, 0);
     }
 
     p->waiting_for_pid = 0;
@@ -1165,29 +1167,24 @@ static void process_record_exit(process_t *p, int status) {
        pipe EOF/HUP propagates and processes blocked in poll/write wake up. */
     process_handles_release(p);
 
-    if (process_list) {
-        process_t *it = process_list;
-        do {
-            if (it->alive && it->pid == p->parent_pid &&
-                it->state == PROCESS_BLOCKED_WAIT &&
-                it->waiting_for_pid == p->pid) {
-                it->state = PROCESS_RUNNABLE;
-                it->wait_result_pid = p->pid;
-                it->wait_status = status;
-                it->wait_ready = 1;
-                return;
-            }
-            it = it->next;
-        } while (it && it != process_list);
-    }
-
     /* Nobody can wait for the child of a process that is gone (or of the
        kernel), so its record is simply dropped with the process. */
     process_t *parent = process_find_by_pid(p->parent_pid);
-    if (parent && p->own_exit_record) {
-        exit_record_publish(&parent->child_exit_records, p->own_exit_record,
-                            p->pid, status);
-        p->own_exit_record = 0;
+    if (!parent || !p->own_exit_record)
+        return;
+    exit_record_publish(&parent->child_exit_records, p->own_exit_record,
+                        p->pid, status);
+    p->own_exit_record = 0;
+
+    /* A parent blocked on exactly this child is handed the status directly.
+       The record is published regardless and only claimed once the status has
+       actually reached the parent's memory. */
+    if (parent->state == PROCESS_BLOCKED_WAIT &&
+        parent->waiting_for_pid == p->pid) {
+        parent->state = PROCESS_RUNNABLE;
+        parent->wait_result_pid = p->pid;
+        parent->wait_status = status;
+        parent->wait_ready = 1;
     }
 }
 

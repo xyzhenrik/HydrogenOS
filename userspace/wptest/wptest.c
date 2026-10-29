@@ -1,5 +1,6 @@
 #include "errno.h"
 #include "mini_libc.h"
+#include "signal.h"
 #include "syscall.h"
 
 #include <stdint.h>
@@ -16,9 +17,14 @@
  * children than any fixed table could hold die unreaped, and every status is
  * still delivered exactly once; a second wait reports -ECHILD.
  *
+ * Part 3: the ELF loader tightens segment rights. Text and rodata are not
+ * writable, data and stack are not executable, and no page is both. Each
+ * violation runs in a child of its own and must end in SIGSEGV.
+ *
  * Without arguments it runs as the coordinator and spawns itself per role
  * (argv[1]): "child <status> [delay_ms]" exits with <status> after the delay,
- * "orphaner" leaves children behind when it exits.
+ * "orphaner" leaves children behind when it exits, "write-text",
+ * "write-rodata", "exec-data" and "exec-stack" perform one forbidden access.
  */
 
 #define PAGE_SIZE       4096ul
@@ -30,6 +36,11 @@
 #define SLOW_STATUS     42
 #define BARRIER_MS      10000
 #define NO_SUCH_PID     0x7FFFFF00
+#define EXIT_FAULTED    (SIGNAL_STATUS_SIGNALED | SIGSEGV)
+#define X86_RET         0xC3
+
+static const char rodata_marker[] = "wptest rodata";
+static unsigned char data_code[16] = {X86_RET};
 
 static int fail(const char *what, long value) {
     dprintf(2, "wptest: FAIL %s (%ld)\n", what, value);
@@ -241,9 +252,56 @@ static int check_orphans(void) {
     return 0;
 }
 
+/* ------------------------------------------------------------------ */
+/* Part 3: segment rights                                              */
+/* ------------------------------------------------------------------ */
+
+static int run_access_child(const char *role, int expected_status) {
+    const char *argv[] = {"wptest", role, 0};
+    long pid = spawn_args("/wptest", argv, 0, SPAWN_STDIO_NULL,
+                          SPAWN_STDIO_NULL, SPAWN_STDIO_INHERIT);
+    if (pid <= 0)
+        return fail(role, pid);
+    int status = -1;
+    if (wait_pid((int)pid, &status) != pid || status != expected_status)
+        return fail(role, status);
+    return 0;
+}
+
+static int check_segment_rights(void) {
+    /* Data sharing a page with text or rodata would make that page writable
+     * and executable; the linker script keeps them apart. */
+    if (((uintptr_t)data_code >> 12) == ((uintptr_t)rodata_marker >> 12) ||
+        ((uintptr_t)data_code >> 12) == ((uintptr_t)fail >> 12))
+        return fail("data shares a page with text", 0);
+    static const char *const roles[] = {"write-text", "write-rodata",
+                                        "exec-data", "exec-stack"};
+    for (unsigned i = 0; i < sizeof(roles) / sizeof(roles[0]); ++i) {
+        if (run_access_child(roles[i], EXIT_FAULTED) != 0)
+            return 1;
+    }
+    return 0;
+}
+
+/* Returns only if the forbidden access was allowed. */
+static int role_forbidden_access(const char *role) {
+    if (str_equal(role, "write-text")) {
+        *(volatile unsigned char *)(uintptr_t)fail = 0;
+    } else if (str_equal(role, "write-rodata")) {
+        *(volatile char *)rodata_marker = 0;
+    } else if (str_equal(role, "exec-data")) {
+        ((void (*)(void))(uintptr_t)data_code)();
+    } else {
+        unsigned char stack_code[16] = {X86_RET};
+        ((void (*)(void))(uintptr_t)stack_code)();
+    }
+    return 0;
+}
+
 static int run_coordinator(void) {
     if (check_readonly_buffers() != 0 || check_blocking_wait() != 0 ||
-        check_unreaped_children() != 0 || check_orphans() != 0)
+        check_unreaped_children() != 0 || check_orphans() != 0 ||
+        check_segment_rights() != 0)
         return 1;
     write(1, "WP PASS\n", 8);
     return 0;
@@ -273,5 +331,8 @@ int main(int argc, char **argv) {
             sleep_ms(delay);
         return (int)parse_unsigned(argv[2]);
     }
+    if (str_equal(argv[1], "write-text") || str_equal(argv[1], "write-rodata") ||
+        str_equal(argv[1], "exec-data") || str_equal(argv[1], "exec-stack"))
+        return role_forbidden_access(argv[1]);
     return fail("unknown role", 0);
 }

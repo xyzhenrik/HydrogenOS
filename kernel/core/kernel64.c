@@ -274,6 +274,8 @@ static process_t *load_user_process(const uint8_t *elf, size_t elf_size,
     for (size_t j = 0; j < 4096; ++j)
       page[j] = 0;
   }
+  paging_user_protect_range(paging_current_pml4(), user_stack,
+                            stack_pages * 0x1000, PAGE_RW | PAGE_NO_EXEC);
   const elf64_ehdr_t *eh = (const elf64_ehdr_t *)elf;
   regs_t initial = {0};
   initial.rip = (uint64_t)(uintptr_t)eh->e_entry;
