@@ -9,8 +9,8 @@ enum {
 };
 
 int kernel_pipe_create(kernel_pipe_t **out_pipe);
-void kernel_pipe_acquire_reader(kernel_pipe_t *pipe);
-void kernel_pipe_acquire_writer(kernel_pipe_t *pipe);
+int kernel_pipe_acquire_reader(kernel_pipe_t *pipe);
+int kernel_pipe_acquire_writer(kernel_pipe_t *pipe);
 int kernel_pipe_has_readers(const kernel_pipe_t *pipe);
 int kernel_pipe_has_writers(const kernel_pipe_t *pipe);
 int kernel_pipe_has_data(const kernel_pipe_t *pipe);

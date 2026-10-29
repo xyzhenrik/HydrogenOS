@@ -315,6 +315,8 @@ int comp_present(void) {
     if (!comp_initialized) return -1;
     unsigned int info[4];
     long rc = sys_fb_info(info);
+    if (rc == SYS_FB_ERR_NODEV)
+        return -1;
     if (rc != 0) {
         printf("comp_present: info rc=%d\n", (int)rc);
         return -1;

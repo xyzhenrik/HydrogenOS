@@ -185,6 +185,9 @@ uint64_t syscall_handle(regs_t *r) {
         uint32_t *info = (uint32_t *)(uintptr_t)r->rdi;
         if (!info || !user_range_ok(info, sizeof(uint32_t) * 4))
             return (uint64_t)-EFAULT;
+        if (!framebuffer.addr || framebuffer.width == 0 ||
+            framebuffer.height == 0)
+            return (uint64_t)-ENODEV;
         info[0] = framebuffer.width;
         info[1] = framebuffer.height;
         info[2] = framebuffer.pitch;

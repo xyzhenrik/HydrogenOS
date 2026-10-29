@@ -97,6 +97,7 @@ Diese errno-Werte sind als Startmenge vorgesehen:
 - `EACCES (13)`
 - `EFAULT (14)`
 - `EBUSY (16)`
+- `ENODEV (19)` – z. B. `SYS_FB_INFO` (36), wenn kein linearer Framebuffer vorhanden ist
 - `EINVAL (22)`
 - `EMFILE (24)`
 - `ESPIPE (29)`

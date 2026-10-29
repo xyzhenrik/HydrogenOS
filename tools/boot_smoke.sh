@@ -100,6 +100,9 @@ if [ "$FOUND" -eq 1 ]; then
   grep -q "DESKTOPTEST PASS" "$LOG_FILE" || MISSING="$MISSING DESKTOPTEST_PASS"
   grep -q "LOGIN PASS" "$LOG_FILE" || MISSING="$MISSING LOGIN_PASS"
   grep -q "PKG PASS" "$LOG_FILE" || MISSING="$MISSING PKG_PASS"
+  grep -q "stdout captured: pollwaitcheck: wait ok" "$LOG_FILE" || MISSING="$MISSING POLLWAIT_PASS"
+  grep -q "stdout captured: pollmanycheck: many ok" "$LOG_FILE" || MISSING="$MISSING POLLMANY_PASS"
+  grep -q "stdout captured: dupfallbackcheck: implicit stdout live" "$LOG_FILE" || MISSING="$MISSING DUPFALLBACK_PASS"
   if [ "$REQUIRE_DESKTOP" = "1" ]; then
     grep -qE "compositor: ready|COMP READY" "$LOG_FILE" || MISSING="$MISSING COMPOSITOR_READY"
     grep -q "FRAME CHECKSUM:" "$LOG_FILE" || MISSING="$MISSING FRAME_CHECKSUM"

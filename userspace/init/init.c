@@ -217,12 +217,21 @@ static void runtime_reset(init_service_runtime_t *rt) {
     rt->stderr_write_fd = -1;
 }
 
+/*
+ * Status lines go out in one write so output of a just-spawned service cannot
+ * land between the service name and the status text.
+ */
 static void write_service_prefix(const init_service_t *svc, const char *suffix) {
+    char line[128];
+    int len = snprintf(line, sizeof(line), "init: %s%s", svc->name,
+                       suffix ? suffix : "");
+    if (len > 0 && (unsigned long)len < sizeof(line)) {
+        write(1, line, (unsigned long)len);
+        return;
+    }
     write_str("init: ");
     write_str(svc->name);
-    if (suffix) {
-        write_str(suffix);
-    }
+    write_str(suffix);
 }
 
 static int str_eq(const char *a, const char *b) {
