@@ -2,6 +2,8 @@
 
 #include <stdint.h>
 
+#include "waitq.h"
+
 typedef struct kernel_pipe kernel_pipe_t;
 
 enum {
@@ -11,6 +13,11 @@ enum {
 int kernel_pipe_create(kernel_pipe_t **out_pipe);
 int kernel_pipe_acquire_reader(kernel_pipe_t *pipe);
 int kernel_pipe_acquire_writer(kernel_pipe_t *pipe);
+/* Queues the pipe wakes on its own events (data, space, last end closed). A
+ * waiter registers before it blocks and re-checks the pipe when woken. */
+WaitQueue *kernel_pipe_read_waiters(kernel_pipe_t *pipe);
+WaitQueue *kernel_pipe_write_waiters(kernel_pipe_t *pipe);
+WaitQueue *kernel_pipe_poll_waiters(kernel_pipe_t *pipe);
 int kernel_pipe_has_readers(const kernel_pipe_t *pipe);
 int kernel_pipe_has_writers(const kernel_pipe_t *pipe);
 int kernel_pipe_has_data(const kernel_pipe_t *pipe);
