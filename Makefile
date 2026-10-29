@@ -151,7 +151,7 @@ OBJS = $(BUILD_DIR)/boot.o $(BUILD_DIR)/kernel.o $(BUILD_DIR)/console.o $(BUILD_
        $(BUILD_DIR)/paging.o $(BUILD_DIR)/time.o $(BUILD_DIR)/pmm.o $(BUILD_DIR)/kheap.o $(BUILD_DIR)/string.o \
        $(BUILD_DIR)/vmm_user.o $(BUILD_DIR)/syscall.o $(BUILD_DIR)/process.o $(BUILD_DIR)/pipe.o \
        $(BUILD_DIR)/keyboard.o $(BUILD_DIR)/mouse.o $(BUILD_DIR)/elf_loader.o \
-       $(BUILD_DIR)/ata.o $(BUILD_DIR)/pci.o $(BUILD_DIR)/virtio.o $(BUILD_DIR)/virtio_blk.o $(BUILD_DIR)/virtio_gpu.o $(BUILD_DIR)/virtio_input.o $(BUILD_DIR)/msi.o $(BUILD_DIR)/block.o $(BUILD_DIR)/block_cache.o $(BUILD_DIR)/mbr.o \
+       $(BUILD_DIR)/ata.o $(BUILD_DIR)/pci.o $(BUILD_DIR)/virtio.o $(BUILD_DIR)/virtio_blk.o $(BUILD_DIR)/virtio_gpu.o $(BUILD_DIR)/bochs_display.o $(BUILD_DIR)/virtio_input.o $(BUILD_DIR)/msi.o $(BUILD_DIR)/block.o $(BUILD_DIR)/block_cache.o $(BUILD_DIR)/mbr.o \
        $(BUILD_DIR)/ext2.o $(BUILD_DIR)/vfs.o $(BUILD_DIR)/ramfs.o $(BUILD_DIR)/procfs.o \
        $(BUILD_DIR)/framebuffer.o $(BUILD_DIR)/fb_console.o $(BUILD_DIR)/font8x16.o $(BUILD_DIR)/renderer2d.o $(BUILD_DIR)/psf2.o $(BUILD_DIR)/ttf.o $(BUILD_DIR)/tty.o \
        $(BUILD_DIR)/gdt.o $(BUILD_DIR)/gdt_asm.o \
@@ -299,6 +299,10 @@ $(BUILD_DIR)/virtio_blk.o: kernel/drivers/virtio_blk.c kernel/drivers/virtio_blk
 $(BUILD_DIR)/virtio_gpu.o: kernel/drivers/virtio_gpu.c kernel/drivers/virtio_gpu.h kernel/drivers/virtio.h kernel/drivers/pci.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/bochs_display.o: kernel/drivers/bochs_display.c kernel/drivers/bochs_display.h kernel/drivers/pci.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CFLAGS) -DGFX_WIDTH=$(GFXW) -DGFX_HEIGHT=$(GFXH) -DGFX_DEPTH=$(GFXD) -c $< -o $@
 
 $(BUILD_DIR)/virtio_input.o: kernel/drivers/virtio_input.c kernel/drivers/virtio_input.h kernel/drivers/virtio.h kernel/drivers/pci.h
 	mkdir -p $(BUILD_DIR)
@@ -849,7 +853,7 @@ $(BUILD_DIR)/pipe.o: kernel/core/pipe.c kernel/core/pipe.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/framebuffer.o: kernel/video/framebuffer.c kernel/include/framebuffer.h kernel/include/multiboot.h
+$(BUILD_DIR)/framebuffer.o: kernel/video/framebuffer.c kernel/include/framebuffer.h kernel/include/multiboot.h kernel/drivers/bochs_display.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 

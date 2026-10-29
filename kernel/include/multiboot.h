@@ -5,6 +5,8 @@
 #define MULTIBOOT_MAGIC 0x2BADB002
 #define MULTIBOOT_FLAG_MMAP (1 << 6)
 #define MULTIBOOT_FLAG_MODS (1 << 3)
+#define MULTIBOOT_FLAG_FRAMEBUFFER (1 << 12)
+#define MULTIBOOT_FRAMEBUFFER_TYPE_RGB 1
 
 typedef struct multiboot_mmap_entry {
   uint32_t size;
