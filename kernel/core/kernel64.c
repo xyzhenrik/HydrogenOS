@@ -202,7 +202,8 @@ static void enter_usermode(uintptr_t entry, uintptr_t user_stack_top) {
       : "rax", "memory");
 }
 
-static process_t *load_user_process(const uint8_t *elf, size_t elf_size) {
+static process_t *load_user_process(const uint8_t *elf, size_t elf_size,
+                                    const char *name) {
   if (elf64_validate(elf, elf_size) != 0) {
     kputs("user: invalid ELF\n");
     return 0;
@@ -220,6 +221,7 @@ static process_t *load_user_process(const uint8_t *elf, size_t elf_size) {
     kputs("user: no proc\n");
     return 0;
   }
+  process_set_name(proc, name);
   paging_switch(user_pml4);
 
   if (elf64_load_image(elf, elf_size) != 0) {
@@ -257,8 +259,8 @@ static process_t *load_user_process(const uint8_t *elf, size_t elf_size) {
   return proc;
 }
 
-static int run_user_elf(const uint8_t *elf, size_t elf_size) {
-  process_t *proc = load_user_process(elf, elf_size);
+static int run_user_elf(const uint8_t *elf, size_t elf_size, const char *name) {
+  process_t *proc = load_user_process(elf, elf_size, name);
   if (!proc) {
     return -1;
   }
@@ -286,7 +288,7 @@ static int run_user_from_vfs(const char *path) {
     kfree(buf);
     return -1;
   }
-  int rc = run_user_elf(buf, got);
+  int rc = run_user_elf(buf, got, path);
   if (rc != 0)
     kfree(buf);
   return rc;
@@ -310,7 +312,7 @@ int user_spawn_from_vfs(const char *path, regs_t *parent_regs, uint64_t *out_pid
     kfree(buf);
     return -1;
   }
-  process_t *proc = load_user_process(buf, got);
+  process_t *proc = load_user_process(buf, got, path);
   if (!proc) {
     if (out_pid) *out_pid = 0;
     kfree(buf);
@@ -349,7 +351,7 @@ int user_spawn_with_stdio_from_vfs(const char *path, regs_t *parent_regs,
     kfree(buf);
     return -1;
   }
-  process_t *proc = load_user_process(buf, got);
+  process_t *proc = load_user_process(buf, got, path);
   if (!proc) {
     if (out_pid) *out_pid = 0;
     kfree(buf);
@@ -378,7 +380,7 @@ static void cmd_user(void) {
 
   const uint8_t *elf = _binary_build_x86_64_user_hello_elf_start;
   size_t elf_size = (size_t)(_binary_build_x86_64_user_hello_elf_end - elf);
-  run_user_elf(elf, elf_size);
+  run_user_elf(elf, elf_size, "hello");
 }
 
 static void cmd_echo(void) {
@@ -387,7 +389,7 @@ static void cmd_echo(void) {
 
   const uint8_t *elf = _binary_build_x86_64_user_echo_elf_start;
   size_t elf_size = (size_t)(_binary_build_x86_64_user_echo_elf_end - elf);
-  run_user_elf(elf, elf_size);
+  run_user_elf(elf, elf_size, "echo");
 }
 
 static void cmd_cat(void) {
@@ -396,7 +398,7 @@ static void cmd_cat(void) {
 
   const uint8_t *elf = _binary_build_x86_64_user_cat_elf_start;
   size_t elf_size = (size_t)(_binary_build_x86_64_user_cat_elf_end - elf);
-  run_user_elf(elf, elf_size);
+  run_user_elf(elf, elf_size, "cat");
 }
 
 static void cmd_time(void) {
@@ -405,7 +407,7 @@ static void cmd_time(void) {
 
   const uint8_t *elf = _binary_build_x86_64_user_time_elf_start;
   size_t elf_size = (size_t)(_binary_build_x86_64_user_time_elf_end - elf);
-  run_user_elf(elf, elf_size);
+  run_user_elf(elf, elf_size, "time");
 }
 
 static void cmd_sleep(void) {
@@ -414,7 +416,7 @@ static void cmd_sleep(void) {
 
   const uint8_t *elf = _binary_build_x86_64_user_sleep_elf_start;
   size_t elf_size = (size_t)(_binary_build_x86_64_user_sleep_elf_end - elf);
-  run_user_elf(elf, elf_size);
+  run_user_elf(elf, elf_size, "sleep");
 }
 
 static void shell_loop(void) {

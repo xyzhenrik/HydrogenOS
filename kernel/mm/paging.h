@@ -12,6 +12,7 @@ void paging_switch(uint64_t *pml4);
 uint64_t *paging_kernel_pml4(void);
 uint64_t *paging_create_user_pml4(void);
 void paging_destroy_user_pml4(uint64_t *pml4);
+size_t paging_count_user_pages(const uint64_t *pml4);
 uint64_t *paging_current_pml4(void);
 int paging_is_mapped(uintptr_t virt);
 void paging_map_region_pml4(uint64_t *pml4, uintptr_t phys, uintptr_t virt,

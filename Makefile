@@ -95,6 +95,10 @@ USER_LOGIN_OBJ = $(BUILD_DIR)/user_login.o
 USER_LOGIN_ELF = $(BUILD_DIR)/user_login.elf
 USER_PKGTEST_OBJ = $(BUILD_DIR)/user_pkgtest.o
 USER_PKGTEST_ELF = $(BUILD_DIR)/user_pkgtest.elf
+USER_PS_OBJ = $(BUILD_DIR)/user_ps.o
+USER_PS_ELF = $(BUILD_DIR)/user_ps.elf
+USER_PROCTEST_OBJ = $(BUILD_DIR)/user_proctest.o
+USER_PROCTEST_ELF = $(BUILD_DIR)/user_proctest.elf
 USER_DUPFALLBACKCHECK_OBJ = $(BUILD_DIR)/user_dupfallbackcheck.o
 USER_DUPFALLBACKCHECK_ELF = $(BUILD_DIR)/user_dupfallbackcheck.elf
 USER_LOGSINK_WRITER_A_OBJ = $(BUILD_DIR)/user_logsink_writer_a.o
@@ -131,7 +135,7 @@ OBJS = $(BUILD_DIR)/boot.o $(BUILD_DIR)/kernel.o $(BUILD_DIR)/console.o $(BUILD_
        $(BUILD_DIR)/syscall.o $(BUILD_DIR)/process.o $(BUILD_DIR)/pipe.o \
        $(BUILD_DIR)/keyboard.o $(BUILD_DIR)/mouse.o $(BUILD_DIR)/elf_loader.o \
        $(BUILD_DIR)/ata.o $(BUILD_DIR)/pci.o $(BUILD_DIR)/virtio.o $(BUILD_DIR)/virtio_blk.o $(BUILD_DIR)/virtio_gpu.o $(BUILD_DIR)/virtio_input.o $(BUILD_DIR)/msi.o $(BUILD_DIR)/block.o $(BUILD_DIR)/block_cache.o $(BUILD_DIR)/mbr.o \
-       $(BUILD_DIR)/ext2.o $(BUILD_DIR)/vfs.o $(BUILD_DIR)/ramfs.o \
+       $(BUILD_DIR)/ext2.o $(BUILD_DIR)/vfs.o $(BUILD_DIR)/ramfs.o $(BUILD_DIR)/procfs.o \
        $(BUILD_DIR)/framebuffer.o $(BUILD_DIR)/fb_console.o $(BUILD_DIR)/font8x16.o $(BUILD_DIR)/renderer2d.o $(BUILD_DIR)/psf2.o $(BUILD_DIR)/ttf.o $(BUILD_DIR)/tty.o \
        $(BUILD_DIR)/gdt.o $(BUILD_DIR)/gdt_asm.o \
        $(BUILD_DIR)/idt.o $(BUILD_DIR)/isr.o $(BUILD_DIR)/isr_c.o $(BUILD_DIR)/isr_stubs.o \
@@ -290,11 +294,15 @@ $(BUILD_DIR)/ext2.o: kernel/fs/ext2.c kernel/fs/ext2.h kernel/fs/vfs.h kernel/dr
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/vfs.o: kernel/fs/vfs.c kernel/fs/vfs.h kernel/fs/ext2.h kernel/fs/ramfs.h
+$(BUILD_DIR)/vfs.o: kernel/fs/vfs.c kernel/fs/vfs.h kernel/fs/ext2.h kernel/fs/ramfs.h kernel/fs/procfs.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/ramfs.o: kernel/fs/ramfs.c kernel/fs/ramfs.h kernel/fs/vfs.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/procfs.o: kernel/fs/procfs.c kernel/fs/procfs.h kernel/fs/vfs.h kernel/core/process.h kernel/mm/kheap.h kernel/mm/pmm.h kernel/include/version.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
@@ -522,6 +530,20 @@ $(USER_PKGTEST_OBJ): userspace/pkgtest/pkgtest.c userspace/lib/syscall.h userspa
 $(USER_PKGTEST_ELF): $(USER_PKGTEST_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
 	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_PKGTEST_OBJ)
 
+$(USER_PS_OBJ): userspace/ps/ps.c userspace/lib/syscall.h userspace/lib/mini_libc.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(USER_PS_ELF): $(USER_PS_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
+	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_PS_OBJ)
+
+$(USER_PROCTEST_OBJ): userspace/proctest/proctest.c userspace/lib/syscall.h userspace/lib/mini_libc.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(USER_PROCTEST_ELF): $(USER_PROCTEST_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
+	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_PROCTEST_OBJ)
+
 $(USER_DUPFALLBACKCHECK_OBJ): userspace/dupfallbackcheck/dupfallbackcheck.c userspace/lib/syscall.h userspace/lib/mini_libc.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(USER_CFLAGS) -c $< -o $@
@@ -670,7 +692,7 @@ $(USER_LIBC_OBJ): userspace/lib/mini_libc.c userspace/lib/mini_libc.h userspace/
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(USER_CFLAGS) -c $< -o $@
 
-$(INITRD): $(USER_HELLO_ELF) $(USER_ECHO_ELF) $(USER_CAT_ELF) $(USER_TIME_ELF) $(USER_SLEEP_ELF) $(USER_PIPEREAD_ELF) $(USER_PIPEDELAYREAD_ELF) $(USER_PIPEPRODUCER_ELF) $(USER_PIPECONSUMER_ELF) $(USER_LOGPRODUCER_A_ELF) $(USER_LOGPRODUCER_B_ELF) $(USER_LOGCOLLECTOR_ELF) $(USER_BOOTPROBE_ELF) $(USER_HANDOFFCHECK_ELF) $(USER_STDIOCHECK_ELF) $(USER_STDIOBADBIND_ELF) $(USER_STDIONULLCHECK_ELF) $(USER_DUPCHECK_ELF) $(USER_HANDLELIMITCHECK_ELF) $(USER_FILEOFFSETCHECK_ELF) $(USER_SEEKCHECK_ELF) $(USER_POLLCHECK_ELF) $(USER_POLLWAITCHECK_ELF) $(USER_POLLWAKEWRITER_ELF) $(USER_POLLMANYCHECK_ELF) $(USER_CWDCHECK_ELF) $(USER_DUPFALLBACKCHECK_ELF) $(USER_FSTEST_ELF) $(USER_LOGIN_ELF) $(USER_PKGTEST_ELF) $(USER_LOGSINK_WRITER_A_ELF) $(USER_LOGSINK_WRITER_B_ELF) $(USER_TEEWRITER_ELF) $(USER_TEEREADER_A_ELF) $(USER_TEEREADER_B_ELF) $(USER_COMPOSITOR_ELF) $(USER_DESKTOPDEMO_ELF) $(USER_DESKTOPTEST_ELF) $(USER_INIT_ELF) $(USER_SHELL_ELF) $(INIT_CONFIG) tools/mkinitrd.py
+$(INITRD): $(USER_HELLO_ELF) $(USER_ECHO_ELF) $(USER_CAT_ELF) $(USER_TIME_ELF) $(USER_SLEEP_ELF) $(USER_PIPEREAD_ELF) $(USER_PIPEDELAYREAD_ELF) $(USER_PIPEPRODUCER_ELF) $(USER_PIPECONSUMER_ELF) $(USER_LOGPRODUCER_A_ELF) $(USER_LOGPRODUCER_B_ELF) $(USER_LOGCOLLECTOR_ELF) $(USER_BOOTPROBE_ELF) $(USER_HANDOFFCHECK_ELF) $(USER_STDIOCHECK_ELF) $(USER_STDIOBADBIND_ELF) $(USER_STDIONULLCHECK_ELF) $(USER_DUPCHECK_ELF) $(USER_HANDLELIMITCHECK_ELF) $(USER_FILEOFFSETCHECK_ELF) $(USER_SEEKCHECK_ELF) $(USER_POLLCHECK_ELF) $(USER_POLLWAITCHECK_ELF) $(USER_POLLWAKEWRITER_ELF) $(USER_POLLMANYCHECK_ELF) $(USER_CWDCHECK_ELF) $(USER_DUPFALLBACKCHECK_ELF) $(USER_FSTEST_ELF) $(USER_LOGIN_ELF) $(USER_PKGTEST_ELF) $(USER_PS_ELF) $(USER_PROCTEST_ELF) $(USER_LOGSINK_WRITER_A_ELF) $(USER_LOGSINK_WRITER_B_ELF) $(USER_TEEWRITER_ELF) $(USER_TEEREADER_A_ELF) $(USER_TEEREADER_B_ELF) $(USER_COMPOSITOR_ELF) $(USER_DESKTOPDEMO_ELF) $(USER_DESKTOPTEST_ELF) $(USER_INIT_ELF) $(USER_SHELL_ELF) $(INIT_CONFIG) tools/mkinitrd.py
 	mkdir -p $(BUILD_DIR)
 	python3 tools/mkinitrd.py $@ \
 		user=$(USER_HELLO_ELF) \
@@ -702,6 +724,8 @@ $(INITRD): $(USER_HELLO_ELF) $(USER_ECHO_ELF) $(USER_CAT_ELF) $(USER_TIME_ELF) $
 		fstest=$(USER_FSTEST_ELF) \
 		login=$(USER_LOGIN_ELF) \
 		pkgtest=$(USER_PKGTEST_ELF) \
+		ps=$(USER_PS_ELF) \
+		proctest=$(USER_PROCTEST_ELF) \
 		dupfallbackcheck=$(USER_DUPFALLBACKCHECK_ELF) \
 		logsink_writer_a=$(USER_LOGSINK_WRITER_A_ELF) \
 		logsink_writer_b=$(USER_LOGSINK_WRITER_B_ELF) \

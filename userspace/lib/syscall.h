@@ -150,6 +150,10 @@ static inline long sys_wait(int pid, int *status) {
     return syscall3(SYS_WAIT, (long)pid, (long)status, 0);
 }
 
+static inline long sys_getpid(void) {
+    return syscall3(SYS_GETPID, 0, 0, 0);
+}
+
 static inline long sys_yield(void) {
     return syscall3(SYS_YIELD, 0, 0, 0);
 }
