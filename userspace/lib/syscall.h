@@ -252,6 +252,9 @@ static inline long sys_munmap(void *addr, unsigned long len) {
     return syscall2(SYS_MUNMAP, (long)addr, (long)len);
 }
 
+/* sys_fb_info() result when the boot path provided no linear framebuffer. */
+#define SYS_FB_ERR_NODEV (-19)
+
 static inline long sys_fb_info(unsigned int *info) {
     return syscall1(SYS_FB_INFO, (long)info);
 }

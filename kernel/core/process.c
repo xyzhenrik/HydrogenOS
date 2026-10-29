@@ -542,12 +542,18 @@ static int process_handle_clone(process_handle_entry_t *dst,
         dst->resource.file->refs++;
         return 0;
     case PROCESS_HANDLE_PIPE_READER:
+        if (kernel_pipe_acquire_reader(src->resource.pipe) != 0) {
+            process_handle_reset(dst);
+            return -1;
+        }
         dst->resource.pipe = src->resource.pipe;
-        kernel_pipe_acquire_reader(dst->resource.pipe);
         return 0;
     case PROCESS_HANDLE_PIPE_WRITER:
+        if (kernel_pipe_acquire_writer(src->resource.pipe) != 0) {
+            process_handle_reset(dst);
+            return -1;
+        }
         dst->resource.pipe = src->resource.pipe;
-        kernel_pipe_acquire_writer(dst->resource.pipe);
         return 0;
     case PROCESS_HANDLE_NULL_READER:
     case PROCESS_HANDLE_NULL_WRITER:
@@ -1329,9 +1335,15 @@ int process_begin_fd_poll_wait(process_t *p, int fd, uint32_t events,
         return -1;
     }
 
+    /*
+     * waiting_pipe/waiting_handle describe a pending pipe read or write that
+     * process_resume_blocked_io() completes on wake. A poll transfers no data,
+     * so they must stay clear; otherwise the wake path would perform a read
+     * into the poll arguments and consume the bytes the poll reported.
+     */
     p->state = PROCESS_BLOCKED_POLL;
-    p->waiting_handle = (fd < 3) ? fd : (fd - 3);
-    p->waiting_is_stdio = (fd < 3) ? 1u : 0u;
+    p->waiting_handle = -1;
+    p->waiting_is_stdio = 0;
     p->waiting_pipe = 0;
     p->waiting_poll_fd = fd;
     p->waiting_poll_events = events;
@@ -1343,11 +1355,6 @@ int process_begin_fd_poll_wait(process_t *p, int fd, uint32_t events,
     } else {
         p->waiting_poll_deadline_ms = 0;
         p->waiting_poll_has_deadline = 0;
-    }
-
-    if (entry->type == PROCESS_HANDLE_PIPE_READER ||
-        entry->type == PROCESS_HANDLE_PIPE_WRITER) {
-        p->waiting_pipe = entry->resource.pipe;
     }
     return 0;
 }
@@ -1673,19 +1680,65 @@ int process_has_runnable_other_than(process_t *p) {
 }
 
 /*
- * Priority-aware scheduler.
+ * Highest-priority runnable process. Among equal priorities the scan starts
+ * after 'prev' so equal-priority processes alternate; 'prev' itself only wins
+ * on strictly higher priority. 'prev' may be 0 (already destroyed).
+ */
+static process_t *process_pick_next(process_t *prev) {
+    process_t *best = 0;
+    process_t *start;
+    process_t *it;
+
+    if (!process_list) {
+        return 0;
+    }
+    start = (prev && prev->next) ? prev->next : process_list;
+    it = start;
+    do {
+        if (it != prev && process_is_runnable(it) &&
+            (!best || it->priority > best->priority)) {
+            best = it;
+        }
+        it = it->next ? it->next : process_list;
+    } while (it != start);
+
+    if (prev && process_is_runnable(prev) &&
+        (!best || prev->priority > best->priority)) {
+        best = prev;
+    }
+    return best;
+}
+
+/*
+ * Completes whatever 'p' was blocked on. Returns -1 if the wake was spurious
+ * and 'p' is blocked again. p's address space must be active because pending
+ * results are written to user memory.
+ */
+static int process_resume(process_t *p) {
+    process_complete_wait(p);
+    if (process_resume_blocked_io(p) != 0) {
+        return -1;
+    }
+    if (process_resume_blocked_poll(p) != 0) {
+        return -1;
+    }
+    return 0;
+}
+
+/*
+ * Priority-aware scheduler, called after every syscall and on timer ticks
+ * that interrupt user mode.
  *
- * Each timer tick the scheduler:
- *   1. Saves the current frame.
- *   2. Wakes sleeping processes whose deadline has passed.
- *   3. Wakes poll-blocked processes whose timeout expired.
- *   4. Scans the entire process list and selects the runnable candidate
- *      with the highest priority.  Among equal-priority processes it
- *      advances past 'prev' first (round-robin fairness).
- *   5. Falls back to keeping 'prev' running if nothing else is ready.
+ * Candidates are tried in priority order until one actually resumes; a
+ * candidate whose wake was spurious re-blocks and drops out. If nothing can
+ * run, the CPU idles here with the kernel as current process until a timer
+ * deadline makes a process runnable. 'prev' is never resumed unless it is
+ * runnable: returning its frame while it is blocked or dead would make a
+ * pending syscall return early or run a dead process.
  *
- * IDLE-priority processes are only chosen when no NORMAL/HIGH/RT process
- * is runnable.
+ * Idling is only reachable from the syscall path: a timer tick interrupts a
+ * running, hence runnable, process, so process_pick_next() finds at least
+ * 'prev' and the IRQ is acknowledged normally.
  */
 regs_t *process_schedule(regs_t *r) {
     process_t *prev = current_proc;
@@ -1695,118 +1748,44 @@ regs_t *process_schedule(regs_t *r) {
 
     if (prev->alive) {
         process_set_frame(prev, r);
-    }
-
-    /* Decrement the current process's timeslice */
-    if (prev->alive && prev->timeslice_ms > 0) {
-        prev->timeslice_ms--;
+        if (prev->timeslice_ms > 0) {
+            prev->timeslice_ms--;
+        }
     }
 
     process_wake_sleepers();
     process_update_poll_timeouts();
 
-    /*
-     * Find the highest-priority runnable candidate.
-     * We do two passes so that round-robin ordering is preserved among
-     * equal-priority processes: first look starting after prev, then
-     * wrap around up to and including prev.
-     */
-    process_t *best = 0;
-    uint8_t best_prio = 0;
-
-    /* Pass: iterate the entire list once starting from prev->next */
-    process_t *it = prev->next ? prev->next : process_list;
-    process_t *start = it;
-    int looped = 0;
-    while (it) {
-        if (it == start && looped) break;
-        looped = 1;
-
-        if (process_is_runnable(it)) {
-            if (!best || it->priority > best_prio) {
-                best = it;
-                best_prio = it->priority;
+    uint64_t *active_pml4 = prev->pml4;
+    for (;;) {
+        process_t *next = process_pick_next(prev);
+        if (next) {
+            process_set_current(next);
+            if (next->pml4 != active_pml4) {
+                paging_switch(next->pml4);
+                active_pml4 = next->pml4;
             }
-        }
-        it = it->next ? it->next : process_list;
-        if (it == start) break;
-    }
-
-    /* Also consider prev itself */
-    if (process_is_runnable(prev)) {
-        if (!best || prev->priority > best_prio) {
-            best = prev;
-            best_prio = prev->priority;
-        }
-    }
-
-    /* IDLE processes run only when no non-IDLE process is ready */
-    if (best && best->priority == PROCESS_PRIO_IDLE) {
-        /* Check if any non-IDLE process is runnable */
-        it = process_list;
-        process_t *non_idle = 0;
-        process_t *list_start = it;
-        int first = 1;
-        while (it) {
-            if (!first && it == list_start) break;
-            first = 0;
-            if (it != best && process_is_runnable(it) &&
-                it->priority > PROCESS_PRIO_IDLE) {
-                non_idle = it;
-                break;
+            if (process_resume(next) != 0) {
+                continue;
             }
-            it = it->next ? it->next : process_list;
-            if (it == list_start) break;
+            if (next->timeslice_ms == 0) {
+                next->timeslice_ms = process_timeslice_for_prio(next->priority);
+            }
+            if (prev && prev != next && !prev->alive) {
+                process_destroy(prev);
+            }
+            return &next->frame;
         }
-        if (non_idle) {
-            best = non_idle;
-            best_prio = non_idle->priority;
-        }
-    }
 
-    if (best && best != prev) {
-        /* Reset timeslice when switching to a new process */
-        if (best->timeslice_ms == 0) {
-            best->timeslice_ms = process_timeslice_for_prio(best->priority);
-        }
-        process_set_current(best);
-        paging_switch(best->pml4);
-        process_complete_wait(best);
-        if (process_resume_blocked_io(best) != 0) {
-            /* IO still blocked — stay on prev */
-            process_set_current(prev);
-            if (prev->pml4) paging_switch(prev->pml4);
-            if (process_is_runnable(prev))
-                return &prev->frame;
-            return r;
-        }
-        if (process_resume_blocked_poll(best) != 0) {
-            /* Poll still blocked — stay on prev */
-            process_set_current(prev);
-            if (prev->pml4) paging_switch(prev->pml4);
-            if (process_is_runnable(prev))
-                return &prev->frame;
-            return r;
-        }
-        if (!prev->alive) {
+        process_set_current(&kernel_proc);
+        active_pml4 = paging_kernel_pml4();
+        paging_switch(active_pml4);
+        if (prev && !prev->alive) {
             process_destroy(prev);
+            prev = 0;
         }
-        return &best->frame;
+        __asm__ volatile("sti\n\thlt\n\tcli");
+        process_wake_sleepers();
+        process_update_poll_timeouts();
     }
-
-    /* Keep running prev if it is still runnable */
-    if (process_is_runnable(prev)) {
-        if (prev->timeslice_ms == 0) {
-            prev->timeslice_ms = process_timeslice_for_prio(prev->priority);
-        }
-        process_complete_wait(prev);
-        if (process_resume_blocked_io(prev) != 0) {
-            return r;
-        }
-        if (process_resume_blocked_poll(prev) != 0) {
-            return r;
-        }
-        return &prev->frame;
-    }
-    return r;
 }

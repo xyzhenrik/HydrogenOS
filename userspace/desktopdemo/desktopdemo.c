@@ -1144,8 +1144,13 @@ static void handle_release(void) {
 
 int main(void) {
     unsigned int info[4];
-    if (sys_fb_info(info) != 0) {
-        printf("desktop: no framebuffer\n");
+    long fb_rc = sys_fb_info(info);
+    if (fb_rc == SYS_FB_ERR_NODEV) {
+        printf("desktop: no framebuffer, desktop session disabled\n");
+        return 0;
+    }
+    if (fb_rc != 0) {
+        printf("desktop: framebuffer query failed rc=%d\n", (int)fb_rc);
         return 1;
     }
     SW = (int)info[0];

@@ -7,9 +7,8 @@ enum {
 
 struct kernel_pipe {
     uint8_t used;
-    uint8_t readers;
-    uint8_t writers;
-    uint8_t reserved;
+    uint32_t readers;
+    uint32_t writers;
     uint32_t read_pos;
     uint32_t write_pos;
     uint32_t size;
@@ -23,7 +22,6 @@ static void kernel_pipe_reset(kernel_pipe_t *pipe) {
     pipe->used = 0;
     pipe->readers = 0;
     pipe->writers = 0;
-    pipe->reserved = 0;
     pipe->read_pos = 0;
     pipe->write_pos = 0;
     pipe->size = 0;
@@ -51,14 +49,30 @@ int kernel_pipe_create(kernel_pipe_t **out_pipe) {
     return -1;
 }
 
-void kernel_pipe_acquire_reader(kernel_pipe_t *pipe) {
-    if (!pipe || !pipe->used) return;
-    pipe->readers++;
+/*
+ * A new reference must come from an existing live one, so a pipe with no
+ * references of either kind cannot be revived: its slot may already be
+ * reused by an unrelated pipe.
+ */
+static int kernel_pipe_acquire(kernel_pipe_t *pipe, uint32_t *count) {
+    if (!pipe->used || (pipe->readers == 0 && pipe->writers == 0))
+        return -1;
+    if (*count == UINT32_MAX)
+        return -1;
+    (*count)++;
+    return 0;
 }
 
-void kernel_pipe_acquire_writer(kernel_pipe_t *pipe) {
-    if (!pipe || !pipe->used) return;
-    pipe->writers++;
+int kernel_pipe_acquire_reader(kernel_pipe_t *pipe) {
+    if (!pipe)
+        return -1;
+    return kernel_pipe_acquire(pipe, &pipe->readers);
+}
+
+int kernel_pipe_acquire_writer(kernel_pipe_t *pipe) {
+    if (!pipe)
+        return -1;
+    return kernel_pipe_acquire(pipe, &pipe->writers);
 }
 
 int kernel_pipe_has_readers(const kernel_pipe_t *pipe) {
