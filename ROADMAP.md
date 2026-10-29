@@ -28,7 +28,7 @@
 - [ ] **16.** Block-Cache: Writeback-Policy statt nur Read-Cache
 - [ ] **17.** Block-Device-Abstraktion: mehrere Geräte gleichzeitig (`/dev/blk0`, `/dev/blk1`)
 - [ ] **18.** GPT-Partition-Table-Support (neben MBR)
-- [ ] **19.** `sys_link` / `sys_symlink` / `sys_readlink`
+- [x] **19.** `sys_link` / `sys_symlink` / `sys_readlink`
 - [ ] **20.** Ext2: journaling-Stub (prepare für ext3-Kompatibilität)
 
 ---
@@ -52,9 +52,9 @@
 - [x] **35.** `virtio-net` — PCI-Probe + Loopback-Test
 - [x] **36.** Einfacher Netzwerk-Stack-Stub (Ethernet-Frame-RX/TX)
 - [ ] **37.** ARP + IPv4-Grundstruktur
-- [ ] **38.** UDP-Grundimplementierung
+- [x] **38.** UDP-Grundimplementierung
 - [ ] **39.** TCP (minimal: SYN/ACK, Send/Receive)
-- [ ] **40.** `sys_socket` / `sys_bind` / `sys_connect` / `sys_send` / `sys_recv`
+- [x] **40.** `sys_socket` / `sys_bind` / `sys_connect` / `sys_send` / `sys_recv`
 
 ---
 
@@ -62,18 +62,18 @@
 
 - [x] **41.** mini-libc: `printf` (Basis-Format: `%s %d %x %u %c`, kein Float)
 - [x] **42.** mini-libc: `sprintf` / `snprintf`
-- [ ] **43.** mini-libc: `malloc` / `free` (slab-Allocator oder tlsf, über `sys_mmap`)
-- [ ] **44.** mini-libc: `fopen` / `fread` / `fwrite` / `fclose` (FILE-Wrapper)
-- [ ] **45.** mini-libc: `getenv` / `setenv` (envp-Array aus `sys_spawn` Args)
-- [ ] **46.** mini-libc: `strdup` / `strtol` / `strtoul` / `atoi` / `atol`
-- [ ] **47.** mini-libc: `qsort` / `bsearch`
-- [ ] **48.** mini-libc: `time` / `gettimeofday` / `clock_gettime` Stub
+- [x] **43.** mini-libc: `malloc` / `free` (slab-Allocator oder tlsf, über `sys_mmap`)
+- [x] **44.** mini-libc: `fopen` / `fread` / `fwrite` / `fclose` (FILE-Wrapper)
+- [x] **45.** mini-libc: `getenv` / `setenv` (envp-Array aus `sys_spawn` Args)
+- [x] **46.** mini-libc: `strdup` / `strtol` / `strtoul` / `atoi` / `atol`
+- [x] **47.** mini-libc: `qsort` / `bsearch`
+- [x] **48.** mini-libc: `time` / `gettimeofday` / `clock_gettime` Stub
 - [ ] **49.** `sys_execve`: aktuelles Prozess-Image ersetzen (Lade neues ELF in selben AS)
 - [ ] **50.** `sys_fork`: Copy-on-Write-Fork
-- [ ] **51.** Environment-Variable-Passing via `sys_spawn` (argv + envp im User-Stack)
+- [x] **51.** Environment-Variable-Passing via `sys_spawn` (argv + envp im User-Stack)
 - [ ] **52.** Dynamischer ELF-Loader (Shared-Library-Support, PLT/GOT)
-- [ ] **53.** `/bin`, `/lib`, `/etc`, `/tmp`-Verzeichnisstruktur im initialen FS
-- [ ] **54.** Shell: Pipe-Operator `|` (Shell-seitige Pipe-Verkettung)
+- [x] **53.** `/bin`, `/lib`, `/etc`, `/tmp`-Verzeichnisstruktur im initialen FS
+- [x] **54.** Shell: Pipe-Operator `|` (Shell-seitige Pipe-Verkettung)
 - [x] **55.** Shell: Output-Redirection `>` / `>>`
 - [x] **56.** Shell: Input-Redirection `<`
 - [x] **57.** Shell: Hintergrund-Job `&` + `wait`
@@ -85,34 +85,34 @@
 
 ## Block D – Grafikstack & Compositor (Schritte 61–80)
 
-- [ ] **61.** Framebuffer: Double-Buffering (Back-Buffer + vsync-Flip)
-- [ ] **62.** Software-2D-Renderer: gefüllte Rechtecke, Linien, Kreise, Clipping
-- [ ] **63.** Software-2D-Renderer: Alpha-Blending / Porter-Duff-Compositing
-- [ ] **64.** Font-Rendering: Bitmap-Fonts (8×16 → 16×32 hochskaliert, dann psf2-Support)
-- [ ] **65.** Font-Rendering: TrueType via stb_truetype (portiert, statisch gelinkt)
+- [x] **61.** Framebuffer: Double-Buffering (Back-Buffer + vsync-Flip)
+- [x] **62.** Software-2D-Renderer: gefüllte Rechtecke, Linien, Kreise, Clipping
+- [x] **63.** Software-2D-Renderer: Alpha-Blending / Porter-Duff-Compositing
+- [x] **64.** Font-Rendering: Bitmap-Fonts (8×16 → 16×32 hochskaliert, dann psf2-Support)
+- [x] **65.** Font-Rendering: TrueType via stb_truetype (portiert, statisch gelinkt)
 - [ ] **66.** Window-Manager-Protokoll-Design (IPC via Shared-Memory + Event-Pipe)
-- [ ] **67.** Compositor-Server: Fenster-Liste, Z-Order, Focus-Verwaltung
-- [ ] **68.** Compositor: Damage-Tracking + selektive Repaints
-- [ ] **69.** Client-Library: `hydrogen_window_create` / `destroy` / `surface_get`
+- [x] **67.** Compositor-Server: Fenster-Liste, Z-Order, Focus-Verwaltung
+- [x] **68.** Compositor: Damage-Tracking + selektive Repaints
+- [x] **69.** Client-Library: `hydrogen_window_create` / `destroy` / `surface_get`
 - [ ] **70.** Client-Library: Event-Loop (Key/Mouse-Events aus Compositor-Pipe)
-- [ ] **71.** Input-Routing: Keyboard/Mouse → focused Window
-- [ ] **72.** Widget-Toolkit: `Label`, `Button`, `TextInput`, `Container`
-- [ ] **73.** Widget-Toolkit: Layout-Engine (Flex-artig: horizontal/vertical + grow)
-- [ ] **74.** Widget-Toolkit: Theme-System (Color-Tokens, Spacing-Scale, Font-Token)
-- [ ] **75.** Fenster-Dekorationen: Titelbar, Close/Min/Max-Buttons (iOS-Stil: rund, clean)
-- [ ] **76.** Desktop-Hintergrund-Renderer (Gradient oder PNG)
-- [ ] **77.** Taskbar (unten, laufende Apps als Icons, Uhrzeit)
-- [ ] **78.** App-Launcher / Spotlight-artiges Suchfeld
-- [ ] **79.** Datei-Manager (Grid-View, Ordner-Navigation, Doppelklick)
+- [x] **71.** Input-Routing: Keyboard/Mouse → focused Window
+- [x] **72.** Widget-Toolkit: `Label`, `Button`, `TextInput`, `Container`
+- [x] **73.** Widget-Toolkit: Layout-Engine (Flex-artig: horizontal/vertical + grow)
+- [x] **74.** Widget-Toolkit: Theme-System (Color-Tokens, Spacing-Scale, Font-Token)
+- [x] **75.** Fenster-Dekorationen: Titelbar, Close/Min/Max-Buttons (iOS-Stil: rund, clean)
+- [x] **76.** Desktop-Hintergrund-Renderer (Gradient oder PNG)
+- [x] **77.** Taskbar (unten, laufende Apps als Icons, Uhrzeit)
+- [x] **78.** App-Launcher / Spotlight-artiges Suchfeld
+- [x] **79.** Datei-Manager (Grid-View, Ordner-Navigation, Doppelklick)
 - [ ] **80.** virtio-gpu 2D-Befehle nutzen (GPU-beschleunigte Blits statt Software)
 
 ---
 
 ## Block E – System-Services & Distribution (Schritte 81–100)
 
-- [ ] **81.** System-Logger `syslogd` (Userspace-Daemon, liest logsink, schreibt `/var/log/system.log`)
-- [ ] **82.** RTC-Treiber (CMOS, Wanduhrzeit beim Boot lesen)
-- [ ] **83.** ACPI-Tabellen-Parser (RSDP → RSDT/XSDT → FADT, Shutdown via SLP_TYPx)
+- [x] **81.** System-Logger `syslogd` (Userspace-Daemon, liest logsink, schreibt `/var/log/system.log`)
+- [x] **82.** RTC-Treiber (CMOS, Wanduhrzeit beim Boot lesen)
+- [x] **83.** ACPI-Tabellen-Parser (RSDP → RSDT/XSDT → FADT, Shutdown via SLP_TYPx)
 - [x] **84.** Power-Management: sauberes Shutdown / Reboot via ACPI
 - [ ] **85.** Benutzer-Authentifizierung (`/etc/passwd`-Stil, `sys_getuid` / `sys_setuid`)
 - [ ] **86.** Datei-Permissions (Inode-Bits rwxrwxrwx, UID/GID, Kernel-Enforcement)
@@ -125,9 +125,9 @@
 - [ ] **93.** Kernel-Crash-Dump: Oops-State auf Disk schreiben (`/var/crash/`)
 - [ ] **94.** Kernel-Perf-Counter: Syscall-Counts, Scheduler-Wakeups, Pipe-Latenz
 - [ ] **95.** OOM-Policy: Prozess-Killer bei Speicherdruck (Scoring nach Größe/Prio)
-- [ ] **96.** `sys_mprotect` (RW/RX-Flags auf Mappings setzen, SIGSEGV-Basis)
-- [ ] **97.** Signal-Grundgerüst: `sys_kill` / `sys_signal` / `sys_sigreturn` (SIGTERM, SIGKILL, SIGSEGV)
-- [ ] **98.** Settings-App (GUI, Theme-Wechsel, Display-Helligkeit, Netzwerk-Status)
+- [x] **96.** `sys_mprotect` (RW/RX-Flags auf Mappings setzen, SIGSEGV-Basis)
+- [x] **97.** Signal-Grundgerüst: `sys_kill` / `sys_signal` / `sys_sigreturn` (SIGTERM, SIGKILL, SIGSEGV)
+- [x] **98.** Settings-App (GUI, Theme-Wechsel, Display-Helligkeit, Netzwerk-Status)
 - [ ] **99.** Installer-ISO (Live-System + `install`-Kommando → Disk-Image schreiben)
 - [ ] **100.** Erster öffentlicher Alpha-Boot-Demo (QEMU-Recording, Screenshot, Changelog)
 

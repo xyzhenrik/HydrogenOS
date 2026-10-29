@@ -295,3 +295,26 @@
 - `init` `restart=on-failure` has no retry limit.
 - Positioned file writes are whole-file read-modify-write (O(file size)).
 - BGA LFB is mapped write-back; write-combining needs PAT.
+
+## Milestone 0.4 "Robust Userland" (2026-10-29)
+
+- **Scheduler blocking:** every blocking syscall (read, write, sleep, poll_wait, poll_many, wait, net_ping, UDP) blocks through the scheduler, with no more in-kernel `sti;hlt` waits. IRQ0 preempts only CPL3 frames. Pipe wakeups are targeted. New test `schedtest`.
+- **init:** `retries=N` (default 3) with exponential backoff, failed services are marked, and dependents are skipped with a log line. Syntax is in `docs/INIT_RC.md`. `cwdcheck` is back: its directory name collided with the `/cwdcheck` binary, and VFS/ext2 were correct.
+- **User memory:** syscalls validate user pointers with a page-table walk (`paging64.c`). Unmapped, kernel, non-canonical and wrapping pointers return `-EFAULT` (`faulttest`).
+- **Signals:** `SYS_KILL` (56), `SYS_SIGACTION` (57), `SYS_SIGRETURN` (58). User faults deliver SIGSEGV/SIGILL instead of panicking, blocked syscalls return `-EINTR`, and init cannot be killed. The shell has `kill`, and Ctrl+C works via virtio-input (`sigtest`).
+- **mprotect:** `SYS_MPROTECT` (55), `PROT_NONE`, W^X, a stack guard page and guarded large malloc mappings (`mprotecttest`).
+- **libc:** modular (string, stdlib, sort, stdio, format, clock, environ, errno). Buffered `FILE` streams, a new printf family, `qsort`/`bsearch`, `strto*`, `getenv`/`setenv`, `time`/`clock_gettime`. `fprintf` takes `FILE*`; the fd form is `dprintf` (`libctest`).
+- **UDP:** socket handles (`SYS_SOCKET` 59, `SYS_BIND` 60, `SYS_SENDTO` 61, `SYS_RECVFROM` 62) with poll support, a DNS resolver and `nslookup` (`udptest`).
+- **Links:** `SYS_LINK` (63), `SYS_SYMLINK` (64), `SYS_READLINK` (65), fast and slow ext2 symlinks, and path resolution with depth limit 8 (`-ELOOP`). Adds `ln [-s]` and `readlink` (`linktest`). `e2fsck` is clean.
+- **syslogd:** the first daemon started by init, with `stdout=syslog`/`stderr=syslog`/`log=syslog`. It writes `/var/log/system.log` with 64 KiB rotation. Adds `logread` and the `/bin /etc /tmp /home /var/log` layout (`logtest`).
+- **Settings app:** Appearance (theme, accent, glass, live preview), Keyboard, Display, Network (ping) and About. Persisted in `/etc/settings.conf`.
+- **Verification:** clean build; `tools/boot_smoke.sh` passed 3 times in a row with all 21 markers.
+
+### Open follow-ups
+- CR0.WP is off, so kernel writes into READ-only user pages are not blocked; `user_range_ok` has no direction.
+- The `SYS_WAIT` completion path writes the status through a stored user pointer without re-validation.
+- `process_exit_records` has 32 slots and silently overwrites when full.
+- Pipe waiters are found by an O(n) process scan; per-pipe wait queues are needed.
+- init daemons are never restarted, and there is no per-service start timeout.
+- Ctrl+C only via virtio-input, not serial; there is no syscall to block signals (sigprocmask).
+- Positioned file writes are still whole-file read-modify-write.
