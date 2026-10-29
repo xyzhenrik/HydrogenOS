@@ -276,10 +276,10 @@ static process_t *load_user_process(const uint8_t *elf, size_t elf_size,
   const elf64_ehdr_t *eh = (const elf64_ehdr_t *)elf;
   regs_t initial = {0};
   initial.rip = (uint64_t)(uintptr_t)eh->e_entry;
-  initial.cs = 0x23;
+  initial.cs = GDT_USER_CODE_SELECTOR;
   initial.rflags = 0x202;
   initial.rsp = user_stack + stack_pages * 0x1000 - 16;
-  initial.ss = 0x1B;
+  initial.ss = GDT_USER_DATA_SELECTOR;
   process_set_frame(proc, &initial);
   paging_switch(prev_pml4);
   return proc;

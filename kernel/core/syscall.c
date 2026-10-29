@@ -33,8 +33,10 @@ void fb_console_clear(void);
 #include <stdint.h>
 
 #include "errno.h"
+#include "gdt.h"
+#include "core/signal.h"
 
-static process_t *bootstrap_proc = 0;
+static uint32_t bootstrap_pid = 0;
 static uintptr_t user_return_rip = 0;
 static uintptr_t user_return_rsp = 0;
 
@@ -165,7 +167,11 @@ static uint64_t fs_status(int rc) {
 }
 
 void syscall_set_bootstrap(process_t *proc) {
-    bootstrap_proc = proc;
+    bootstrap_pid = proc ? proc->pid : 0;
+}
+
+int syscall_is_bootstrap(const process_t *proc) {
+    return proc && bootstrap_pid != 0 && proc->pid == bootstrap_pid;
 }
 
 void syscall_set_user_return(uintptr_t rip, uintptr_t rsp) {
@@ -173,36 +179,40 @@ void syscall_set_user_return(uintptr_t rip, uintptr_t rsp) {
     user_return_rsp = rsp;
 }
 
-static void user_return_to_kernel(regs_t *r, uint64_t status) {
+static int user_return_to_kernel(regs_t *r, uint64_t status) {
     if (!r || user_return_rip == 0 || user_return_rsp == 0)
-        return;
+        return 0;
     process_set_current(process_kernel());
     paging_switch(paging_kernel_pml4());
     r->rdi = status;
     r->rip = user_return_rip;
-    r->cs = 0x08;
+    r->cs = GDT_KERNEL_CODE_SELECTOR;
     r->rflags = 0x202;
     r->rsp = user_return_rsp;
-    r->ss = 0x10;
+    r->ss = GDT_KERNEL_DATA_SELECTOR;
     user_return_rip = 0;
     user_return_rsp = 0;
+    return 1;
 }
 
-void syscall_terminate_current(regs_t *r, uint64_t status) {
-    process_t *exiting = process_current();
-    int is_bootstrap = (exiting == bootstrap_proc);
-    process_mark_exited(exiting, (int)status);
-    if (is_bootstrap && !process_has_runnable_other_than(exiting)) {
-        bootstrap_proc = 0;
-        user_return_to_kernel(r, status);
-        process_destroy(exiting);
-    }
+int syscall_bootstrap_exited(const process_t *exited, regs_t *r,
+                             uint64_t status) {
+    if (!syscall_is_bootstrap(exited) || process_has_runnable_other_than(exited))
+        return 0;
+    bootstrap_pid = 0;
+    return user_return_to_kernel(r, status);
 }
 
 uint64_t syscall_handle(regs_t *r) {
     switch (r->rax) {
     case SYS_EXIT: {
-        syscall_terminate_current(r, r->rdi);
+        process_t *exiting = process_current();
+        /* Only the low byte is a status: the bits above are reserved for the
+           kernel's own encoding of a death by signal. */
+        uint64_t status = r->rdi & SIGNAL_EXIT_STATUS_MASK;
+        process_mark_exited(exiting, (int)status);
+        if (syscall_bootstrap_exited(exiting, r, status))
+            process_destroy(exiting);
         return 0;
     }
     case SYS_SET_LAYOUT: {
@@ -1083,6 +1093,16 @@ uint64_t syscall_handle(regs_t *r) {
             return (uint64_t)-EBADF;
         return 0;
     }
+    case SYS_KILL:
+        return (uint64_t)signal_kill((uint32_t)r->rdi, (int)r->rsi);
+    case SYS_SIGACTION:
+        return (uint64_t)signal_sigaction(process_current(), (int)r->rdi,
+                                          r->rsi, r->rdx);
+    case SYS_SIGRETURN:
+        /* The restored rax becomes the result of the interrupted code. */
+        if (signal_return(process_current(), r) != 0)
+            return (uint64_t)-EFAULT;
+        return r->rax;
     default:
         return (uint64_t)-1;
     }

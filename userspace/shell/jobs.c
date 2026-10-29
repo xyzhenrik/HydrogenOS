@@ -2,6 +2,7 @@
 
 #include "mini_libc.h"
 #include "output.h"
+#include "signal.h"
 #include "shell_limits.h"
 
 /* Status reported for a job process whose exit status could not be
@@ -64,7 +65,7 @@ static void reap(ShellJob *job, int index, int blocking) {
     if (rc == 0)
         return;
     job->finished[index] = 1;
-    job->statuses[index] = rc > 0 ? status : JOB_STATUS_LOST;
+    job->statuses[index] = rc > 0 ? jobs_exit_code(status) : JOB_STATUS_LOST;
 }
 
 void jobs_update(void) {
@@ -142,5 +143,24 @@ int jobs_wait_pid(int pid, int *status) {
     }
     if (wait_pid(pid, status) < 0)
         return -1;
+    *status = jobs_exit_code(*status);
     return 0;
+}
+
+int jobs_signal(int id, int sig) {
+    ShellJob *job;
+    if (id < 1 || id > JOBS_MAX || !jobs[id - 1].used)
+        return -1;
+    job = &jobs[id - 1];
+    for (int i = 0; i < job->count; ++i) {
+        if (!job->finished[i])
+            kill(job->pids[i], sig);
+    }
+    return 0;
+}
+
+int jobs_exit_code(int wait_status) {
+    if (WIFSIGNALED(wait_status))
+        return 128 + WTERMSIG(wait_status);
+    return wait_status;
 }

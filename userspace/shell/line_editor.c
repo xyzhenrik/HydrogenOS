@@ -8,6 +8,7 @@ enum {
     TTY_COLOR_BLACK = 0,
     TTY_COLOR_BLUE = 9,
     TTY_COLOR_WHITE = 15,
+    KEY_INTERRUPT = 3,
     KEY_ESCAPE = 27,
     KEY_DELETE = 127,
 };
@@ -88,6 +89,11 @@ int line_editor_read(char *buf, int cap) {
     for (;;) {
         char c = 0;
         read_char(&c);
+        if (c == KEY_INTERRUPT) {
+            write(1, "^C\n", 3);
+            buf[0] = 0;
+            return 0;
+        }
         if (c == '\r' || c == '\n') {
             write_char('\n');
             buf[len] = 0;

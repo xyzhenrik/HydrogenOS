@@ -1,5 +1,6 @@
 #include "process.h"
 #include "core/time.h"
+#include "errno.h"
 #include "keyboard.h"
 #include "pipe.h"
 #include "serial.h"
@@ -9,6 +10,7 @@
 #include "paging.h"
 #include "net/netif.h"
 #include "net/socket.h"
+#include "syscall.h"
 #include "usercopy.h"
 
 #define PROCESS_EXIT_SLOTS 32
@@ -157,6 +159,8 @@ static int process_console_fallback_read(uint8_t *out, uint32_t out_sz,
         return -1;
 
     *out_len = 0;
+    if (current_proc && current_proc != &kernel_proc)
+        signal_console_note_reader(current_proc);
     while (*out_len < out_sz) {
         int c = process_console_take_char();
         if (c < 0) {
@@ -1098,6 +1102,7 @@ process_t *process_create(uint64_t *pml4, uint32_t parent_pid) {
     p->waiting_pipe = 0;
     p->waiting_socket_fd = -1;
     vmm_user_init(&p->vm);
+    signal_state_init(&p->signals);
     process_clear_poll_wait(p);
     p->kernel_wait_fn = 0;
     p->kernel_wait_arg = 0;
@@ -1152,8 +1157,7 @@ void process_set_current(process_t *p) {
     current_proc = p;
 }
 
-void process_mark_exited(process_t *p, int status) {
-    if (!p || p == &kernel_proc) return;
+static void process_record_exit(process_t *p, int status) {
     p->alive = 0;
     p->state = PROCESS_RUNNABLE;
 
@@ -1194,6 +1198,14 @@ void process_mark_exited(process_t *p, int status) {
     exit_records[slot].pid = p->pid;
     exit_records[slot].parent_pid = p->parent_pid;
     exit_records[slot].status = status;
+}
+
+void process_mark_exited(process_t *p, int status) {
+    if (!p || p == &kernel_proc) return;
+    process_record_exit(p, status);
+    /* After the exit is recorded, so that a parent blocked on exactly this
+       child completes its wait instead of being interrupted by SIGCHLD. */
+    signal_send(process_find_by_pid(p->parent_pid), SIGCHLD);
 }
 
 int process_inherit_handles(process_t *dst, const process_t *src) {
@@ -2056,7 +2068,32 @@ void process_wake_sleepers(void) {
     } while (it && it != process_list);
 }
 
-int process_has_runnable_other_than(process_t *p) {
+int process_interrupt_wait(process_t *p) {
+    if (!p || p == &kernel_proc || !p->alive || p->wait_ready)
+        return 0;
+    if (p->state == PROCESS_RUNNABLE && p->waiting_for_pid == 0 &&
+        p->waiting_pipe == 0 && p->waiting_poll_fd < 0 &&
+        p->waiting_poll_count == 0 && p->waiting_socket_fd < 0)
+        return 0;
+
+    p->waiting_for_pid = 0;
+    p->waiting_status_ptr = 0;
+    p->wait_result_pid = 0;
+    p->wait_status = 0;
+    p->waiting_pipe = 0;
+    p->waiting_handle = -1;
+    p->waiting_is_stdio = 0;
+    process_clear_poll_wait(p);
+    p->waiting_socket_fd = -1;
+    p->sleep_until_ms = 0;
+    p->kernel_wait_fn = 0;
+    p->kernel_wait_arg = 0;
+    p->frame.rax = (uint64_t)-EINTR;
+    p->state = PROCESS_RUNNABLE;
+    return 1;
+}
+
+int process_has_runnable_other_than(const process_t *p) {
     if (!process_list) return 0;
     process_t *it = process_list;
     do {
@@ -2156,6 +2193,11 @@ regs_t *process_schedule(regs_t *r) {
         if (prev->timeslice_ms > 0) {
             prev->timeslice_ms--;
         }
+        /* A signal that arrived while prev was running must not be slept
+           through by the syscall it just blocked in. */
+        if (signal_deliverable(prev)) {
+            process_interrupt_wait(prev);
+        }
     }
 
     process_update_timed_waits();
@@ -2169,7 +2211,29 @@ regs_t *process_schedule(regs_t *r) {
                 paging_switch(next->pml4);
                 active_pml4 = next->pml4;
             }
+            if (signal_deliverable(next)) {
+                process_interrupt_wait(next);
+            }
             if (process_resume(next) != 0) {
+                continue;
+            }
+            if (signal_deliver(next) == SIGNAL_DELIVER_KILLED) {
+                if (syscall_bootstrap_exited(
+                        next, r, SIGNAL_STATUS(next->signals.fatal_signal))) {
+                    /* The bootstrap process is gone and nothing else can run:
+                       r now resumes in the kernel shell. */
+                    process_destroy(next);
+                    if (prev != next && !prev->alive) {
+                        process_destroy(prev);
+                    }
+                    return r;
+                }
+                if (next != prev) {
+                    process_set_current(&kernel_proc);
+                    active_pml4 = paging_kernel_pml4();
+                    paging_switch(active_pml4);
+                    process_destroy(next);
+                }
                 continue;
             }
             if (next->timeslice_ms == 0) {

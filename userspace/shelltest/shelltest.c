@@ -81,6 +81,15 @@ static const ShellCase cases[] = {
     {"quoting",
      "echo a\\ b \"c \\\"d\\\" \\$e\" 'f  g' \"\" x # comment\n",
      "a b c \"d\" $e f  g  x\n", 0},
+    {"kill",
+     "sleep 300 &\n"
+     "kill %1\n"
+     "wait %1; echo $?\n"
+     "sleep 300 &\n"
+     "kill -s KILL %1\n"
+     "wait %1; echo $?\n"
+     "kill 99999 2>&1; echo $?\n",
+     "143\n137\nkill: 99999: no such process\n1\n", 0},
     {"exit",
      "echo before; exit 3; echo after\n"
      "echo never\n",

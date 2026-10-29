@@ -3,6 +3,7 @@
 #include <stdint.h>
 
 #include "isr.h"
+#include "signal.h"
 #include "vmm_user.h"
 
 struct kernel_pipe;
@@ -35,10 +36,6 @@ enum {
     PROCESS_DUP3_INHERIT = 1u << 0,
     PROCESS_DUP3_CLOSE_ON_SPAWN = 1u << 1,
 };
-
-/* Exit status of a process killed by a CPU exception in user mode
- * (128 + SIGSEGV, matching the shell convention for fatal signals). */
-#define PROCESS_EXIT_FAULTED 139
 
 typedef enum process_state {
     PROCESS_RUNNABLE = 0,
@@ -158,6 +155,7 @@ typedef struct process {
     struct kernel_pipe *waiting_poll_pipes[PROCESS_POLL_MAX_FDS];
     uint32_t waiting_poll_pipe_count;
     VmmUserSpace vm;
+    signal_state_t signals;
     process_kernel_wait_fn kernel_wait_fn;
     uintptr_t kernel_wait_arg;
     struct process *next;
@@ -247,9 +245,12 @@ int process_stdio_read(process_t *p, int stdio_fd, uint8_t *out, uint32_t out_sz
 int process_stdio_write(process_t *p, int stdio_fd, const uint8_t *in,
                         uint32_t in_sz, uint32_t *out_len);
 int process_stdio_close(process_t *p, int stdio_fd);
-int process_has_runnable_other_than(process_t *p);
+int process_has_runnable_other_than(const process_t *p);
 void process_set_priority(process_t *p, uint8_t prio);
 void process_begin_sleep(process_t *p, uint32_t ms);
+/* Aborts the blocking syscall p is in so that it returns -EINTR. Returns 1 if
+ * a wait was aborted; a wait that already completed is left to finish. */
+int process_interrupt_wait(process_t *p);
 int process_begin_kernel_wait(process_t *p, process_kernel_wait_fn fn,
                               uintptr_t arg);
 void process_wake_sleepers(void);

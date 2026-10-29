@@ -56,6 +56,9 @@
 #define SYS_SPAWN_ARGS 52
 #define SYS_TRY_WAIT 53
 #define SYS_MPROTECT 55
+#define SYS_KILL 56
+#define SYS_SIGACTION 57
+#define SYS_SIGRETURN 58
 #define SYS_SOCKET 59
 #define SYS_BIND 60
 #define SYS_SENDTO 61
@@ -66,6 +69,18 @@
 #define SYS_PUTCHAR 255
 
 uint64_t syscall_handle(regs_t *r);
-/* Ends the current process as if it had called sys_exit(status). */
-void syscall_terminate_current(regs_t *r, uint64_t status);
 void syscall_set_user_return(uintptr_t rip, uintptr_t rsp);
+
+struct process;
+
+/* True for the first user process, whose death hands the CPU back to the
+ * kernel shell. */
+int syscall_is_bootstrap(const struct process *proc);
+
+/*
+ * Called once `exited` is dead. If it is the bootstrap process and nothing
+ * else can run, rewrites r to resume in the kernel shell and returns 1; the
+ * caller then owns destroying `exited`. Returns 0 otherwise.
+ */
+int syscall_bootstrap_exited(const struct process *exited, regs_t *r,
+                             uint64_t status);

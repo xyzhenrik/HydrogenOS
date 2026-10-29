@@ -59,41 +59,39 @@ static void irq_eoi(uint8_t irq) {
     lapic_eoi();
 }
 
-static regs_t *schedule_after_trap(regs_t *r) {
-    if (process_current() != process_kernel()) {
-        regs_t *next = process_schedule(r);
-        if (next != r) {
-            paging_switch(process_current()->pml4);
-        }
-        return next;
+static regs_t *isr_reschedule(regs_t *r) {
+    regs_t *next = process_schedule(r);
+    if (next != r) {
+        paging_switch(process_current()->pml4);
     }
-    return r;
+    return next;
 }
 
-static void report_user_fault(const regs_t *r) {
-    console_write("user fault: pid ");
-    console_write_hex((uint32_t)process_current()->pid);
-    console_write(" vector ");
-    console_write_hex((uint32_t)r->int_no);
-    if (r->int_no == 14) {
-        console_write(" addr ");
-        console_write_hex64(read_cr2());
-    }
-    console_write(" rip ");
-    console_write_hex64(r->rip);
-    console_write("\n");
+/* A fault in user mode is the process's own: it gets a signal (and dies by
+ * default) instead of taking the kernel down. Returns 0 if r is not one. */
+static int isr_user_fault(const regs_t *r) {
+    process_t *proc = process_current();
+    int sig;
+    if ((r->cs & 3) != 3 || proc == process_kernel())
+        return 0;
+    sig = signal_from_exception(r->int_no);
+    if (sig == 0)
+        return 0;
+    signal_raise_fault(proc, sig, r->int_no, r->err_code,
+                       r->int_no == 14 ? read_cr2() : 0);
+    return 1;
 }
 
 regs_t *isr_handler(regs_t *r) {
     if (r->int_no == 128) {
         r->rax = syscall_handle(r);
-        return schedule_after_trap(r);
+        if (process_current() != process_kernel()) {
+            return isr_reschedule(r);
+        }
+        return r;
     }
-    if (r->int_no < 32 && (r->cs & 3) == 3 &&
-        process_current() != process_kernel()) {
-        report_user_fault(r);
-        syscall_terminate_current(r, PROCESS_EXIT_FAULTED);
-        return schedule_after_trap(r);
+    if (r->int_no < 32 && isr_user_fault(r)) {
+        return isr_reschedule(r);
     }
     if (r->int_no < 32) {
         console_write("EXCEPTION: ");

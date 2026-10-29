@@ -34,6 +34,9 @@ void paging_user_protect_range(uint64_t *pml4, uintptr_t virt, size_t size_bytes
 /* Unmap user pages in a range, free their frames and prune empty PTs/PDs. */
 void paging_user_unmap_range(uint64_t *pml4, uintptr_t virt, size_t size_bytes);
 
+/* First address above the lower (user) half of the canonical address space. */
+#define PAGING_USER_TOP 0x0000800000000000ULL
+
 #define PAGE_RW 0x2
 #define PAGE_PRESENT 0x1
 #define PAGE_USER 0x4

@@ -1,4 +1,5 @@
 #include "mini_libc.h"
+#include "signal.h"
 #include "syscall.h"
 
 #include <stdint.h>
@@ -8,7 +9,7 @@
  *
  * Without arguments it checks the syscall in-process and then re-spawns
  * itself once per fault case. Every fault case performs one forbidden access
- * and must be killed by the kernel (PROCESS_EXIT_FAULTED); a child that
+ * and must be killed by SIGSEGV; a child that
  * survives the access exits with status 0 and fails the test. The guard
  * cases come in pairs: the "-edge" child touches the last legal byte and must
  * survive, so the following child can only die because of the guard page.
@@ -21,7 +22,7 @@
 #define RC_EINVAL       (-22l)
 #define PROT_RW         (MMAP_PROT_READ | MMAP_PROT_WRITE)
 #define PROT_RX         (MMAP_PROT_READ | MMAP_PROT_EXEC)
-#define EXIT_FAULTED    139
+#define EXIT_FAULTED    (SIGNAL_STATUS_SIGNALED | SIGSEGV)
 #define SPLIT_PAGES     4200ul
 #define LARGE_REQUEST   (256ul * 1024ul)
 /* malloc prefixes each large mapping with a 16-byte header and rounds the
