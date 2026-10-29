@@ -24,6 +24,7 @@ void fb_console_clear(void);
 #include "dirent.h"
 #include "rtc.h"
 #include "power.h"
+#include "net/net.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -814,6 +815,40 @@ uint64_t syscall_handle(regs_t *r) {
         return (uint64_t)(int64_t)vmm_user_unmap(&proc->vm, proc->pml4,
                                                  (uintptr_t)r->rdi,
                                                  (size_t)r->rsi);
+    }
+    case SYS_NET_INFO: {
+        net_info_t *out = (net_info_t *)(uintptr_t)r->rdi;
+        net_info_t info;
+        if (!user_range_ok(out, sizeof(*out)))
+            return (uint64_t)-EFAULT;
+        int rc = net_get_info(&info);
+        if (rc != 0)
+            return (uint64_t)(int64_t)rc;
+        *out = info;
+        return 0;
+    }
+    case SYS_NET_PING: {
+        uint32_t dst = (uint32_t)r->rdi;
+        int64_t timeout_ms = (int64_t)r->rsi;
+        process_t *proc = process_current();
+        uint64_t result = 0;
+
+        if (timeout_ms <= 0 || timeout_ms > (int64_t)NET_PING_TIMEOUT_MAX_MS)
+            return (uint64_t)-EINVAL;
+        int ticket = net_ping_begin(dst, (uint32_t)timeout_ms);
+        if (ticket < 0)
+            return (uint64_t)(int64_t)ticket;
+        if (net_ping_wait_check((uintptr_t)ticket, &result))
+            return result;
+
+        /* Block like poll_wait; with nothing else runnable wait in place. */
+        if (process_has_runnable_other_than(proc) &&
+            process_begin_kernel_wait(proc, net_ping_wait_check,
+                                      (uintptr_t)ticket) == 0)
+            return 0;
+        while (!net_ping_wait_check((uintptr_t)ticket, &result))
+            __asm__ volatile("sti\n\thlt\n\tcli");
+        return result;
     }
     default:
         return (uint64_t)-1;

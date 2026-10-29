@@ -83,9 +83,11 @@ Beispiel: `-2` entspricht `ENOENT`.
 | 45 | sys_mmap | `void* hint, size_t len, uint32_t prot, uint32_t flags` | Anonymen, genullten Speicher mappen; Rueckgabe = Adresse |
 | 46 | sys_munmap | `void* addr, size_t len` | Seitenbereich (auch teilweise) entfernen |
 | 47 | sys_rmdir | `const char* path` | Leeres Verzeichnis entfernen; `-ENOTEMPTY` wenn nicht leer, `-ENOTDIR` fuer Nicht-Verzeichnisse, `-EBUSY` fuer Mount-Wurzeln |
-| 54 | sys_rtc_time | `struct hydrogen_rtc_time* out` | UTC-Wanduhr: Epoch-Sekunden, Millisekunden und aufgeschluesselte Felder (Jahr, Monat 1-12, Tag, Stunde, Minute, Sekunde, Wochentag 0=Sonntag); `-EFAULT` bei ungueltigem Pointer, `-EIO` wenn die CMOS-RTC beim Boot nicht lesbar war |
 | 48 | sys_shutdown | `uint32_t flags` (muss 0 sein) | Block-Cache flushen, dann ACPI S5 (Soft-Off). Kehrt nur bei Fehler zurueck: `-ENOSYS` ohne nutzbares `\_S5`/PM1-Register, `-EIO` wenn der Flush scheitert oder S5 nicht greift, `-EINVAL` bei Flags != 0 |
 | 49 | sys_reboot | `uint32_t flags` (muss 0 sein) | Block-Cache flushen, dann FADT-Reset-Register, Fallback 8042-Reset-Puls (`0xFE`), Fallback Triple Fault. Kehrt nur bei Fehler zurueck: `-EIO` wenn der Flush scheitert, `-EINVAL` bei Flags != 0 |
+| 50 | sys_net_info | `struct net_info* out` | MAC, IPv4-Konfiguration, Link-Status und Frame-Zaehler der Netzwerkschnittstelle |
+| 51 | sys_net_ping | `uint32_t ipv4, int64_t timeout_ms` | ICMP-Echo senden und blockierend auf die Antwort warten; liefert RTT in ms |
+| 54 | sys_rtc_time | `struct hydrogen_rtc_time* out` | UTC-Wanduhr: Epoch-Sekunden, Millisekunden und aufgeschluesselte Felder (Jahr, Monat 1-12, Tag, Stunde, Minute, Sekunde, Wochentag 0=Sonntag); `-EFAULT` bei ungueltigem Pointer, `-EIO` wenn die CMOS-RTC beim Boot nicht lesbar war |
 
 > Weitere Syscalls werden fortlaufend ergaenzt. Neue Syscalls erhalten **neue Nummern**; bestehende Nummern werden nie umgebogen.
 > Aktuell implementiert: `sys_exit`, `sys_write`, `sys_read`, `sys_open`, `sys_close`, `sys_lseek`, `sys_spawn`, `sys_spawn_with_stdio`, `sys_wait`, `sys_getpid`, `sys_yield`, `sys_sleep`, `sys_time_ms`, `sys_tty_set_color`, `sys_pipe`, `sys_handle_set_inherit`, `sys_dup`, `sys_dup2`, `sys_dup3`, `sys_poll`, `sys_poll_wait`, `sys_poll_many` (und ein undokumentiertes `sys_putchar` fuer Debug-Ausgaben).
@@ -103,6 +105,13 @@ Beispiel: `-2` entspricht `ENOENT`.
 - `sys_munmap` darf Teile eines Mappings entfernen (Kopf, Ende, Mitte); nicht gemappte Teile des Bereichs werden ignoriert.
 - Beim Prozess-Exit werden alle Mappings automatisch freigegeben.
 - Die frueheren Nummern 34/35 (brk-artiges Mapping) sind stillgelegt und werden nicht wiederverwendet.
+## Netzwerk (sys_net_info / sys_net_ping)
+- IPv4-Adressen werden als `uint32_t` mit dem ersten Oktett im hoechstwertigen Byte uebergeben (`10.0.2.15` = `0x0A00020F`).
+- `struct net_info` (32 Byte): `uint8_t mac[6]`, `uint16_t flags` (`NET_INFO_PRESENT = 1`, `NET_INFO_LINK_UP = 2`), `uint32_t ipv4`, `netmask`, `gateway`, `rx_frames`, `tx_frames`, `rx_dropped`.
+- `sys_net_info` liefert `-EFAULT` fuer ungueltige Zeiger und `-ENODEV` ohne Netzwerkgeraet.
+- `sys_net_ping` erwartet `1 <= timeout_ms <= 60000` (sonst `-EINVAL`). Broadcast-, Netz-, Multicast- und `0.0.0.0`-Ziele liefern `-EINVAL`, Loopback `-ENETUNREACH`, fehlendes Geraet `-ENODEV`, Link down `-ENETDOWN`, keine freien Ping-Slots `-EBUSY`. Ohne Antwort (inkl. unbeantwortetem ARP) innerhalb des Timeouts kommt `-ETIMEDOUT`. Die eigene Adresse antwortet sofort mit RTT 0.
+- Der Aufrufer blockiert wie bei `sys_poll_wait`; der Scheduler pollt die NIC waehrenddessen. Die RTT-Aufloesung entspricht dem Timer-Tick (10 ms).
+- Statische Konfiguration passend zu QEMU User-Networking: `10.0.2.15/24`, Gateway `10.0.2.2`.
 
 ## Error Codes (Subset)
 Diese errno-Werte sind als Startmenge vorgesehen:
@@ -120,6 +129,10 @@ Diese errno-Werte sind als Startmenge vorgesehen:
 - `ESPIPE (29)`
 - `EPIPE (32)`
 - `ENOSYS (38)`
+- `ENODEV (19)`
+- `ENETDOWN (100)`
+- `ENETUNREACH (101)`
+- `ETIMEDOUT (110)`
 
 ## Future Extensions
 - `sys_fork` / `sys_execve` (falls POSIX-Nahe gewuenscht)
