@@ -115,6 +115,12 @@ USER_TEEREADER_B_OBJ = $(BUILD_DIR)/user_teereader_b.o
 USER_TEEREADER_B_ELF = $(BUILD_DIR)/user_teereader_b.elf
 USER_MMAPTEST_OBJ = $(BUILD_DIR)/user_mmaptest.o
 USER_MMAPTEST_ELF = $(BUILD_DIR)/user_mmaptest.elf
+USER_POWEROFF_OBJ = $(BUILD_DIR)/user_poweroff.o
+USER_POWEROFF_ELF = $(BUILD_DIR)/user_poweroff.elf
+USER_REBOOT_OBJ = $(BUILD_DIR)/user_reboot.o
+USER_REBOOT_ELF = $(BUILD_DIR)/user_reboot.elf
+USER_POWERCHECK_OBJ = $(BUILD_DIR)/user_powercheck.o
+USER_POWERCHECK_ELF = $(BUILD_DIR)/user_powercheck.elf
 INIT_CONFIG = userspace/init/init.rc
 USER_COMPOSITOR_OBJ = $(BUILD_DIR)/user_compositor.o
 USER_COMPOSITOR_ELF = $(BUILD_DIR)/user_compositor.elf
@@ -151,7 +157,8 @@ OBJS = $(BUILD_DIR)/boot.o $(BUILD_DIR)/kernel.o $(BUILD_DIR)/console.o $(BUILD_
        $(BUILD_DIR)/gdt.o $(BUILD_DIR)/gdt_asm.o \
        $(BUILD_DIR)/idt.o $(BUILD_DIR)/isr.o $(BUILD_DIR)/isr_c.o $(BUILD_DIR)/isr_stubs.o \
        $(BUILD_DIR)/syscall_arch.o $(BUILD_DIR)/syscall_entry.o \
-       $(BUILD_DIR)/pic.o $(BUILD_DIR)/pit.o $(BUILD_DIR)/cpu.o $(BUILD_DIR)/apic.o $(BUILD_DIR)/rtc.o
+       $(BUILD_DIR)/pic.o $(BUILD_DIR)/pit.o $(BUILD_DIR)/cpu.o $(BUILD_DIR)/apic.o $(BUILD_DIR)/rtc.o \
+       $(BUILD_DIR)/acpi.o $(BUILD_DIR)/power.o
 OBJS += $(USER_HELLO_BINOBJ) $(USER_ECHO_BINOBJ) $(USER_CAT_BINOBJ) $(USER_TIME_BINOBJ) $(USER_SLEEP_BINOBJ)
 RUN_DEPS = $(ISO)
 BUILD_DEPS = $(KERNEL_BIN) $(INITRD) $(DISK_IMG)
@@ -242,6 +249,14 @@ $(BUILD_DIR)/rtc.o: $(ARCH_DIR)/rtc.c $(ARCH_DIR)/rtc.h kernel/include/rtc_time.
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/apic.o: $(ARCH_DIR)/apic.c $(ARCH_DIR)/apic.h $(ARCH_DIR)/io.h $(ARCH_DIR)/msr.h kernel/mm/paging.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/acpi.o: $(ARCH_DIR)/acpi.c $(ARCH_DIR)/acpi.h $(ARCH_DIR)/io.h kernel/mm/paging.h kernel/include/serial.h kernel/include/string.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/power.o: $(ARCH_DIR)/power.c $(ARCH_DIR)/power.h $(ARCH_DIR)/acpi.h $(ARCH_DIR)/io.h kernel/drivers/block_cache.h kernel/include/errno.h kernel/include/serial.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
@@ -608,6 +623,27 @@ $(USER_TEEREADER_B_OBJ): userspace/teereader_b/teereader_b.c userspace/lib/sysca
 $(USER_TEEREADER_B_ELF): $(USER_TEEREADER_B_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
 	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_TEEREADER_B_OBJ)
 
+$(USER_POWEROFF_OBJ): userspace/poweroff/poweroff.c userspace/lib/syscall.h userspace/lib/mini_libc.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(USER_POWEROFF_ELF): $(USER_POWEROFF_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
+	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_POWEROFF_OBJ)
+
+$(USER_REBOOT_OBJ): userspace/reboot/reboot.c userspace/lib/syscall.h userspace/lib/mini_libc.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(USER_REBOOT_ELF): $(USER_REBOOT_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
+	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_REBOOT_OBJ)
+
+$(USER_POWERCHECK_OBJ): userspace/powercheck/powercheck.c userspace/lib/syscall.h userspace/lib/mini_libc.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(USER_POWERCHECK_ELF): $(USER_POWERCHECK_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
+	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_POWERCHECK_OBJ)
+
 $(USER_PIPEPRODUCER_OBJ): userspace/pipeproducer/pipeproducer.c userspace/lib/syscall.h userspace/lib/mini_libc.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(USER_CFLAGS) -c $< -o $@
@@ -746,7 +782,7 @@ $(USER_MMAPTEST_OBJ): userspace/mmaptest/mmaptest.c userspace/lib/syscall.h user
 $(USER_MMAPTEST_ELF): $(USER_MMAPTEST_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
 	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_MMAPTEST_OBJ)
 
-$(INITRD): $(USER_HELLO_ELF) $(USER_ECHO_ELF) $(USER_CAT_ELF) $(USER_TIME_ELF) $(USER_SLEEP_ELF) $(USER_PIPEREAD_ELF) $(USER_PIPEDELAYREAD_ELF) $(USER_PIPEPRODUCER_ELF) $(USER_PIPECONSUMER_ELF) $(USER_LOGPRODUCER_A_ELF) $(USER_LOGPRODUCER_B_ELF) $(USER_LOGCOLLECTOR_ELF) $(USER_BOOTPROBE_ELF) $(USER_HANDOFFCHECK_ELF) $(USER_STDIOCHECK_ELF) $(USER_STDIOBADBIND_ELF) $(USER_STDIONULLCHECK_ELF) $(USER_DUPCHECK_ELF) $(USER_HANDLELIMITCHECK_ELF) $(USER_FILEOFFSETCHECK_ELF) $(USER_SEEKCHECK_ELF) $(USER_POLLCHECK_ELF) $(USER_POLLWAITCHECK_ELF) $(USER_POLLWAKEWRITER_ELF) $(USER_POLLMANYCHECK_ELF) $(USER_CWDCHECK_ELF) $(USER_DUPFALLBACKCHECK_ELF) $(USER_FSTEST_ELF) $(USER_LOGIN_ELF) $(USER_PKGTEST_ELF) $(USER_LOGSINK_WRITER_A_ELF) $(USER_LOGSINK_WRITER_B_ELF) $(USER_TEEWRITER_ELF) $(USER_TEEREADER_A_ELF) $(USER_TEEREADER_B_ELF) $(USER_MMAPTEST_ELF) $(USER_COMPOSITOR_ELF) $(USER_DESKTOPDEMO_ELF) $(USER_DESKTOPTEST_ELF) $(USER_INIT_ELF) $(USER_SHELL_ELF) $(INIT_CONFIG) tools/mkinitrd.py $(USER_DATE_ELF) $(USER_RTCTEST_ELF) $(USER_PS_ELF) $(USER_PROCTEST_ELF) $(USER_DIRTEST_ELF)
+$(INITRD): $(USER_HELLO_ELF) $(USER_ECHO_ELF) $(USER_CAT_ELF) $(USER_TIME_ELF) $(USER_SLEEP_ELF) $(USER_PIPEREAD_ELF) $(USER_PIPEDELAYREAD_ELF) $(USER_PIPEPRODUCER_ELF) $(USER_PIPECONSUMER_ELF) $(USER_LOGPRODUCER_A_ELF) $(USER_LOGPRODUCER_B_ELF) $(USER_LOGCOLLECTOR_ELF) $(USER_BOOTPROBE_ELF) $(USER_HANDOFFCHECK_ELF) $(USER_STDIOCHECK_ELF) $(USER_STDIOBADBIND_ELF) $(USER_STDIONULLCHECK_ELF) $(USER_DUPCHECK_ELF) $(USER_HANDLELIMITCHECK_ELF) $(USER_FILEOFFSETCHECK_ELF) $(USER_SEEKCHECK_ELF) $(USER_POLLCHECK_ELF) $(USER_POLLWAITCHECK_ELF) $(USER_POLLWAKEWRITER_ELF) $(USER_POLLMANYCHECK_ELF) $(USER_CWDCHECK_ELF) $(USER_DUPFALLBACKCHECK_ELF) $(USER_FSTEST_ELF) $(USER_LOGIN_ELF) $(USER_PKGTEST_ELF) $(USER_LOGSINK_WRITER_A_ELF) $(USER_LOGSINK_WRITER_B_ELF) $(USER_TEEWRITER_ELF) $(USER_TEEREADER_A_ELF) $(USER_TEEREADER_B_ELF) $(USER_MMAPTEST_ELF) $(USER_COMPOSITOR_ELF) $(USER_DESKTOPDEMO_ELF) $(USER_DESKTOPTEST_ELF) $(USER_INIT_ELF) $(USER_SHELL_ELF) $(INIT_CONFIG) tools/mkinitrd.py $(USER_DATE_ELF) $(USER_RTCTEST_ELF) $(USER_PS_ELF) $(USER_PROCTEST_ELF) $(USER_DIRTEST_ELF) $(USER_POWEROFF_ELF) $(USER_REBOOT_ELF) $(USER_POWERCHECK_ELF)
 	mkdir -p $(BUILD_DIR)
 	python3 tools/mkinitrd.py $@ \
 		user=$(USER_HELLO_ELF) \
@@ -788,6 +824,9 @@ $(INITRD): $(USER_HELLO_ELF) $(USER_ECHO_ELF) $(USER_CAT_ELF) $(USER_TIME_ELF) $
 		teereader_a=$(USER_TEEREADER_A_ELF) \
 		teereader_b=$(USER_TEEREADER_B_ELF) \
 		mmaptest=$(USER_MMAPTEST_ELF) \
+		poweroff=$(USER_POWEROFF_ELF) \
+		reboot=$(USER_REBOOT_ELF) \
+		powercheck=$(USER_POWERCHECK_ELF) \
 		compositor=$(USER_COMPOSITOR_ELF) \
 		desktopdemo=$(USER_DESKTOPDEMO_ELF) \
 		desktoptest=$(USER_DESKTOPTEST_ELF) \

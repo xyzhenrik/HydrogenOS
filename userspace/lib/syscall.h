@@ -47,6 +47,8 @@
 #define SYS_MUNMAP 46
 #define SYS_RTC_TIME 54
 #define SYS_RMDIR 47
+#define SYS_SHUTDOWN 48
+#define SYS_REBOOT 49
 
 #define PRIO_IDLE   0
 #define PRIO_NORMAL 1
@@ -321,4 +323,12 @@ struct hydrogen_rtc_time;
 
 static inline long sys_rtc_time(struct hydrogen_rtc_time *out) {
     return syscall1(SYS_RTC_TIME, (long)out);
+}
+
+static inline long sys_shutdown(void) {
+    return syscall1(SYS_SHUTDOWN, 0);
+}
+
+static inline long sys_reboot(void) {
+    return syscall1(SYS_REBOOT, 0);
 }

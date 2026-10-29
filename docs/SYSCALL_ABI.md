@@ -84,6 +84,8 @@ Beispiel: `-2` entspricht `ENOENT`.
 | 46 | sys_munmap | `void* addr, size_t len` | Seitenbereich (auch teilweise) entfernen |
 | 47 | sys_rmdir | `const char* path` | Leeres Verzeichnis entfernen; `-ENOTEMPTY` wenn nicht leer, `-ENOTDIR` fuer Nicht-Verzeichnisse, `-EBUSY` fuer Mount-Wurzeln |
 | 54 | sys_rtc_time | `struct hydrogen_rtc_time* out` | UTC-Wanduhr: Epoch-Sekunden, Millisekunden und aufgeschluesselte Felder (Jahr, Monat 1-12, Tag, Stunde, Minute, Sekunde, Wochentag 0=Sonntag); `-EFAULT` bei ungueltigem Pointer, `-EIO` wenn die CMOS-RTC beim Boot nicht lesbar war |
+| 48 | sys_shutdown | `uint32_t flags` (muss 0 sein) | Block-Cache flushen, dann ACPI S5 (Soft-Off). Kehrt nur bei Fehler zurueck: `-ENOSYS` ohne nutzbares `\_S5`/PM1-Register, `-EIO` wenn der Flush scheitert oder S5 nicht greift, `-EINVAL` bei Flags != 0 |
+| 49 | sys_reboot | `uint32_t flags` (muss 0 sein) | Block-Cache flushen, dann FADT-Reset-Register, Fallback 8042-Reset-Puls (`0xFE`), Fallback Triple Fault. Kehrt nur bei Fehler zurueck: `-EIO` wenn der Flush scheitert, `-EINVAL` bei Flags != 0 |
 
 > Weitere Syscalls werden fortlaufend ergaenzt. Neue Syscalls erhalten **neue Nummern**; bestehende Nummern werden nie umgebogen.
 > Aktuell implementiert: `sys_exit`, `sys_write`, `sys_read`, `sys_open`, `sys_close`, `sys_lseek`, `sys_spawn`, `sys_spawn_with_stdio`, `sys_wait`, `sys_getpid`, `sys_yield`, `sys_sleep`, `sys_time_ms`, `sys_tty_set_color`, `sys_pipe`, `sys_handle_set_inherit`, `sys_dup`, `sys_dup2`, `sys_dup3`, `sys_poll`, `sys_poll_wait`, `sys_poll_many` (und ein undokumentiertes `sys_putchar` fuer Debug-Ausgaben).

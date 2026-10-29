@@ -49,6 +49,8 @@
 #define SYS_MUNMAP 46
 #define SYS_RTC_TIME 54
 #define SYS_RMDIR 47
+#define SYS_SHUTDOWN 48
+#define SYS_REBOOT 49
 #define SYS_PUTCHAR 255
 
 uint64_t syscall_handle(regs_t *r);

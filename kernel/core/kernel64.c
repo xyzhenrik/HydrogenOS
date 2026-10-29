@@ -13,6 +13,7 @@
 #include "higher_half.h"
 #include "idt.h"
 #include "arch/x86_64/apic.h"
+#include "arch/x86_64/acpi.h"
 #include "io.h"
 #include "isr.h"
 #include "keyboard.h"
@@ -526,6 +527,7 @@ void kmain64(uint64_t magic, uint64_t multiboot_info_addr) {
   pic_remap(0x20, 0x28);
   pit_init(100);
   time_init(100);
+  acpi_init();
   if (rtc_init() != 0)
     serial_write("[RTC] CMOS clock unreadable, wall time unavailable\n");
   outb(0x21, 0xF8); // IRQ0, IRQ1, IRQ2 frei

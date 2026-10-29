@@ -1,10 +1,9 @@
 #include "rtc.h"
 
+#include "acpi.h"
 #include "core/time.h"
 #include "errno.h"
-#include "higher_half.h"
 #include "io.h"
-#include "paging.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -26,48 +25,11 @@
 #define RTC_STATUS_B_BINARY             0x04
 #define RTC_HOUR_PM                     0x80
 
-/* CMOS register indices 0x00..0x7F; bit 7 of the index port is the NMI mask. */
-#define RTC_CENTURY_REG_MAX 0x7F
-
 /* An update cycle lasts < 2 ms; each inb costs ~1 us, so this bounds a dead RTC. */
 #define RTC_UIP_SPIN_LIMIT 1000000U
 #define RTC_STABLE_READ_ATTEMPTS 8
 
 #define RTC_DEFAULT_CENTURY 20
-
-#define ACPI_EBDA_SEGMENT_PTR 0x40EULL
-#define ACPI_EBDA_SCAN_LEN    0x400ULL
-#define ACPI_BIOS_AREA_START  0xE0000ULL
-#define ACPI_BIOS_AREA_END    0x100000ULL
-#define ACPI_RSDP_V1_LEN      20U
-#define ACPI_TABLE_MAX_LEN    0x10000U
-#define ACPI_FADT_CENTURY_OFFSET 108U
-
-#define PAGE_SIZE_4K 0x1000ULL
-
-typedef struct __attribute__((packed)) AcpiRsdp {
-    char signature[8];
-    uint8_t checksum;
-    char oem_id[6];
-    uint8_t revision;
-    uint32_t rsdt_address;
-    uint32_t length;
-    uint64_t xsdt_address;
-    uint8_t extended_checksum;
-    uint8_t reserved[3];
-} AcpiRsdp;
-
-typedef struct __attribute__((packed)) AcpiSdtHeader {
-    char signature[4];
-    uint32_t length;
-    uint8_t revision;
-    uint8_t checksum;
-    char oem_id[6];
-    char oem_table_id[8];
-    uint32_t oem_revision;
-    uint32_t creator_id;
-    uint32_t creator_revision;
-} AcpiSdtHeader;
 
 typedef struct RtcRawTime {
     uint8_t second;
@@ -81,124 +43,6 @@ typedef struct RtcRawTime {
 
 static int64_t rtc_epoch_base_ms;
 static int rtc_ready;
-
-/* Firmware tables are reached through the higher-half alias of low physical memory. */
-static const volatile void *phys_view(uint64_t phys) {
-    return (const volatile void *)(uintptr_t)(KERNEL_VMA_BASE + phys);
-}
-
-static int phys_range_mapped(uint64_t phys, uint64_t len) {
-    if (len == 0 || phys + len < phys ||
-        phys + len > UINT64_MAX - KERNEL_VMA_BASE)
-        return 0;
-    for (uint64_t page = phys & ~(PAGE_SIZE_4K - 1); page < phys + len;
-         page += PAGE_SIZE_4K) {
-        if (!paging_is_mapped((uintptr_t)(KERNEL_VMA_BASE + page)))
-            return 0;
-    }
-    return 1;
-}
-
-static int acpi_checksum_ok(const volatile uint8_t *bytes, uint32_t len) {
-    uint8_t sum = 0;
-    for (uint32_t i = 0; i < len; ++i)
-        sum = (uint8_t)(sum + bytes[i]);
-    return sum == 0;
-}
-
-static int signature_equals(const volatile char *have, const char *want,
-                            size_t len) {
-    for (size_t i = 0; i < len; ++i) {
-        if (have[i] != want[i])
-            return 0;
-    }
-    return 1;
-}
-
-static const volatile AcpiRsdp *acpi_scan_rsdp(uint64_t start, uint64_t len) {
-    if (!phys_range_mapped(start, len))
-        return NULL;
-    for (uint64_t addr = start; addr + ACPI_RSDP_V1_LEN <= start + len;
-         addr += 16) {
-        const volatile AcpiRsdp *rsdp = phys_view(addr);
-        if (!signature_equals(rsdp->signature, "RSD PTR ", 8))
-            continue;
-        if (acpi_checksum_ok((const volatile uint8_t *)rsdp, ACPI_RSDP_V1_LEN))
-            return rsdp;
-    }
-    return NULL;
-}
-
-static const volatile AcpiRsdp *acpi_find_rsdp(void) {
-    if (phys_range_mapped(ACPI_EBDA_SEGMENT_PTR, sizeof(uint16_t))) {
-        uint16_t segment =
-            *(const volatile uint16_t *)phys_view(ACPI_EBDA_SEGMENT_PTR);
-        uint64_t ebda = (uint64_t)segment << 4;
-        if (ebda != 0) {
-            const volatile AcpiRsdp *rsdp =
-                acpi_scan_rsdp(ebda, ACPI_EBDA_SCAN_LEN);
-            if (rsdp)
-                return rsdp;
-        }
-    }
-    return acpi_scan_rsdp(ACPI_BIOS_AREA_START,
-                          ACPI_BIOS_AREA_END - ACPI_BIOS_AREA_START);
-}
-
-static const volatile AcpiSdtHeader *acpi_map_table(uint64_t phys) {
-    if (phys == 0 || !phys_range_mapped(phys, sizeof(AcpiSdtHeader)))
-        return NULL;
-    const volatile AcpiSdtHeader *table = phys_view(phys);
-    uint32_t len = table->length;
-    if (len < sizeof(AcpiSdtHeader) || len > ACPI_TABLE_MAX_LEN)
-        return NULL;
-    if (!phys_range_mapped(phys, len))
-        return NULL;
-    if (!acpi_checksum_ok((const volatile uint8_t *)table, len))
-        return NULL;
-    return table;
-}
-
-/* Returns the FADT century CMOS register index, or 0 if ACPI does not name one. */
-static uint8_t acpi_fadt_century_register(void) {
-    const volatile AcpiRsdp *rsdp = acpi_find_rsdp();
-    if (!rsdp)
-        return 0;
-
-    const volatile AcpiSdtHeader *root = NULL;
-    uint32_t entry_size = sizeof(uint32_t);
-    if (rsdp->revision >= 2 && rsdp->xsdt_address != 0 &&
-        rsdp->length >= sizeof(AcpiRsdp) &&
-        acpi_checksum_ok((const volatile uint8_t *)rsdp, sizeof(AcpiRsdp))) {
-        root = acpi_map_table(rsdp->xsdt_address);
-        entry_size = sizeof(uint64_t);
-    }
-    if (!root) {
-        root = acpi_map_table(rsdp->rsdt_address);
-        entry_size = sizeof(uint32_t);
-    }
-    if (!root)
-        return 0;
-
-    uint32_t count = (root->length - (uint32_t)sizeof(AcpiSdtHeader)) / entry_size;
-    const volatile uint8_t *entries =
-        (const volatile uint8_t *)root + sizeof(AcpiSdtHeader);
-    for (uint32_t i = 0; i < count; ++i) {
-        uint64_t phys;
-        if (entry_size == sizeof(uint64_t))
-            phys = *(const volatile uint64_t *)(entries + (size_t)i * entry_size);
-        else
-            phys = *(const volatile uint32_t *)(entries + (size_t)i * entry_size);
-        const volatile AcpiSdtHeader *table = acpi_map_table(phys);
-        if (!table || !signature_equals(table->signature, "FACP", 4))
-            continue;
-        if (table->length <= ACPI_FADT_CENTURY_OFFSET)
-            return 0;
-        uint8_t reg = ((const volatile uint8_t *)table)[ACPI_FADT_CENTURY_OFFSET];
-        return reg <= RTC_CENTURY_REG_MAX ? reg : 0;
-    }
-    return 0;
-}
 
 static uint8_t cmos_read(uint8_t reg) {
     outb(CMOS_ADDRESS_PORT, reg);
@@ -336,7 +180,7 @@ static int rtc_decode(const RtcRawTime *raw, uint8_t status_b,
 }
 
 int rtc_init(void) {
-    uint8_t century_reg = acpi_fadt_century_register();
+    uint8_t century_reg = acpi_century_register();
     RtcRawTime raw;
     if (rtc_read_stable(century_reg, &raw) != 0)
         return -EIO;

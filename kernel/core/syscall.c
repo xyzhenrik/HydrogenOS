@@ -23,6 +23,7 @@ void fb_console_clear(void);
 #include "stat.h"
 #include "dirent.h"
 #include "rtc.h"
+#include "power.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -157,6 +158,16 @@ uint64_t syscall_handle(regs_t *r) {
             return (uint64_t)(int64_t)rc;
         *out = now;
         return 0;
+    }
+    case SYS_SHUTDOWN: {
+        if (r->rdi != 0)
+            return (uint64_t)-EINVAL;
+        return (uint64_t)(int64_t)power_shutdown();
+    }
+    case SYS_REBOOT: {
+        if (r->rdi != 0)
+            return (uint64_t)-EINVAL;
+        return (uint64_t)(int64_t)power_reboot();
     }
     case SYS_SYSINFO: {
         uint32_t *o = (uint32_t *)(uintptr_t)r->rdi;
