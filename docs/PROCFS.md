@@ -1,13 +1,16 @@
 # /proc — synthetic process and kernel information
 
-`procfs` (`kernel/fs/procfs.{c,h}`) is a read-only filesystem that the VFS
+`procfs` (`kernel/fs/procfs.{c,h}`) is a filesystem that the VFS
 mounts at `/proc` during `vfs_init`, right after the root filesystem.
 It has no backing store: every `read`/`stat` renders the file from live
 kernel state. Offsets are honoured against that fresh rendering, so a reader
 that needs a consistent snapshot should fetch the file with one large read
 (all files fit in 1 KiB).
 
-Writes, `mkdir`, `unlink` and `rename` below `/proc` fail.
+`/proc/boot` accepts progress reports for the boot splash through
+`SYS_WRITEF` (see `docs/BOOT_SPLASH.md`). Every other write, and `mkdir`,
+`unlink` and `rename` below `/proc`, fail (`-EROFS` for files, `-ENOENT` for
+unknown paths).
 
 ## Layout
 
@@ -16,6 +19,7 @@ Writes, `mkdir`, `unlink` and `rename` below `/proc` fail.
 | `/proc/meminfo`      | file | physical memory and kernel heap usage      |
 | `/proc/uptime`       | file | seconds since boot, `"<s>.<cc>\n"`         |
 | `/proc/version`      | file | `"HydrogenOS <version> <arch>\n"`          |
+| `/proc/boot`         | file | boot splash state and progress             |
 | `/proc/<pid>/`       | dir  | one per live process, listed in pid order  |
 | `/proc/<pid>/status` | file | per-process status                         |
 
@@ -45,6 +49,9 @@ not by line number; new fields may be appended.
 `PagesTotal`, `PagesFree`, and kernel heap `HeapTotal`, `HeapUsed`,
 `HeapFree`, `HeapLargestFree` (B; block headers excluded, so
 `HeapUsed + HeapFree == HeapTotal`).
+
+`/proc/boot`: `Splash` (`active`, `finished` or `disabled`) and `Progress`
+(0 to 1000, per mille of the boot sequence).
 
 ## Kernel interface
 

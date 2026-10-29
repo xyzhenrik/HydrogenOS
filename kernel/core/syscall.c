@@ -28,6 +28,7 @@ void fb_console_clear(void);
 #include "net/net.h"
 #include "net/socket.h"
 #include "net/udp.h"
+#include "video/bootsplash.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -279,6 +280,8 @@ uint64_t syscall_handle(regs_t *r) {
             return (uint64_t)-EFAULT;
         if (!framebuffer.addr || framebuffer.bpp != 32)
             return (uint64_t)-EIO;
+        if (bootsplash_filter_blit(x, y, w, h, src, (size_t)stride))
+            return 0;
         if (fb_console_blit_strided(x, y, w, h, src, stride) != 0)
             return (uint64_t)-EIO;
         return 0;
@@ -328,6 +331,9 @@ uint64_t syscall_handle(regs_t *r) {
             return (uint64_t)-EFAULT;
         if (!framebuffer.addr || framebuffer.bpp != 32)
             return (uint64_t)-EIO;
+        if (bootsplash_filter_blit(x, y, w, h, src,
+                                   (size_t)w * sizeof(uint32_t)))
+            return 0;
         if (fb_console_blit(x, y, w, h, src) != 0)
             return (uint64_t)-EIO;
         return 0;

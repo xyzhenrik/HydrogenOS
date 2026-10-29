@@ -1,6 +1,7 @@
 #include <stdint.h>
 
 #include "console.h"
+#include "core/cmdline.h"
 #include "core/time.h"
 #include "drivers/ata.h"
 #include "drivers/pci.h"
@@ -32,6 +33,7 @@
 #include "syscall_arch.h"
 #include "syscall.h"
 #include "tty.h"
+#include "video/bootsplash.h"
 #include "video/fb_console.h"
 #include "fs/ramfs.h"
 #include "net/net.h"
@@ -509,6 +511,7 @@ void kmain64(uint64_t magic, uint64_t multiboot_info_addr) {
   serial_init();
   console_init(0x0B); // cyan on black
   console_write("HydrogenOS x86_64 bootet...\n");
+  cmdline_init((uintptr_t)multiboot_info_addr);
 
   pmm_init((uintptr_t)multiboot_info_addr);
 
@@ -531,6 +534,7 @@ void kmain64(uint64_t magic, uint64_t multiboot_info_addr) {
   if (fb_ok == 0) {
     fb_clear(0x00101010);
     fb_console_clear();
+    bootsplash_start(BOOTSPLASH_STAGE_PCI, !cmdline_has_flag("verbose"));
   }
 
   idt_install();
@@ -550,12 +554,14 @@ void kmain64(uint64_t magic, uint64_t multiboot_info_addr) {
   ata_init();
   block_init();
   block_cache_init();
+  bootsplash_stage(BOOTSPLASH_STAGE_STORAGE);
   net_init();
   initrd_setup((uintptr_t)multiboot_info_addr);
   vfs_init();
   serial_write("[VFS] root: ");
   serial_write(vfs_root_name());
   serial_write("\n");
+  bootsplash_stage(BOOTSPLASH_STAGE_FILESYSTEM);
   if (fb_ok == 0) {
     mouse_set_bounds((int)framebuffer.width, (int)framebuffer.height);
   } else {
@@ -563,7 +569,9 @@ void kmain64(uint64_t magic, uint64_t multiboot_info_addr) {
   }
   tty_init();
   sti();
+  bootsplash_stage(BOOTSPLASH_STAGE_INIT);
   if (run_user_from_vfs("/init") != 0) {
+    bootsplash_abort();
     kputs("userspace init missing, trying direct userspace shell fallback\n");
     if (run_user_from_vfs("/shell") == 0) {
       return;

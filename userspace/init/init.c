@@ -1,4 +1,5 @@
 #include "mini_libc.h"
+#include "syscall.h"
 
 typedef enum init_service_type {
     INIT_SERVICE_ONESHOT = 0,
@@ -225,6 +226,23 @@ static void write_str(const char *s) {
         return;
     }
     write(1, s, strlen(s));
+}
+
+/*
+ * Tells the kernel's boot splash how far startup has come. The report is
+ * advisory: without a splash the kernel ignores it, so a failed write must not
+ * affect boot.
+ */
+static void report_boot(const char *text) {
+    (void)sys_writef("/proc/boot", text, strlen(text));
+}
+
+static void report_boot_progress(unsigned long done, unsigned long total) {
+    char text[48];
+    int len = snprintf(text, sizeof(text), "services %lu %lu\n", done, total);
+    if (len > 0 && (unsigned long)len < sizeof(text)) {
+        report_boot(text);
+    }
 }
 
 static void runtime_reset(init_service_runtime_t *rt) {
@@ -2051,7 +2069,9 @@ int main(void) {
     for (unsigned long i = 0; i < table.count; ++i) {
         const init_service_t *svc = &table.services[i];
         int spawned = 0;
-        int missing = first_unmet_dependency(&table, svc, ready_mask);
+        int missing;
+        report_boot_progress(i, table.count);
+        missing = first_unmet_dependency(&table, svc, ready_mask);
         if (missing >= 0) {
             char note[96];
             snprintf(note, sizeof(note), " skipped, dependency %s did not start\n",
@@ -2088,6 +2108,11 @@ int main(void) {
             continue;
         }
         ready_mask |= svc->provides_mask;
+    }
+    report_boot_progress(table.count, table.count);
+    if (failed_count > 0 || daemon_count == 0) {
+        /* No desktop is going to take over the screen, so show the console. */
+        report_boot("end\n");
     }
     if (failed_count > 0) {
         char note[64];

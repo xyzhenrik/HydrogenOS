@@ -4,9 +4,11 @@
 
 #include "core/process.h"
 #include "core/time.h"
+#include "errno.h"
 #include "kheap.h"
 #include "pmm.h"
 #include "version.h"
+#include "video/bootsplash.h"
 
 /* Large enough for the biggest file (a status with a maximal cwd). */
 #define PROCFS_RENDER_CAP 1024
@@ -18,6 +20,7 @@ typedef enum procfs_node_kind {
     PROCFS_NODE_MEMINFO,
     PROCFS_NODE_UPTIME,
     PROCFS_NODE_VERSION,
+    PROCFS_NODE_BOOT,
     PROCFS_NODE_PID_DIR,
     PROCFS_NODE_PID_STATUS,
 } procfs_node_kind_t;
@@ -41,6 +44,7 @@ static const procfs_static_file_t static_files[] = {
     { "meminfo", PROCFS_NODE_MEMINFO },
     { "uptime", PROCFS_NODE_UPTIME },
     { "version", PROCFS_NODE_VERSION },
+    { "boot", PROCFS_NODE_BOOT },
 };
 
 #define PROCFS_STATIC_FILE_COUNT \
@@ -242,6 +246,22 @@ static void render_version(procfs_buffer_t *b) {
     buf_put_str(b, HYDROGEN_OS_NAME " " HYDROGEN_VERSION " " HYDROGEN_ARCH "\n");
 }
 
+static void render_boot(procfs_buffer_t *b) {
+    const char *splash = "disabled";
+    switch (bootsplash_state()) {
+    case BOOTSPLASH_ACTIVE:
+        splash = "active";
+        break;
+    case BOOTSPLASH_FINISHED:
+        splash = "finished";
+        break;
+    case BOOTSPLASH_DISABLED:
+        break;
+    }
+    buf_put_field_str(b, "Splash", splash);
+    buf_put_field_u64(b, "Progress", bootsplash_progress(), 0);
+}
+
 static int render_status(procfs_buffer_t *b, uint32_t pid) {
     process_info_t info;
     if (process_get_info(pid, &info) != 0)
@@ -268,6 +288,9 @@ static int render(const procfs_node_t *node, procfs_buffer_t *b) {
         return 0;
     case PROCFS_NODE_VERSION:
         render_version(b);
+        return 0;
+    case PROCFS_NODE_BOOT:
+        render_boot(b);
         return 0;
     case PROCFS_NODE_PID_STATUS:
         return render_status(b, node->pid);
@@ -348,4 +371,15 @@ int procfs_stat(const char *path, vfs_stat_t *out) {
     out->type = 1;
     out->size = b.len;
     return 0;
+}
+
+int procfs_write_file(const char *path, const uint8_t *data, uint32_t size) {
+    procfs_node_t node;
+    if (resolve(path, &node) != 0)
+        return -ENOENT;
+    if (node_is_dir(&node))
+        return -EISDIR;
+    if (node.kind != PROCFS_NODE_BOOT)
+        return -EROFS;
+    return bootsplash_report(data, size);
 }

@@ -75,6 +75,14 @@ At the end of startup `init` logs `init: N service(s) failed or skipped` if
 anything did not start. Daemons that did start keep running; if no daemon is
 running, `init` exits with status 1 after a failure.
 
+## Boot progress
+
+While the kernel's boot splash is up, `init` reports its progress by writing
+`services DONE TOTAL` to `/proc/boot` before it handles each service, and
+`services TOTAL TOTAL` once the table is processed. If startup ends without a
+daemon or with failed services, it also writes `end`, which removes the splash
+so that the console is visible. See `docs/BOOT_SPLASH.md`.
+
 ## Example
 
 ```
