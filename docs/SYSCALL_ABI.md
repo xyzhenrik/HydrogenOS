@@ -20,8 +20,9 @@
 Beispiel: `-2` entspricht `ENOENT`.
 
 ## Pointer/Buffer Regeln
-- Alle User-Pointer muessen im User-Adressraum liegen.
-- Kernel validiert Pointer und Laenge, sonst `-EFAULT`.
+- Alle User-Pointer muessen im User-Adressraum liegen (kanonische untere Haelfte, unterhalb `0x0000_8000_0000_0000`).
+- Der Kernel laeuft vor jedem Zugriff die Seitentabellen des Prozesses seitenweise ab (`kernel/core/usercopy.c`): jede Seite des Bereichs muss gemappt und fuer User-Mode zugaenglich sein, Ausgabepuffer zusaetzlich beschreibbar. Supervisor-only-Speicher (Kernel-Identity-Map), nicht gemappte Seiten, nicht kanonische Adressen, ueberlaufende `addr + len`-Bereiche und Schreibzugriffe auf schreibgeschuetzte Mappings liefern `-EFAULT`; es wird nichts teilweise kopiert.
+- Optionale Pointer (`argv`/`envp` bei `sys_spawn_args`, `status` bei `sys_wait`/`sys_try_wait`) duerfen `NULL` sein; fuer alle anderen Pointer ist `NULL` ungueltig (`-EFAULT`). `sys_write`/`sys_read` mit `len = 0` liefern `0`, ohne den Pointer zu pruefen.
 - Strings sind UTF-8, null-terminiert.
 - Pfadbasierte Syscalls loesen relative Pfade gegen das prozesslokale aktuelle Working Directory auf; `.` und `..` werden dabei normalisiert.
 

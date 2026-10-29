@@ -206,6 +206,10 @@ int process_fd_poll(process_t *p, int fd, uint32_t events,
                     uint32_t *out_ready);
 int process_poll_many(process_t *p, process_poll_fd_t *fds, uint32_t count,
                       uint32_t *out_ready_count);
+/* process_poll_many() on a poll list in the current process' user memory;
+   returns 0 or a negative errno. */
+int process_poll_many_user(process_t *p, uintptr_t user_fds, uint32_t count,
+                           uint32_t *out_ready_count);
 int process_fd_read(process_t *p, int fd, uint8_t *out, uint32_t out_sz,
                     uint32_t *out_len);
 int process_fd_write(process_t *p, int fd, const uint8_t *in, uint32_t in_sz,

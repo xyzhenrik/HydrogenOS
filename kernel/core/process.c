@@ -1,6 +1,5 @@
 #include "process.h"
 #include "core/time.h"
-#include "higher_half.h"
 #include "keyboard.h"
 #include "pipe.h"
 #include "serial.h"
@@ -8,6 +7,7 @@
 #include "fs/vfs.h"
 #include "kheap.h"
 #include "paging.h"
+#include "usercopy.h"
 
 #define PROCESS_EXIT_SLOTS 32
 
@@ -28,6 +28,9 @@ static uint32_t console_escape_len = 0;
 static uint32_t console_escape_pos = 0;
 
 #define PROCESS_ERR_EIO 5
+#define PROCESS_ERR_EBADF 9
+#define PROCESS_ERR_EFAULT 14
+#define PROCESS_ERR_EINVAL 22
 #define PROCESS_ERR_EPIPE 32
 
 static void process_handle_release(process_handle_entry_t *entry);
@@ -186,21 +189,12 @@ static int process_poll_events_valid(uint32_t events) {
 }
 
 static int process_poll_array_ok(uintptr_t ptr, uint32_t count) {
-    uintptr_t end;
-    uint64_t len;
-
-    if (ptr < 0x1000 || count == 0 || count > PROCESS_POLL_MAX_FDS) {
+    if (count == 0 || count > PROCESS_POLL_MAX_FDS) {
         return 0;
     }
-    len = (uint64_t)count * (uint64_t)sizeof(process_poll_fd_t);
-    if (len > (uint64_t)(uintptr_t)KERNEL_VMA_BASE) {
-        return 0;
-    }
-    end = ptr + (uintptr_t)len - 1;
-    if (end < ptr || end >= (uintptr_t)KERNEL_VMA_BASE) {
-        return 0;
-    }
-    return 1;
+    return user_range_validate((const void *)ptr,
+                               (size_t)count * sizeof(process_poll_fd_t),
+                               USER_ACCESS_WRITE) == 0;
 }
 
 static void process_clear_poll_wait(process_t *p) {
@@ -781,12 +775,13 @@ int process_next_info(uint32_t after_pid, process_info_t *out) {
 static void process_complete_wait(process_t *p) {
     if (!p || !p->wait_ready) return;
 
-    if (p->waiting_status_ptr != 0) {
-        int *status_ptr = (int *)(uintptr_t)p->waiting_status_ptr;
-        *status_ptr = p->wait_status;
+    p->frame.rax = p->wait_result_pid;
+    if (p->waiting_status_ptr != 0 &&
+        copy_to_user((void *)p->waiting_status_ptr, &p->wait_status,
+                     sizeof(p->wait_status)) != 0) {
+        p->frame.rax = (uint64_t)-PROCESS_ERR_EFAULT;
     }
 
-    p->frame.rax = p->wait_result_pid;
     p->waiting_for_pid = 0;
     p->waiting_status_ptr = 0;
     p->wait_result_pid = 0;
@@ -816,6 +811,17 @@ static int process_resume_blocked_io(process_t *p) {
         p->waiting_is_stdio = 0;
         process_clear_poll_wait(p);
         p->frame.rax = (uint64_t)-PROCESS_ERR_EIO;
+        return 0;
+    }
+
+    if (user_range_validate(buf, len,
+                            entry->type == PROCESS_HANDLE_PIPE_READER ?
+                                USER_ACCESS_WRITE : USER_ACCESS_READ) != 0) {
+        p->waiting_pipe = 0;
+        p->waiting_handle = -1;
+        p->waiting_is_stdio = 0;
+        process_clear_poll_wait(p);
+        p->frame.rax = (uint64_t)-PROCESS_ERR_EFAULT;
         return 0;
     }
 
@@ -857,10 +863,10 @@ static int process_resume_blocked_io(process_t *p) {
 }
 
 static int process_resume_blocked_poll(process_t *p) {
-    process_poll_fd_t *fds;
     uint32_t ready_count = 0;
     uint32_t ready = 0;
     uint64_t result = 0;
+    int rc;
 
     if (!p || p->state != PROCESS_RUNNABLE ||
         (p->waiting_poll_fd < 0 && p->waiting_poll_count == 0)) {
@@ -868,22 +874,14 @@ static int process_resume_blocked_poll(process_t *p) {
     }
 
     if (p->waiting_poll_count > 0) {
-        if (!process_poll_array_ok(p->waiting_poll_array_ptr,
-                                   p->waiting_poll_count)) {
+        rc = process_poll_many_user(p, p->waiting_poll_array_ptr,
+                                    p->waiting_poll_count, &ready_count);
+        if (rc != 0) {
             p->waiting_pipe = 0;
             p->waiting_handle = -1;
             p->waiting_is_stdio = 0;
             process_clear_poll_wait(p);
-            p->frame.rax = (uint64_t)-PROCESS_ERR_EIO;
-            return 0;
-        }
-        fds = (process_poll_fd_t *)(uintptr_t)p->waiting_poll_array_ptr;
-        if (process_poll_many(p, fds, p->waiting_poll_count, &ready_count) != 0) {
-            p->waiting_pipe = 0;
-            p->waiting_handle = -1;
-            p->waiting_is_stdio = 0;
-            process_clear_poll_wait(p);
-            p->frame.rax = (uint64_t)-PROCESS_ERR_EIO;
+            p->frame.rax = (uint64_t)(int64_t)rc;
             return 0;
         }
     } else if (process_fd_poll(p, p->waiting_poll_fd, p->waiting_poll_events,
@@ -1674,6 +1672,28 @@ int process_poll_many(process_t *p, process_poll_fd_t *fds, uint32_t count,
 
     *out_ready_count = ready_count;
     return 0;
+}
+
+int process_poll_many_user(process_t *p, uintptr_t user_fds, uint32_t count,
+                           uint32_t *out_ready_count) {
+    process_poll_fd_t fds[PROCESS_POLL_MAX_FDS];
+    int rc;
+
+    if (!out_ready_count || count == 0 || count > PROCESS_POLL_MAX_FDS) {
+        return -PROCESS_ERR_EINVAL;
+    }
+    rc = copy_from_user(fds, (const void *)user_fds, count * sizeof(fds[0]));
+    if (rc != 0) {
+        return rc;
+    }
+    rc = process_poll_many(p, fds, count, out_ready_count);
+    if (rc == -2) {
+        return -PROCESS_ERR_EINVAL;
+    }
+    if (rc != 0) {
+        return -PROCESS_ERR_EBADF;
+    }
+    return copy_to_user((void *)user_fds, fds, count * sizeof(fds[0]));
 }
 
 int process_handle_read(process_t *p, int handle, uint8_t *out, uint32_t out_sz,
