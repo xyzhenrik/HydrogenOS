@@ -44,6 +44,7 @@ Beispiel: `-2` entspricht `ENOENT`.
 - `sys_handle_set_inherit` arbeitet jetzt auf beliebigen FDs, nicht mehr nur auf `fd >= 3`; damit koennen auch explizite stdio-Bindings fuer spaetere `spawn`-Aufrufe als vererbbar bzw. close-on-spawn markiert werden.
 - `sys_spawn_with_stdio` versteht zusaetzlich negative Steuerwerte: `-2` = stdio vom Parent unveraendert erben, `-3` = Null-stdio binden; `-1` bleibt "Binding loeschen".
 - Das aktuelle Userspace-`init` nutzt `sys_spawn_with_stdio`, um die in `/init.rc` beschriebenen einfachen stdio-Topologien (`stdin=inherit|null|pipe|channel|tee`, `stdout=inherit|null|capture|channel|tee|logsink`, `stderr=inherit|null|capture|channel|tee|logsink`) aufzubauen.
+- Zusaetzlich kann `init` `stdout`/`stderr` eines Services mit `stdout=syslog`, `stderr=syslog` oder `log=syslog` (beides) an den Log-Daemon `syslogd` binden; Details in `docs/SYSLOG.md`.
 - Die aktuelle `init`-Channel-Schicht modelliert einen Reader pro benanntem Channel; mehrere Writer auf denselben Channel werden unterstuetzt und nutzen denselben Pipe-Stream.
 - Zusaetzlich baut `init` rein im Userspace gepufferte `tee`-Kanaele fuer spaetere Mehrfach-Leser und deklarative `logsink`s fuer aggregierte Service-Ausgaben ueber dieselbe Kernel-ABI.
 - Das implizite Keyboard/TTY-Fallback fuer ungebundene stdio-Slots ist jetzt als interner Console-Handle-Typ modelliert und kann daher ueber `dup`/`dup2` geklont, auf andere FDs gelegt und wieder auf `0/1/2` restauriert werden.
