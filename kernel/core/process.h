@@ -3,6 +3,7 @@
 #include <stdint.h>
 
 #include "isr.h"
+#include "signal.h"
 #include "vmm_user.h"
 
 struct kernel_pipe;
@@ -144,6 +145,7 @@ typedef struct process {
     uint64_t waiting_poll_deadline_ms;
     uint8_t waiting_poll_has_deadline;
     VmmUserSpace vm;
+    signal_state_t signals;
     process_kernel_wait_fn kernel_wait_fn;
     uintptr_t kernel_wait_arg;
     struct process *next;
@@ -223,6 +225,9 @@ int process_stdio_close(process_t *p, int stdio_fd);
 int process_has_runnable_other_than(process_t *p);
 void process_set_priority(process_t *p, uint8_t prio);
 void process_begin_sleep(process_t *p, uint32_t ms);
+/* Aborts the blocking syscall p is in so that it returns -EINTR. Returns 1 if
+ * a wait was aborted; a wait that already completed is left to finish. */
+int process_interrupt_wait(process_t *p);
 int process_begin_kernel_wait(process_t *p, process_kernel_wait_fn fn,
                               uintptr_t arg);
 void process_wake_sleepers(void);

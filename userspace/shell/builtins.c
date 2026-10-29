@@ -6,6 +6,7 @@
 #include "jobs.h"
 #include "mini_libc.h"
 #include "output.h"
+#include "signal.h"
 #include "syscall.h"
 
 enum {
@@ -48,8 +49,8 @@ static int builtin_help(int argc, char **argv) {
     (void)argc;
     (void)argv;
     out_str(1,
-            "Builtins: cat cd cp echo env exit export false help jobs ls mkdir mv\n"
-            "          pwd rm sleep time touch true unset wait\n"
+            "Builtins: cat cd cp echo env exit export false help jobs kill ls mkdir\n"
+            "          mv pwd rm sleep time touch true unset wait\n"
             "Diagnostics: pipe piperun pipenoinherit pipeblock pipefull\n"
             "          pipebroken pipeeof pollpipe pollwaitpipe pollmanypipe\n"
             "Syntax:   a | b   a && b   a || b   a ; b   a &\n"
@@ -447,6 +448,48 @@ static int builtin_wait(int argc, char **argv) {
     return status;
 }
 
+/* kill [-SIGNAL | -s SIGNAL] {pid | %job}... ; SIGNAL is a name or number. */
+static int builtin_kill(int argc, char **argv) {
+    static const char kill_usage[] = "usage: kill [-SIGNAL | -s SIGNAL] {pid | %job}...";
+    int sig = SIGTERM;
+    int first = 1;
+    int status = 0;
+
+    if (first < argc && str_eq(argv[first], "-s")) {
+        if (first + 1 >= argc)
+            return usage("kill", kill_usage);
+        sig = signal_number(argv[first + 1]);
+        first += 2;
+    } else if (first < argc && argv[first][0] == '-' && argv[first][1]) {
+        sig = signal_number(argv[first] + 1);
+        first++;
+    }
+    if (sig == 0) {
+        out_error("kill", 0, "unknown signal");
+        return STATUS_USAGE;
+    }
+    if (first >= argc)
+        return usage("kill", kill_usage);
+
+    for (int i = first; i < argc; ++i) {
+        const char *arg = argv[i];
+        int is_job = arg[0] == '%';
+        long id = parse_decimal(is_job ? arg + 1 : arg);
+        long rc;
+        if (id <= 0) {
+            out_error("kill", arg, "not a pid or job");
+            status = STATUS_FAILURE;
+            continue;
+        }
+        rc = is_job ? jobs_signal((int)id, sig) : kill((int)id, sig);
+        if (rc != 0) {
+            out_error("kill", arg, is_job ? "no such job" : "no such process");
+            status = STATUS_FAILURE;
+        }
+    }
+    return status;
+}
+
 static int builtin_true(int argc, char **argv) {
     (void)argc;
     (void)argv;
@@ -488,6 +531,7 @@ static const BuiltinEntry builtins[] = {
     {"false", builtin_false},
     {"help", builtin_help},
     {"jobs", builtin_jobs},
+    {"kill", builtin_kill},
     {"ls", builtin_ls},
     {"mkdir", builtin_mkdir},
     {"mv", builtin_mv},

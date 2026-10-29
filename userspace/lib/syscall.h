@@ -53,6 +53,9 @@
 #define SYS_NET_PING 51
 #define SYS_SPAWN_ARGS 52
 #define SYS_TRY_WAIT 53
+#define SYS_KILL 56
+#define SYS_SIGACTION 57
+#define SYS_SIGRETURN 58
 
 #define PRIO_IDLE   0
 #define PRIO_NORMAL 1
@@ -381,4 +384,15 @@ static inline long sys_spawn_args(const char *path, const char *const *argv,
 
 static inline long sys_try_wait(int pid, int *status) {
     return syscall2(SYS_TRY_WAIT, (long)pid, (long)status);
+}
+
+static inline long sys_kill(int pid, int sig) {
+    return syscall2(SYS_KILL, (long)pid, (long)sig);
+}
+
+struct sigaction;
+
+static inline long sys_sigaction(int sig, const struct sigaction *act,
+                                 struct sigaction *old) {
+    return syscall3(SYS_SIGACTION, (long)sig, (long)act, (long)old);
 }

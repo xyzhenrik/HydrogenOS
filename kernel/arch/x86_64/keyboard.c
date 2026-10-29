@@ -2,6 +2,7 @@
 #include "io.h"
 #include "console.h"
 #include "drivers/virtio_input.h"
+#include "core/signal.h"
 
 #define KB_BUF_SIZE 128
 
@@ -70,6 +71,9 @@ void keyboard_set_layout(int layout) { g_layout = layout ? 1 : 0; }
 int keyboard_get_layout(void) { return g_layout; }
 
 static inline void buffer_put(uint16_t c) {
+    /* Ctrl+C interrupts the console's foreground job instead of being input. */
+    if (c == 0x03 && signal_console_interrupt())
+        return;
     uint8_t next = (uint8_t)((buf_head + 1) % KB_BUF_SIZE);
     if (next != buf_tail) {
         keybuf[buf_head] = c;

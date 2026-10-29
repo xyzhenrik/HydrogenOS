@@ -8,6 +8,7 @@
 #include "mini_libc.h"
 #include "output.h"
 #include "parser.h"
+#include "signal.h"
 #include "shell_limits.h"
 
 enum {
@@ -424,14 +425,27 @@ static void announce_job(int id, const int *pids, int count) {
     out_flush();
 }
 
+/* Tells the user how a foreground process died, as other shells do. */
+static void report_signal_death(int status) {
+    int sig = WTERMSIG(status);
+    const char *description = signal_description(sig);
+    if (sig != SIGINT)
+        out_str(2, description);
+    out_char(2, '\n');
+    out_flush();
+}
+
 static int wait_all(const int *pids, int count, long status_pid) {
     int result = 0;
     for (int i = 0; i < count; ++i) {
         int status = 0;
-        if (wait_pid(pids[i], &status) < 0)
+        if (wait_pid(pids[i], &status) < 0) {
             status = STATUS_NOT_FOUND;
+        } else if (WIFSIGNALED(status)) {
+            report_signal_death(status);
+        }
         if (pids[i] == status_pid)
-            result = status;
+            result = jobs_exit_code(status);
     }
     return result;
 }

@@ -328,6 +328,8 @@ uint64_t syscall_handle(regs_t *r) {
             if (!process_has_runnable_other_than(proc)) {
                 do {
                     __asm__ volatile("sti\n\thlt\n\tcli");
+                    if (signal_deliverable(proc))
+                        return (uint64_t)-EINTR;
                     rc = process_fd_write(proc, fd, (const uint8_t *)buf,
                                           (uint32_t)len, &wrote);
                 } while (rc == 1);
@@ -362,6 +364,8 @@ uint64_t syscall_handle(regs_t *r) {
             if (!process_has_runnable_other_than(proc)) {
                 do {
                     __asm__ volatile("sti\n\thlt\n\tcli");
+                    if (signal_deliverable(proc))
+                        return (uint64_t)-EINTR;
                     rc = process_fd_read(proc, fd, (uint8_t *)buf,
                                          (uint32_t)len, &got);
                 } while (rc == 1);
@@ -471,6 +475,9 @@ uint64_t syscall_handle(regs_t *r) {
             start = time_ms();
             do {
                 __asm__ volatile("sti\n\thlt\n\tcli");
+                if (signal_deliverable(proc)) {
+                    return (uint64_t)-EINTR;
+                }
                 if (process_fd_poll(proc, fd, events, &ready) != 0) {
                     return (uint64_t)-EBADF;
                 }
@@ -521,6 +528,9 @@ uint64_t syscall_handle(regs_t *r) {
             start = time_ms();
             do {
                 __asm__ volatile("sti\n\thlt\n\tcli");
+                if (signal_deliverable(proc)) {
+                    return (uint64_t)-EINTR;
+                }
                 rc = process_poll_many(proc, fds, count, &ready_count);
                 if (rc == -2) {
                     return (uint64_t)-EINVAL;
@@ -659,6 +669,8 @@ uint64_t syscall_handle(regs_t *r) {
             uint64_t start = time_ms();
             while ((time_ms() - start) < (uint64_t)ms) {
                 __asm__ volatile("sti\n\thlt\n\tcli");
+                if (signal_deliverable(proc))
+                    return (uint64_t)-EINTR;
             }
             return 0;
         }
@@ -956,10 +968,23 @@ uint64_t syscall_handle(regs_t *r) {
             process_begin_kernel_wait(proc, net_ping_wait_check,
                                       (uintptr_t)ticket) == 0)
             return 0;
-        while (!net_ping_wait_check((uintptr_t)ticket, &result))
+        while (!net_ping_wait_check((uintptr_t)ticket, &result)) {
             __asm__ volatile("sti\n\thlt\n\tcli");
+            if (signal_deliverable(proc))
+                return (uint64_t)-EINTR;
+        }
         return result;
     }
+    case SYS_KILL:
+        return (uint64_t)signal_kill((uint32_t)r->rdi, (int)r->rsi);
+    case SYS_SIGACTION:
+        return (uint64_t)signal_sigaction(process_current(), (int)r->rdi,
+                                          r->rsi, r->rdx);
+    case SYS_SIGRETURN:
+        /* The restored rax becomes the result of the interrupted code. */
+        if (signal_return(process_current(), r) != 0)
+            return (uint64_t)-EFAULT;
+        return r->rax;
     default:
         return (uint64_t)-1;
     }

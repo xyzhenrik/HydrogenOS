@@ -2,6 +2,8 @@
 #include "syscall.h"
 #include <stdarg.h>
 
+#define WAIT_INTERRUPTED (-4l) /* -EINTR */
+
 int stat(const char *path, stat_t *buf) {
     return (int)sys_stat(path, buf);
 }
@@ -78,8 +80,13 @@ long spawn_with_stdio(const char *path, int stdin_fd, int stdout_fd, int stderr_
     return sys_spawn_with_stdio(path, stdin_fd, stdout_fd, stderr_fd);
 }
 
+/* A signal handler that ran while waiting does not end the wait. */
 long wait_pid(int pid, int *status) {
-    return sys_wait(pid, status);
+    long rc;
+    do {
+        rc = sys_wait(pid, status);
+    } while (rc == WAIT_INTERRUPTED);
+    return rc;
 }
 
 long spawn_args(const char *path, const char *const *argv,

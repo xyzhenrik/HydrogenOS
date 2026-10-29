@@ -103,6 +103,8 @@ USER_PROCTEST_OBJ = $(BUILD_DIR)/user_proctest.o
 USER_PROCTEST_ELF = $(BUILD_DIR)/user_proctest.elf
 USER_NETTEST_OBJ = $(BUILD_DIR)/user_nettest.o
 USER_NETTEST_ELF = $(BUILD_DIR)/user_nettest.elf
+USER_SIGTEST_OBJ = $(BUILD_DIR)/user_sigtest.o
+USER_SIGTEST_ELF = $(BUILD_DIR)/user_sigtest.elf
 USER_PING_OBJ = $(BUILD_DIR)/user_ping.o
 USER_PING_ELF = $(BUILD_DIR)/user_ping.elf
 USER_DUPFALLBACKCHECK_OBJ = $(BUILD_DIR)/user_dupfallbackcheck.o
@@ -155,9 +157,10 @@ USER_RTCTEST_OBJ = $(BUILD_DIR)/user_rtctest.o
 USER_RTCTEST_ELF = $(BUILD_DIR)/user_rtctest.elf
 USER_LIBC_CORE_OBJ = $(BUILD_DIR)/user_libc_core.o
 USER_MALLOC_OBJ = $(BUILD_DIR)/user_malloc.o
+USER_SIGNAL_OBJ = $(BUILD_DIR)/user_signal.o
 OBJS = $(BUILD_DIR)/boot.o $(BUILD_DIR)/kernel.o $(BUILD_DIR)/console.o $(BUILD_DIR)/serial.o $(BUILD_DIR)/panic.o \
        $(BUILD_DIR)/paging.o $(BUILD_DIR)/time.o $(BUILD_DIR)/pmm.o $(BUILD_DIR)/kheap.o $(BUILD_DIR)/string.o \
-       $(BUILD_DIR)/vmm_user.o $(BUILD_DIR)/syscall.o $(BUILD_DIR)/process.o $(BUILD_DIR)/pipe.o $(BUILD_DIR)/spawn_args.o \
+       $(BUILD_DIR)/vmm_user.o $(BUILD_DIR)/syscall.o $(BUILD_DIR)/process.o $(BUILD_DIR)/signal.o $(BUILD_DIR)/pipe.o $(BUILD_DIR)/spawn_args.o \
        $(BUILD_DIR)/keyboard.o $(BUILD_DIR)/mouse.o $(BUILD_DIR)/elf_loader.o \
        $(BUILD_DIR)/ata.o $(BUILD_DIR)/pci.o $(BUILD_DIR)/virtio.o $(BUILD_DIR)/virtio_blk.o $(BUILD_DIR)/virtio_gpu.o $(BUILD_DIR)/bochs_display.o $(BUILD_DIR)/virtio_input.o $(BUILD_DIR)/virtio_net.o $(BUILD_DIR)/msi.o $(BUILD_DIR)/block.o $(BUILD_DIR)/block_cache.o $(BUILD_DIR)/mbr.o \
        $(BUILD_DIR)/net.o $(BUILD_DIR)/ethernet.o $(BUILD_DIR)/arp.o $(BUILD_DIR)/ipv4.o $(BUILD_DIR)/icmp.o \
@@ -624,6 +627,13 @@ $(USER_NETTEST_OBJ): userspace/nettest/nettest.c userspace/lib/syscall.h userspa
 $(USER_NETTEST_ELF): $(USER_NETTEST_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
 	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_NETTEST_OBJ)
 
+$(USER_SIGTEST_OBJ): userspace/sigtest/sigtest.c userspace/lib/signal.h userspace/lib/syscall.h userspace/lib/mini_libc.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(USER_SIGTEST_ELF): $(USER_SIGTEST_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
+	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_SIGTEST_OBJ)
+
 $(USER_PING_OBJ): userspace/ping/ping.c userspace/lib/syscall.h userspace/lib/mini_libc.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(USER_CFLAGS) -c $< -o $@
@@ -833,8 +843,12 @@ $(USER_MALLOC_OBJ): userspace/lib/malloc.c userspace/lib/mini_libc.h userspace/l
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(USER_CFLAGS) -c $< -o $@
 
-$(USER_LIBC_OBJ): $(USER_LIBC_CORE_OBJ) $(USER_MALLOC_OBJ)
-	$(LD) -r -m elf_x86_64 -o $@ $(USER_LIBC_CORE_OBJ) $(USER_MALLOC_OBJ)
+$(USER_SIGNAL_OBJ): userspace/lib/signal.c userspace/lib/signal.h userspace/lib/syscall.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(USER_LIBC_OBJ): $(USER_LIBC_CORE_OBJ) $(USER_MALLOC_OBJ) $(USER_SIGNAL_OBJ)
+	$(LD) -r -m elf_x86_64 -o $@ $(USER_LIBC_CORE_OBJ) $(USER_MALLOC_OBJ) $(USER_SIGNAL_OBJ)
 
 $(USER_MMAPTEST_OBJ): userspace/mmaptest/mmaptest.c userspace/lib/syscall.h userspace/lib/mini_libc.h
 	mkdir -p $(BUILD_DIR)
@@ -843,7 +857,7 @@ $(USER_MMAPTEST_OBJ): userspace/mmaptest/mmaptest.c userspace/lib/syscall.h user
 $(USER_MMAPTEST_ELF): $(USER_MMAPTEST_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
 	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_MMAPTEST_OBJ)
 
-$(INITRD): $(USER_HELLO_ELF) $(USER_ECHO_ELF) $(USER_CAT_ELF) $(USER_TIME_ELF) $(USER_SLEEP_ELF) $(USER_PIPEREAD_ELF) $(USER_PIPEDELAYREAD_ELF) $(USER_PIPEPRODUCER_ELF) $(USER_PIPECONSUMER_ELF) $(USER_LOGPRODUCER_A_ELF) $(USER_LOGPRODUCER_B_ELF) $(USER_LOGCOLLECTOR_ELF) $(USER_BOOTPROBE_ELF) $(USER_HANDOFFCHECK_ELF) $(USER_STDIOCHECK_ELF) $(USER_STDIOBADBIND_ELF) $(USER_STDIONULLCHECK_ELF) $(USER_DUPCHECK_ELF) $(USER_HANDLELIMITCHECK_ELF) $(USER_FILEOFFSETCHECK_ELF) $(USER_SEEKCHECK_ELF) $(USER_POLLCHECK_ELF) $(USER_POLLWAITCHECK_ELF) $(USER_POLLWAKEWRITER_ELF) $(USER_POLLMANYCHECK_ELF) $(USER_CWDCHECK_ELF) $(USER_DUPFALLBACKCHECK_ELF) $(USER_FSTEST_ELF) $(USER_LOGIN_ELF) $(USER_PKGTEST_ELF) $(USER_LOGSINK_WRITER_A_ELF) $(USER_LOGSINK_WRITER_B_ELF) $(USER_TEEWRITER_ELF) $(USER_TEEREADER_A_ELF) $(USER_TEEREADER_B_ELF) $(USER_MMAPTEST_ELF) $(USER_COMPOSITOR_ELF) $(USER_DESKTOPDEMO_ELF) $(USER_DESKTOPTEST_ELF) $(USER_INIT_ELF) $(USER_SHELL_ELF) $(USER_SHELLTEST_ELF) $(INIT_CONFIG) tools/mkinitrd.py $(USER_DATE_ELF) $(USER_RTCTEST_ELF) $(USER_PS_ELF) $(USER_PROCTEST_ELF) $(USER_DIRTEST_ELF) $(USER_POWEROFF_ELF) $(USER_REBOOT_ELF) $(USER_POWERCHECK_ELF) $(USER_NETTEST_ELF) $(USER_PING_ELF)
+$(INITRD): $(USER_HELLO_ELF) $(USER_ECHO_ELF) $(USER_CAT_ELF) $(USER_TIME_ELF) $(USER_SLEEP_ELF) $(USER_PIPEREAD_ELF) $(USER_PIPEDELAYREAD_ELF) $(USER_PIPEPRODUCER_ELF) $(USER_PIPECONSUMER_ELF) $(USER_LOGPRODUCER_A_ELF) $(USER_LOGPRODUCER_B_ELF) $(USER_LOGCOLLECTOR_ELF) $(USER_BOOTPROBE_ELF) $(USER_HANDOFFCHECK_ELF) $(USER_STDIOCHECK_ELF) $(USER_STDIOBADBIND_ELF) $(USER_STDIONULLCHECK_ELF) $(USER_DUPCHECK_ELF) $(USER_HANDLELIMITCHECK_ELF) $(USER_FILEOFFSETCHECK_ELF) $(USER_SEEKCHECK_ELF) $(USER_POLLCHECK_ELF) $(USER_POLLWAITCHECK_ELF) $(USER_POLLWAKEWRITER_ELF) $(USER_POLLMANYCHECK_ELF) $(USER_CWDCHECK_ELF) $(USER_DUPFALLBACKCHECK_ELF) $(USER_FSTEST_ELF) $(USER_LOGIN_ELF) $(USER_PKGTEST_ELF) $(USER_LOGSINK_WRITER_A_ELF) $(USER_LOGSINK_WRITER_B_ELF) $(USER_TEEWRITER_ELF) $(USER_TEEREADER_A_ELF) $(USER_TEEREADER_B_ELF) $(USER_MMAPTEST_ELF) $(USER_COMPOSITOR_ELF) $(USER_DESKTOPDEMO_ELF) $(USER_DESKTOPTEST_ELF) $(USER_INIT_ELF) $(USER_SHELL_ELF) $(USER_SHELLTEST_ELF) $(INIT_CONFIG) tools/mkinitrd.py $(USER_DATE_ELF) $(USER_RTCTEST_ELF) $(USER_PS_ELF) $(USER_PROCTEST_ELF) $(USER_DIRTEST_ELF) $(USER_POWEROFF_ELF) $(USER_REBOOT_ELF) $(USER_POWERCHECK_ELF) $(USER_NETTEST_ELF) $(USER_PING_ELF) $(USER_SIGTEST_ELF)
 	mkdir -p $(BUILD_DIR)
 	python3 tools/mkinitrd.py $@ \
 		user=$(USER_HELLO_ELF) \
@@ -879,6 +893,7 @@ $(INITRD): $(USER_HELLO_ELF) $(USER_ECHO_ELF) $(USER_CAT_ELF) $(USER_TIME_ELF) $
 		ps=$(USER_PS_ELF) \
 		proctest=$(USER_PROCTEST_ELF) \
 		nettest=$(USER_NETTEST_ELF) \
+		sigtest=$(USER_SIGTEST_ELF) \
 		ping=$(USER_PING_ELF) \
 		dupfallbackcheck=$(USER_DUPFALLBACKCHECK_ELF) \
 		logsink_writer_a=$(USER_LOGSINK_WRITER_A_ELF) \
@@ -906,6 +921,10 @@ $(BUILD_DIR)/syscall.o: kernel/core/syscall.c kernel/core/process.h kernel/fs/vf
 	$(CC) $(CFLAGS) -c $< -o $@
 
 $(BUILD_DIR)/process.o: kernel/core/process.c kernel/core/process.h kernel/core/pipe.h kernel/fs/vfs.h kernel/mm/paging.h kernel/mm/kheap.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/signal.o: kernel/core/signal.c kernel/core/signal.h kernel/include/signal_abi.h kernel/core/process.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 

@@ -26,3 +26,11 @@ int jobs_wait(int id, int *status);
 /* Waits for one child pid, keeping the job table consistent when the pid
  * belongs to a job. Returns 0, or -1 when pid is not a child. */
 int jobs_wait_pid(int pid, int *status);
+
+/* Sends sig to every unfinished process of job `id`. Returns 0, or -1 when no
+ * such job exists. */
+int jobs_signal(int id, int sig);
+
+/* Shell exit code for a wait status: 128 + signal number for a process that
+ * was killed by a signal, the status itself otherwise. */
+int jobs_exit_code(int wait_status);

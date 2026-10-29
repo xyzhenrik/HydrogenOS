@@ -59,17 +59,39 @@ static void irq_eoi(uint8_t irq) {
     lapic_eoi();
 }
 
+static regs_t *isr_reschedule(regs_t *r) {
+    regs_t *next = process_schedule(r);
+    if (next != r) {
+        paging_switch(process_current()->pml4);
+    }
+    return next;
+}
+
+/* A fault in user mode is the process's own: it gets a signal (and dies by
+ * default) instead of taking the kernel down. Returns 0 if r is not one. */
+static int isr_user_fault(const regs_t *r) {
+    process_t *proc = process_current();
+    int sig;
+    if ((r->cs & 3) != 3 || proc == process_kernel())
+        return 0;
+    sig = signal_from_exception(r->int_no);
+    if (sig == 0)
+        return 0;
+    signal_raise_fault(proc, sig, r->int_no, r->err_code,
+                       r->int_no == 14 ? read_cr2() : 0);
+    return 1;
+}
+
 regs_t *isr_handler(regs_t *r) {
     if (r->int_no == 128) {
         r->rax = syscall_handle(r);
         if (process_current() != process_kernel()) {
-            regs_t *next = process_schedule(r);
-            if (next != r) {
-                paging_switch(process_current()->pml4);
-            }
-            return next;
+            return isr_reschedule(r);
         }
         return r;
+    }
+    if (r->int_no < 32 && isr_user_fault(r)) {
+        return isr_reschedule(r);
     }
     if (r->int_no < 32) {
         console_write("EXCEPTION: ");
