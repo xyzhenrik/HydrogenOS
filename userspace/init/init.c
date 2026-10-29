@@ -33,6 +33,9 @@ enum {
     INIT_CONFIG_CAP = 16384,
     INIT_STDIO_TEXT_CAP = 128,
     INIT_STREAM_CAP = 512,
+    INIT_DEFAULT_RETRIES = 3,
+    INIT_MAX_RETRIES = 16,
+    INIT_BACKOFF_CAP_MS = 30000,
 };
 
 typedef struct init_service_runtime {
@@ -64,6 +67,7 @@ typedef struct init_service {
     init_service_type_t type;
     init_restart_policy_t restart_policy;
     unsigned long restart_delay_ms;
+    unsigned long max_retries;
     init_stdio_mode_t stdin_mode;
     init_stdio_mode_t stdout_mode;
     init_stdio_mode_t stderr_mode;
@@ -1055,18 +1059,39 @@ static int parse_restart_policy(const char *token, init_restart_policy_t *out) {
     return -1;
 }
 
+static const char *option_value(const char *token, const char *prefix) {
+    if (!token || !prefix) {
+        return 0;
+    }
+    while (*prefix) {
+        if (*token != *prefix) {
+            return 0;
+        }
+        ++token;
+        ++prefix;
+    }
+    return token;
+}
+
 static int parse_restart_option(const char *token, init_restart_policy_t *out) {
-    const char *value;
-    if (!token || !out) {
+    const char *value = option_value(token, "restart=");
+    if (!value || !out) {
         return -1;
     }
-    if (!(token[0] == 'r' && token[1] == 'e' && token[2] == 's' &&
-          token[3] == 't' && token[4] == 'a' && token[5] == 'r' &&
-          token[6] == 't' && token[7] == '=')) {
-        return -1;
-    }
-    value = token + 8;
     return parse_restart_policy(value, out);
+}
+
+static int parse_retries_option(const char *token, unsigned long *out) {
+    const char *value = option_value(token, "retries=");
+    unsigned long retries;
+    if (!value || !out) {
+        return -1;
+    }
+    if (parse_u64_token(value, &retries) != 0 || retries > INIT_MAX_RETRIES) {
+        return -1;
+    }
+    *out = retries;
+    return 0;
 }
 
 static int parse_logsink_line(init_service_table_t *table, char *line) {
@@ -1111,6 +1136,7 @@ static int parse_service_line(init_service_table_t *table, char *line) {
     char *path;
     char *restart_token;
     unsigned long restart_delay_ms = 0;
+    unsigned long max_retries = INIT_DEFAULT_RETRIES;
     unsigned long deps_mask = 0;
     int service_index;
     init_service_type_t type;
@@ -1174,7 +1200,8 @@ static int parse_service_line(init_service_table_t *table, char *line) {
         if (!dep) {
             break;
         }
-        if (parse_restart_option(dep, &restart_policy) == 0) {
+        if (parse_restart_option(dep, &restart_policy) == 0 ||
+            parse_retries_option(dep, &max_retries) == 0) {
             continue;
         }
         if (str_eq(dep, "stdin=channel")) {
@@ -1457,6 +1484,7 @@ static int parse_service_line(init_service_table_t *table, char *line) {
     svc->type = type;
     svc->restart_policy = restart_policy;
     svc->restart_delay_ms = restart_delay_ms;
+    svc->max_retries = max_retries;
     svc->stdin_mode = stdin_mode;
     svc->stdout_mode = stdout_mode;
     svc->stderr_mode = stderr_mode;
@@ -1612,6 +1640,11 @@ static long spawn_with_runtime(init_service_table_t *table, const init_service_t
             write_service_prefix(svc, " stdin channel setup failed\n");
             return -1;
         }
+        /* Every writer may already have been started or skipped. */
+        if (table->channels[svc->stdin_channel_index].writer_spawned_count >=
+            table->channels[svc->stdin_channel_index].writer_service_count) {
+            close_channel_write(table, svc->stdin_channel_index);
+        }
         stdin_fd = table->channels[svc->stdin_channel_index].read_fd;
         break;
     default:
@@ -1716,9 +1749,29 @@ static int service_should_restart(const init_service_t *svc, int success) {
     }
 }
 
-static int run_service(init_service_table_t *table, const init_service_t *svc) {
+/* Delay before the Nth consecutive retry: the configured base delay doubled
+ * per failure, capped so a large retries= cannot park a service for minutes. */
+static unsigned long retry_backoff_ms(const init_service_t *svc,
+                                      unsigned long failures) {
+    unsigned long delay = svc->restart_delay_ms;
+    for (unsigned long i = 1; i < failures && delay < INIT_BACKOFF_CAP_MS; ++i) {
+        delay *= 2;
+    }
+    return delay < INIT_BACKOFF_CAP_MS ? delay : INIT_BACKOFF_CAP_MS;
+}
+
+/*
+ * Runs a service until its restart policy stops it. Returns 0 on success and
+ * 1 once the service has failed for good, either by policy or because it used
+ * up its retries. *spawned is set when at least one instance was started.
+ */
+static int run_service(init_service_table_t *table, const init_service_t *svc,
+                       int *spawned) {
     init_service_runtime_t rt;
+    unsigned long failures = 0;
+    char note[96];
     runtime_reset(&rt);
+    *spawned = 0;
     for (;;) {
         int success = 0;
         long pid = spawn_with_runtime(table, svc, &rt);
@@ -1726,6 +1779,7 @@ static int run_service(init_service_table_t *table, const init_service_t *svc) {
             write_service_prefix(svc, " spawn failed\n");
         } else {
             int status = 0;
+            *spawned = 1;
             if (wait_pid((int)pid, &status) < 0) {
                 write_service_prefix(svc, " wait failed\n");
             } else {
@@ -1752,31 +1806,87 @@ static int run_service(init_service_table_t *table, const init_service_t *svc) {
             return success ? 0 : 1;
         }
         if (success) {
+            failures = 0;
             write_service_prefix(svc, " restart policy requests restart\n");
-        } else {
-            write_service_prefix(svc, " restart policy requests retry\n");
+            if (svc->restart_delay_ms > 0) {
+                sleep_ms(svc->restart_delay_ms);
+            }
+            continue;
         }
-        if (svc->restart_delay_ms > 0) {
-            sleep_ms(svc->restart_delay_ms);
+        if (failures >= svc->max_retries) {
+            snprintf(note, sizeof(note), " giving up after %lu failed attempts\n",
+                     failures + 1);
+            write_service_prefix(svc, note);
+            return 1;
+        }
+        ++failures;
+        unsigned long delay = retry_backoff_ms(svc, failures);
+        snprintf(note, sizeof(note), " retry %lu/%lu in %lu ms\n", failures,
+                 svc->max_retries, delay);
+        write_service_prefix(svc, note);
+        if (delay > 0) {
+            sleep_ms(delay);
         }
     }
+}
+
+/*
+ * A service that will never run must not leave a channel reader waiting for
+ * an end-of-file: drop its writer reference and close the write end once all
+ * remaining writers have been started.
+ */
+static void release_unspawned_channel_writers(init_service_table_t *table,
+                                              const init_service_t *svc) {
+    const init_stdio_mode_t modes[2] = { svc->stdout_mode, svc->stderr_mode };
+    const int indexes[2] = { svc->stdout_channel_index, svc->stderr_channel_index };
+    for (int i = 0; i < 2; ++i) {
+        init_channel_t *channel;
+        if (modes[i] != INIT_STDIO_CHANNEL ||
+            channel_remove_writer_ref(table, indexes[i]) != 0) {
+            continue;
+        }
+        channel = &table->channels[indexes[i]];
+        if (channel->writer_spawned_count >= channel->writer_service_count) {
+            close_channel_write(table, indexes[i]);
+        }
+    }
+}
+
+static int first_unmet_dependency(const init_service_table_t *table,
+                                   const init_service_t *svc,
+                                   unsigned long ready_mask) {
+    unsigned long missing = svc->deps_mask & ~ready_mask;
+    for (unsigned long i = 0; i < table->count; ++i) {
+        if (missing & (1ul << i)) {
+            return (int)i;
+        }
+    }
+    return -1;
 }
 
 int main(void) {
     static init_service_table_t table;
     unsigned long ready_mask = 0;
+    unsigned long failed_count = 0;
+    unsigned long daemon_count = 0;
 
     if (load_service_table(&table) != 0) {
         write(1, "init: failed to load service config\n", 36);
         return 1;
     }
     write(1, "init: entering service startup\n", 31);
-    unsigned long daemon_count = 0;
     for (unsigned long i = 0; i < table.count; ++i) {
         const init_service_t *svc = &table.services[i];
-        if ((ready_mask & svc->deps_mask) != svc->deps_mask) {
-            write_service_prefix(svc, " dependency check failed\n");
-            return 1;
+        int spawned = 0;
+        int missing = first_unmet_dependency(&table, svc, ready_mask);
+        if (missing >= 0) {
+            char note[96];
+            snprintf(note, sizeof(note), " skipped, dependency %s did not start\n",
+                     table.services[missing].name);
+            write_service_prefix(svc, note);
+            release_unspawned_channel_writers(&table, svc);
+            ++failed_count;
+            continue;
         }
         write_service_prefix(svc, " start\n");
         if (svc->type == INIT_SERVICE_DAEMON) {
@@ -1785,18 +1895,33 @@ int main(void) {
             long pid = spawn_with_runtime(&table, svc, &rt);
             if (pid < 0) {
                 write_service_prefix(svc, " spawn failed\n");
-                return 1;
+                write_service_prefix(svc, " failed permanently\n");
+                release_unspawned_channel_writers(&table, svc);
+                ++failed_count;
+                continue;
             }
             write_service_prefix(svc, " started as daemon\n");
             daemon_count++;
             ready_mask |= svc->provides_mask;
             continue;
         }
-        if (run_service(&table, svc) != 0) {
+        if (run_service(&table, svc, &spawned) != 0) {
             write_service_prefix(svc, " failed permanently\n");
-            return 1;
+            if (!spawned) {
+                release_unspawned_channel_writers(&table, svc);
+            }
+            ++failed_count;
+            continue;
         }
         ready_mask |= svc->provides_mask;
+    }
+    if (failed_count > 0) {
+        char note[64];
+        int len = snprintf(note, sizeof(note), "init: %lu service(s) failed or skipped\n",
+                           failed_count);
+        if (len > 0 && (unsigned long)len < sizeof(note)) {
+            write(1, note, (unsigned long)len);
+        }
     }
     if (daemon_count > 0) {
         /* Keep the session alive; daemons own the console/framebuffer. */
@@ -1804,5 +1929,5 @@ int main(void) {
             sleep_ms(1000);
         }
     }
-    return 0;
+    return failed_count > 0 ? 1 : 0;
 }
