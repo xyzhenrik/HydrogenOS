@@ -1,5 +1,6 @@
 #include "widgets.h"
 #include "gfx_effects.h"
+#include "theme.h"
 
 static const uint8_t widget_font8x16[256][16] = {
     [32] = {0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00,0x00},
@@ -325,6 +326,7 @@ Button *button_create_impl(const char *label, void (*on_click)()) {
     button->background = button->bg_color;
     button->background_color = button->bg_color;
     button->on_click = on_click;
+    button->corner_radius = theme_default()->effects.button_radius;
     button->w = (int)strlen(button->label) * 8 + 16;
     button->h = 24;
     button->width = button->w;

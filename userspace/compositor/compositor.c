@@ -319,12 +319,18 @@ int comp_resize_window(Window *win, int w, int h) {
     size_t need = (size_t)w * (size_t)h;
     if (need > st->surface_capacity) {
         if (!st->owns_surface) return -1;
-        uint32_t *buf = (uint32_t *)malloc(need * sizeof(uint32_t));
+        /* Interactive resizes grow a window a few pixels per frame. Reserving
+           the whole screen on first growth keeps every later resize within the
+           screen allocation-free instead of reallocating on each step. */
+        size_t capacity = need;
+        size_t screen = (size_t)comp_w * (size_t)comp_h;
+        if (screen > capacity) capacity = screen;
+        uint32_t *buf = (uint32_t *)malloc(capacity * sizeof(uint32_t));
         if (!buf) return -1;
         for (size_t i = 0; i < need; ++i) buf[i] = win->bg_color;
         if (win->surface) free(win->surface);
         win->surface = buf;
-        st->surface_capacity = need;
+        st->surface_capacity = capacity;
     }
     damage_add_rect(win->x, win->y, win->w, win->h);
     win->w = w;
@@ -529,8 +535,8 @@ static void compose_region(uint32_t *dst, const CompRect *buffer, const CompRect
     }
 }
 
-/* Damages whatever moved, appeared, vanished or changed style since the
-   previous frame, including the shadow it casts. */
+/* Damages whatever moved, appeared, vanished or changed style or shadow
+   since the previous frame, including the shadow it casts. */
 static void reconcile_windows(void) {
     for (int i = 0; i < comp_window_cnt; ++i) {
         Window *win = comp_windows[i];
@@ -540,8 +546,10 @@ static void reconcile_windows(void) {
         CompRect extent = window_extent(win);
         int visible = win->visible != 0;
         int restyled = !style_equal(&win->style, &st->last_style);
+        /* The extent also depends on live theme shadow tokens, so compare it
+           directly rather than inferring it from geometry and style. */
         if (!st->presented || restyled || visible != st->last_visible ||
-            !rect_equal(&rect, &st->last_rect)) {
+            !rect_equal(&rect, &st->last_rect) || !rect_equal(&extent, &st->last_extent)) {
             if (st->presented && st->last_visible) damage_add(&st->last_extent);
             if (visible) damage_add(&extent);
         }
