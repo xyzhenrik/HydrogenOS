@@ -216,7 +216,7 @@ static int check_kernel_access(void) {
     int fds[2];
     if (sys_pipe(fds) != 0)
         return fail("pipe");
-    char msg[16] = "0123456789abcdef";
+    char msg[16] = {'0','1','2','3','4','5','6','7','8','9','a','b','c','d','e','f'};
     if (write(fds[1], msg, sizeof(msg)) != (long)sizeof(msg))
         return fail("pipe write");
     unsigned char *straddle = p + PAGE_SIZE - 8;
