@@ -128,7 +128,9 @@ regs_t *isr_handler(regs_t *r) {
         if (irq == 0) {
             time_on_tick();
             irq0_ticks++;
-            if (process_current() != process_kernel()) {
+            /* Only a frame that interrupted user mode may become a process's
+               saved frame; a kernel-mode frame has to resume where it is. */
+            if ((r->cs & 3) == 3 && process_current() != process_kernel()) {
                 regs_t *next = process_schedule(r);
                 if (next != r) {
                     paging_switch(process_current()->pml4);
