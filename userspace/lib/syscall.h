@@ -64,6 +64,7 @@
 #define SYS_LINK 63
 #define SYS_SYMLINK 64
 #define SYS_READLINK 65
+#define SYS_SIGPROCMASK 68
 #define SYS_TRUNCATE 80
 #define SYS_PERF_READ 81
 
@@ -474,6 +475,11 @@ static inline long sys_kill(int pid, int sig) {
 }
 
 struct sigaction;
+
+static inline long sys_sigprocmask(int how, unsigned int set,
+                                   unsigned int *old) {
+    return syscall3(SYS_SIGPROCMASK, (long)how, (long)set, (long)old);
+}
 
 static inline long sys_sigaction(int sig, const struct sigaction *act,
                                  struct sigaction *old) {

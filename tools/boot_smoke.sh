@@ -136,6 +136,7 @@ if [ "$FOUND" -eq 1 ]; then
   grep -q "PERF PASS" "$LOG_FILE" || MISSING="$MISSING PERF_PASS"
   { grep -q "SPLASH PASS" "$LOG_FILE" && grep -q "\[SPLASH\] handoff to desktop" "$LOG_FILE"; } || MISSING="$MISSING SPLASH_PASS"
   grep -q "WAITQ PASS" "$LOG_FILE" || MISSING="$MISSING WAITQ_PASS"
+  grep -q "SUPERVISE PASS" "$LOG_FILE" || MISSING="$MISSING SUPERVISE_PASS"
   if [ "$REQUIRE_DESKTOP" = "1" ]; then
     grep -qE "compositor: ready|COMP READY" "$LOG_FILE" || MISSING="$MISSING COMPOSITOR_READY"
     grep -q "FRAME CHECKSUM:" "$LOG_FILE" || MISSING="$MISSING FRAME_CHECKSUM"

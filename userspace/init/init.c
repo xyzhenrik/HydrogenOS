@@ -1,5 +1,6 @@
 #include "mini_libc.h"
 #include "syscall.h"
+#include "signal.h"
 
 typedef enum init_service_type {
     INIT_SERVICE_ONESHOT = 0,
@@ -40,6 +41,13 @@ enum {
     INIT_MAX_RETRIES = 16,
     INIT_BACKOFF_CAP_MS = 30000,
     INIT_SPLASH_GRACE_SECONDS = 30,
+    INIT_DEFAULT_TIMEOUT_MS = 120000,
+    INIT_MAX_TIMEOUT_MS = 86400000,
+    /* A daemon that ran this long before dying starts over with a fresh retry
+     * budget; otherwise a long-lived service would exhaust it over weeks. */
+    INIT_DAEMON_STABLE_MS = 10000,
+    /* Interval at which init looks for exited daemons and due restarts. */
+    INIT_TICK_MS = 10,
 };
 
 typedef struct init_service_runtime {
@@ -72,6 +80,7 @@ typedef struct init_service {
     init_restart_policy_t restart_policy;
     unsigned long restart_delay_ms;
     unsigned long max_retries;
+    unsigned long timeout_ms;
     init_stdio_mode_t stdin_mode;
     init_stdio_mode_t stdout_mode;
     init_stdio_mode_t stderr_mode;
@@ -127,8 +136,26 @@ typedef struct init_syslog_source {
     int write_fd;
 } init_syslog_source_t;
 
+typedef enum init_daemon_phase {
+    INIT_DAEMON_NOT_STARTED = 0,
+    INIT_DAEMON_RUNNING = 1,
+    INIT_DAEMON_BACKOFF = 2,
+    INIT_DAEMON_STOPPED = 3,
+} init_daemon_phase_t;
+
+/* Supervision state of one daemon, indexed like the service table. */
+typedef struct init_daemon {
+    init_daemon_phase_t phase;
+    long pid;
+    unsigned long failures;
+    unsigned long started_ms;
+    unsigned long restart_at_ms;
+    init_service_runtime_t runtime;
+} init_daemon_t;
+
 typedef struct init_service_table {
     init_service_t services[INIT_MAX_SERVICES];
+    init_daemon_t daemons[INIT_MAX_SERVICES];
     char names[INIT_MAX_SERVICES][INIT_NAME_CAP];
     char paths[INIT_MAX_SERVICES][INIT_PATH_CAP];
     init_channel_t channels[INIT_MAX_CHANNELS];
@@ -136,6 +163,7 @@ typedef struct init_service_table {
     init_logsink_t logsinks[INIT_MAX_LOGSINKS];
     init_syslog_source_t syslog_sources[INIT_MAX_SYSLOG_SOURCES];
     int log_server_index;
+    unsigned long daemon_failed_count;
     unsigned long count;
     unsigned long channel_count;
     unsigned long tee_count;
@@ -1219,6 +1247,23 @@ static int parse_retries_option(const char *token, unsigned long *out) {
     return 0;
 }
 
+static unsigned long default_timeout_ms(init_service_type_t type) {
+    return type == INIT_SERVICE_ONESHOT ? INIT_DEFAULT_TIMEOUT_MS : 0;
+}
+
+static int parse_timeout_option(const char *token, unsigned long *out) {
+    const char *value = option_value(token, "timeout=");
+    unsigned long timeout;
+    if (!value || !out) {
+        return -1;
+    }
+    if (parse_u64_token(value, &timeout) != 0 || timeout > INIT_MAX_TIMEOUT_MS) {
+        return -1;
+    }
+    *out = timeout;
+    return 0;
+}
+
 static int parse_logsink_line(init_service_table_t *table, char *line) {
     char *cursor = line;
     int parse_error = 0;
@@ -1262,6 +1307,7 @@ static int parse_service_line(init_service_table_t *table, char *line) {
     char *restart_token;
     unsigned long restart_delay_ms = 0;
     unsigned long max_retries = INIT_DEFAULT_RETRIES;
+    unsigned long timeout_ms;
     unsigned long deps_mask = 0;
     int service_index;
     init_service_type_t type;
@@ -1312,6 +1358,7 @@ static int parse_service_line(init_service_table_t *table, char *line) {
         return -1;
     }
     restart_policy = default_restart_policy(type);
+    timeout_ms = default_timeout_ms(type);
     for (;;) {
         char *dep = next_token(&cursor, &parse_error);
         int dep_index;
@@ -1329,7 +1376,8 @@ static int parse_service_line(init_service_table_t *table, char *line) {
             break;
         }
         if (parse_restart_option(dep, &restart_policy) == 0 ||
-            parse_retries_option(dep, &max_retries) == 0) {
+            parse_retries_option(dep, &max_retries) == 0 ||
+            parse_timeout_option(dep, &timeout_ms) == 0) {
             continue;
         }
         if (str_eq(dep, "stdin=channel")) {
@@ -1638,6 +1686,19 @@ static int parse_service_line(init_service_table_t *table, char *line) {
          stderr_mode != INIT_STDIO_INHERIT)) {
         return -1;
     }
+    /* The log server's sources are pipes created for one particular instance,
+     * so a second instance could not take over from the first. */
+    if (is_log_server) {
+        restart_policy = INIT_RESTART_NEVER;
+    }
+    /* Shared stream bindings count writers per spawn and are closed after the
+     * last one, which a restarted daemon could no longer write to. */
+    if (type == INIT_SERVICE_DAEMON && restart_policy != INIT_RESTART_NEVER &&
+        (stdin_mode == INIT_STDIO_CHANNEL || stdin_mode == INIT_STDIO_TEE ||
+         output_mode_uses_binding(stdout_mode) ||
+         output_mode_uses_binding(stderr_mode))) {
+        return -1;
+    }
     if (stdout_mode == INIT_STDIO_SYSLOG || stderr_mode == INIT_STDIO_SYSLOG) {
         syslog_source_index = add_syslog_source(table, service_index);
         if (syslog_source_index < 0) {
@@ -1656,6 +1717,7 @@ static int parse_service_line(init_service_table_t *table, char *line) {
     svc->restart_policy = restart_policy;
     svc->restart_delay_ms = restart_delay_ms;
     svc->max_retries = max_retries;
+    svc->timeout_ms = timeout_ms;
     svc->stdin_mode = stdin_mode;
     svc->stdout_mode = stdout_mode;
     svc->stderr_mode = stderr_mode;
@@ -1958,6 +2020,182 @@ static unsigned long retry_backoff_ms(const init_service_t *svc,
     return delay < INIT_BACKOFF_CAP_MS ? delay : INIT_BACKOFF_CAP_MS;
 }
 
+static void release_runtime(init_service_table_t *table, const init_service_t *svc,
+                            init_service_runtime_t *rt) {
+    if (svc->cleanup) {
+        svc->cleanup(table, svc, rt);
+    } else {
+        close_runtime_fds(rt);
+    }
+}
+
+static int daemon_may_restart(const init_service_t *svc) {
+    return svc->type == INIT_SERVICE_DAEMON && svc->restart_policy != INIT_RESTART_NEVER;
+}
+
+/* Starts (or restarts) a daemon instance. Returns 0 once it is running. */
+static int daemon_spawn(init_service_table_t *table, unsigned long index) {
+    const init_service_t *svc = &table->services[index];
+    init_daemon_t *daemon = &table->daemons[index];
+    long pid;
+    daemon->started_ms = time_ms();
+    pid = spawn_with_runtime(table, svc, &daemon->runtime);
+    if (pid < 0) {
+        write_service_prefix(svc, " spawn failed\n");
+        release_runtime(table, svc, &daemon->runtime);
+        return -1;
+    }
+    daemon->pid = pid;
+    daemon->phase = INIT_DAEMON_RUNNING;
+    return 0;
+}
+
+/* The daemon will not run again: let its log source reach end-of-file. */
+static void daemon_stop(init_service_table_t *table, unsigned long index) {
+    table->daemons[index].phase = INIT_DAEMON_STOPPED;
+    close_syslog_source_write(table, &table->services[index]);
+}
+
+/*
+ * Applies the restart policy after an instance ended: either schedules the
+ * next start with the same backoff as run_service, or stops the daemon for
+ * good once the policy or the retry budget says so.
+ */
+static void daemon_run_ended(init_service_table_t *table, unsigned long index,
+                             int success) {
+    const init_service_t *svc = &table->services[index];
+    init_daemon_t *daemon = &table->daemons[index];
+    unsigned long delay;
+    char note[96];
+
+    if (!service_should_restart(svc, success)) {
+        if (!success) {
+            ++table->daemon_failed_count;
+        }
+        daemon_stop(table, index);
+        return;
+    }
+    if (success) {
+        daemon->failures = 0;
+        delay = svc->restart_delay_ms;
+        write_service_prefix(svc, " restart policy requests restart\n");
+    } else {
+        if (time_ms() - daemon->started_ms >= INIT_DAEMON_STABLE_MS) {
+            daemon->failures = 0;
+        }
+        if (daemon->failures >= svc->max_retries) {
+            snprintf(note, sizeof(note), " giving up after %lu failed attempts\n",
+                     daemon->failures + 1);
+            write_service_prefix(svc, note);
+            write_service_prefix(svc, " failed permanently\n");
+            ++table->daemon_failed_count;
+            daemon_stop(table, index);
+            return;
+        }
+        ++daemon->failures;
+        delay = retry_backoff_ms(svc, daemon->failures);
+        snprintf(note, sizeof(note), " retry %lu/%lu in %lu ms\n", daemon->failures,
+                 svc->max_retries, delay);
+        write_service_prefix(svc, note);
+    }
+    daemon->restart_at_ms = time_ms() + delay;
+    daemon->phase = INIT_DAEMON_BACKOFF;
+}
+
+/*
+ * Reaps daemons that have exited and restarts those whose backoff has run
+ * out. Never blocks, so it can be called from any waiting loop in init.
+ */
+static void daemons_tick(init_service_table_t *table) {
+    for (unsigned long i = 0; i < table->count; ++i) {
+        const init_service_t *svc = &table->services[i];
+        init_daemon_t *daemon = &table->daemons[i];
+        if (daemon->phase == INIT_DAEMON_RUNNING) {
+            int status = 0;
+            int success = 0;
+            long rc = try_wait_pid((int)daemon->pid, &status);
+            if (rc == 0) {
+                continue;
+            }
+            if (rc < 0) {
+                write_service_prefix(svc, " wait failed\n");
+            } else {
+                write_service_prefix(svc, " exited with status ");
+                write_u64((unsigned long)status);
+                write(1, "\n", 1);
+                success = status == 0;
+            }
+            release_runtime(table, svc, &daemon->runtime);
+            daemon_run_ended(table, i, success);
+        } else if (daemon->phase == INIT_DAEMON_BACKOFF &&
+                   (long)(time_ms() - daemon->restart_at_ms) >= 0) {
+            if (daemon_spawn(table, i) != 0) {
+                daemon_run_ended(table, i, 0);
+            } else {
+                write_service_prefix(svc, " restarted as daemon\n");
+            }
+        }
+    }
+}
+
+static unsigned long daemons_active(const init_service_table_t *table) {
+    unsigned long active = 0;
+    for (unsigned long i = 0; i < table->count; ++i) {
+        if (table->daemons[i].phase == INIT_DAEMON_RUNNING ||
+            table->daemons[i].phase == INIT_DAEMON_BACKOFF) {
+            ++active;
+        }
+    }
+    return active;
+}
+
+/* Sleeps like sleep_ms while keeping the daemons supervised. */
+static void supervised_sleep(init_service_table_t *table, unsigned long ms) {
+    unsigned long start = time_ms();
+    for (;;) {
+        unsigned long elapsed;
+        daemons_tick(table);
+        elapsed = time_ms() - start;
+        if (elapsed >= ms) {
+            return;
+        }
+        sleep_ms(ms - elapsed < INIT_TICK_MS ? ms - elapsed : INIT_TICK_MS);
+    }
+}
+
+enum {
+    INIT_WAIT_EXITED = 0,
+    INIT_WAIT_FAILED = 1,
+    INIT_WAIT_TIMED_OUT = 2,
+};
+
+/*
+ * Waits for a started service to exit while supervising the daemons. A
+ * service that outlives its timeout is killed and reaped; its exit status is
+ * then that of the kill.
+ */
+static int wait_for_service(init_service_table_t *table, const init_service_t *svc,
+                            long pid, int *status) {
+    unsigned long start = time_ms();
+    for (;;) {
+        long rc = try_wait_pid((int)pid, status);
+        if (rc < 0) {
+            return INIT_WAIT_FAILED;
+        }
+        if (rc > 0) {
+            return INIT_WAIT_EXITED;
+        }
+        daemons_tick(table);
+        if (svc->timeout_ms != 0 && time_ms() - start >= svc->timeout_ms) {
+            if (kill((int)pid, SIGKILL) < 0 || wait_pid((int)pid, status) < 0) {
+                return INIT_WAIT_FAILED;
+            }
+            return INIT_WAIT_TIMED_OUT;
+        }
+        sleep_ms(INIT_TICK_MS);
+    }
+}
+
 /*
  * Runs a service until its restart policy stops it. Returns 0 on success and
  * 1 once the service has failed for good, either by policy or because it used
@@ -1977,9 +2215,15 @@ static int run_service(init_service_table_t *table, const init_service_t *svc,
             write_service_prefix(svc, " spawn failed\n");
         } else {
             int status = 0;
+            int outcome;
             *spawned = 1;
-            if (wait_pid((int)pid, &status) < 0) {
+            outcome = wait_for_service(table, svc, pid, &status);
+            if (outcome == INIT_WAIT_FAILED) {
                 write_service_prefix(svc, " wait failed\n");
+            } else if (outcome == INIT_WAIT_TIMED_OUT) {
+                snprintf(note, sizeof(note), " timed out after %lu ms, killed\n",
+                         svc->timeout_ms);
+                write_service_prefix(svc, note);
             } else {
                 write_service_prefix(svc, " exited with status ");
                 write_u64((unsigned long)status);
@@ -1995,11 +2239,7 @@ static int run_service(init_service_table_t *table, const init_service_t *svc,
                 }
             }
         }
-        if (svc->cleanup) {
-            svc->cleanup(table, svc, &rt);
-        } else {
-            close_runtime_fds(&rt);
-        }
+        release_runtime(table, svc, &rt);
         if (!service_should_restart(svc, success)) {
             close_syslog_source_write(table, svc);
             return success ? 0 : 1;
@@ -2008,7 +2248,7 @@ static int run_service(init_service_table_t *table, const init_service_t *svc,
             failures = 0;
             write_service_prefix(svc, " restart policy requests restart\n");
             if (svc->restart_delay_ms > 0) {
-                sleep_ms(svc->restart_delay_ms);
+                supervised_sleep(table, svc->restart_delay_ms);
             }
             continue;
         }
@@ -2024,7 +2264,7 @@ static int run_service(init_service_table_t *table, const init_service_t *svc,
                  svc->max_retries, delay);
         write_service_prefix(svc, note);
         if (delay > 0) {
-            sleep_ms(delay);
+            supervised_sleep(table, delay);
         }
     }
 }
@@ -2092,18 +2332,18 @@ int main(void) {
         }
         write_service_prefix(svc, " start\n");
         if (svc->type == INIT_SERVICE_DAEMON) {
-            init_service_runtime_t rt;
-            runtime_reset(&rt);
-            long pid = spawn_with_runtime(&table, svc, &rt);
-            if (pid < 0) {
-                write_service_prefix(svc, " spawn failed\n");
+            if (daemon_spawn(&table, i) != 0) {
                 write_service_prefix(svc, " failed permanently\n");
                 release_unspawned_channel_writers(&table, svc);
                 ++failed_count;
                 continue;
             }
             write_service_prefix(svc, " started as daemon\n");
-            close_syslog_source_write(&table, svc);
+            /* A daemon that may be restarted keeps writing to the same log
+             * pipe, so init holds its write end until the daemon is stopped. */
+            if (!daemon_may_restart(svc)) {
+                close_syslog_source_write(&table, svc);
+            }
             daemon_count++;
             display_owner_count += svc->display_owner;
             ready_mask |= svc->provides_mask;
@@ -2133,15 +2373,20 @@ int main(void) {
         }
     }
     if (daemon_count > 0) {
-        /* Keep the session alive; daemons own the console/framebuffer. */
-        for (unsigned long seconds = 0;; ++seconds) {
-            if (seconds == INIT_SPLASH_GRACE_SECONDS) {
+        unsigned long grace_end_ms = time_ms() + INIT_SPLASH_GRACE_SECONDS * 1000ul;
+        int grace_expired = 0;
+
+        /* Keep the session alive while daemons own the console/framebuffer. */
+        while (daemons_active(&table) > 0) {
+            if (!grace_expired && (long)(time_ms() - grace_end_ms) >= 0) {
                 /* A display owner that never presented a frame must not leave
                    the screen on the splash; once it has, this is a no-op. */
                 report_boot("end\n");
+                grace_expired = 1;
             }
-            sleep_ms(1000);
+            daemons_tick(&table);
+            sleep_ms(INIT_TICK_MS);
         }
     }
-    return failed_count > 0 ? 1 : 0;
+    return failed_count > 0 || table.daemon_failed_count > 0 ? 1 : 0;
 }
