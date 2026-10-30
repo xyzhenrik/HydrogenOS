@@ -122,9 +122,9 @@
 - [ ] **90.** UEFI-Boot-Stub (EFI-Handoff → Kernel, neben BIOS/GRUB erhalten)
 - [ ] **91.** Boot-Splash-Screen (Framebuffer-Logo + Ladebalken)
 - [ ] **92.** GRUB-Konfiguration: Timeout, Menü-Styling, Kernel-Parameter-Passing
-- [ ] **93.** Kernel-Crash-Dump: Oops-State auf Disk schreiben (`/var/crash/`)
+- [x] **93.** Kernel-Crash-Dump: Oops-State auf Disk schreiben (`/var/crash/`)
 - [ ] **94.** Kernel-Perf-Counter: Syscall-Counts, Scheduler-Wakeups, Pipe-Latenz
-- [ ] **95.** OOM-Policy: Prozess-Killer bei Speicherdruck (Scoring nach Größe/Prio)
+- [x] **95.** OOM-Policy: Prozess-Killer bei Speicherdruck (Scoring nach Größe/Prio)
 - [x] **96.** `sys_mprotect` (RW/RX-Flags auf Mappings setzen, SIGSEGV-Basis)
 - [x] **97.** Signal-Grundgerüst: `sys_kill` / `sys_signal` / `sys_sigreturn` (SIGTERM, SIGKILL, SIGSEGV)
 - [x] **98.** Settings-App (GUI, Theme-Wechsel, Display-Helligkeit, Netzwerk-Status)

@@ -2,6 +2,7 @@
 
 #include "errno.h"
 #include "kheap.h"
+#include "oom.h"
 #include "paging.h"
 #include "pmm.h"
 
@@ -104,7 +105,7 @@ static void zero_frame(uintptr_t phys) {
 static int populate(uint64_t *pml4, uintptr_t start, uintptr_t end,
                     uint64_t page_flags) {
     for (uintptr_t addr = start; addr < end; addr += VMM_USER_PAGE_SIZE) {
-        uintptr_t phys = pmm_alloc_page();
+        uintptr_t phys = oom_alloc_page();
         int mapped = 0;
         if (phys) {
             zero_frame(phys);
@@ -136,7 +137,10 @@ int vmm_user_map(VmmUserSpace *space, uint64_t *pml4, uintptr_t hint,
     if (length > VMM_USER_MMAP_LIMIT - VMM_USER_MMAP_BASE)
         return -ENOMEM;
     length = page_round_up(length);
-    if (length / VMM_USER_PAGE_SIZE > pmm_free_page_count())
+    /* Only a request that cannot fit even in an empty machine is refused up
+       front; when merely the free pages fall short, populating makes the OOM
+       policy decide whether memory can be freed. */
+    if (length / VMM_USER_PAGE_SIZE > pmm_total_page_count())
         return -ENOMEM;
 
     uintptr_t start;
@@ -159,7 +163,7 @@ int vmm_user_map(VmmUserSpace *space, uint64_t *pml4, uintptr_t hint,
     if (!merge_prev && !merge_next) {
         if (space->region_count >= VMM_USER_MAX_REGIONS)
             return -ENOMEM;
-        node = (VmmUserRegion *)kalloc(sizeof(*node));
+        node = (VmmUserRegion *)oom_kalloc(sizeof(*node));
         if (!node)
             return -ENOMEM;
     }

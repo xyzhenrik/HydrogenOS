@@ -41,6 +41,11 @@ int signal_deliverable(const struct process *p);
  * -EINVAL for an unknown signal or -ESRCH for a dead target. */
 int signal_send(struct process *target, int sig);
 
+/* Ends p now with sig as the cause of death, without waiting for it to be
+ * scheduled: for the kernel's own use, where the signal must not be
+ * catchable or deferrable (the out-of-memory killer). */
+void signal_terminate(struct process *p, int sig);
+
 /* Syscall bodies; user pointers are probed against p's page tables. Signals
  * that would terminate the bootstrap process are refused with -EPERM. */
 int64_t signal_kill(uint32_t pid, int sig);

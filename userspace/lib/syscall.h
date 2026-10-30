@@ -78,6 +78,8 @@
 #define SYS_CHOWN 79
 #define SYS_TRUNCATE 80
 #define SYS_PERF_READ 81
+#define SYS_CRASH 82
+#define SYS_MEMINFO 83
 
 #define PRIO_IDLE   0
 #define PRIO_NORMAL 1

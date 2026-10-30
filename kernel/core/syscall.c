@@ -9,6 +9,7 @@ int fb_console_blit(int x, int y, int w, int h, const unsigned int *src);
 int fb_console_blit_strided(int x, int y, int w, int h, const unsigned int *src, int src_stride_bytes);
 void fb_console_set_cursor_visible(int visible);
 void fb_console_clear(void);
+#include "core/crash.h"
 #include "core/perf.h"
 #include "core/time.h"
 #include "fs/vfs.h"
@@ -27,6 +28,7 @@ void fb_console_clear(void);
 #include "dirent.h"
 #include "rtc.h"
 #include "power.h"
+#include "mm/meminfo.h"
 #include "net/net.h"
 #include "net/socket.h"
 #include "net/udp.h"
@@ -233,6 +235,12 @@ uint64_t syscall_handle(regs_t *r) {
             process_destroy(exiting);
         return 0;
     }
+    case SYS_CRASH:
+        return (uint64_t)crash_syscall(r->rdi, (void *)(uintptr_t)r->rsi,
+                                       (size_t)r->rdx);
+    case SYS_MEMINFO:
+        return (uint64_t)meminfo_read_user((void *)(uintptr_t)r->rdi,
+                                           (size_t)r->rsi);
     case SYS_PERF_READ:
         return (uint64_t)perf_read_user((void *)(uintptr_t)r->rdi, (size_t)r->rsi);
     case SYS_SET_LAYOUT: {

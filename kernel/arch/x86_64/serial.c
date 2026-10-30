@@ -1,4 +1,5 @@
 #include "serial.h"
+#include "core/kmsg.h"
 #include "io.h"
 
 #include <stddef.h>
@@ -56,6 +57,7 @@ int serial_is_ready(void) {
 }
 
 void serial_putc(char c) {
+    kmsg_push(c);
     if (!serial_ready)
         return;
     if (c == '\n') {
@@ -74,6 +76,17 @@ void serial_write(const char *s) {
     for (size_t i = 0; s[i]; ++i) {
         serial_putc(s[i]);
     }
+}
+
+void serial_write_decimal(uint64_t value) {
+    char digits[20];
+    int count = 0;
+    do {
+        digits[count++] = (char)('0' + value % 10);
+        value /= 10;
+    } while (value != 0);
+    while (count > 0)
+        serial_putc(digits[--count]);
 }
 
 void serial_write_hex(uint32_t value) {

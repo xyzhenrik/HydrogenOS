@@ -1,5 +1,6 @@
 logsink syslog "sink-a\nsink-b\n"
 service syslogd daemon /sbin/syslogd 100 log=server
+service crashcollect oneshot /sbin/crashcollect 100 restart=on-failure syslogd
 service bootprobe oneshot /lib/tests/bootprobe 100 restart=on-failure log=syslog syslogd
 service handoffcheck oneshot /lib/tests/handoffcheck 100 restart=on-failure stdin=pipe "init handoff ok\n" bootprobe
 service stdiocheck oneshot /lib/tests/stdiocheck 100 restart=on-failure stdin=pipe "init stdio ok\n" stdout=capture "stdiocheck: stdout ok\n" stderr=capture "stdiocheck: stderr ok\n" bootprobe handoffcheck
@@ -58,4 +59,6 @@ service superviseflap daemon /lib/tests/superviseflap 100 restart=on-failure ret
 service supervisetest oneshot /lib/tests/supervisetest 100 restart=on-failure stdout=capture "SUPERVISE PASS\n" bootprobe superviseflap
 service exectest oneshot /lib/tests/exectest 100 restart=on-failure stdout=capture "EXEC PASS\n" bootprobe
 service permtest oneshot /lib/tests/permtest 100 restart=on-failure stdout=capture "PERM PASS\n" bootprobe
-service desktopdemo daemon /sbin/desktopdemo 100 restart=always display=owner stderr=syslog login pkgtest bootprobe handoffcheck stdiocheck stdiobadbind dupcheck handlelimitcheck fileoffsetcheck seekcheck pollcheck logcollector pipeconsumer stdionullcheck fstest desktoptest pollwaitcheck pollmanycheck dupfallbackcheck rtctest proctest dirtest mmaptest powercheck nettest shelltest cwdcheck libctest linktest logtest mprotecttest udptest faulttest schedtest sigtest wptest dcachetest iotest perftest splashtest waitqtest supervisetest exectest permtest tcptest editortest fuzzycheck termtest
+service crashtest oneshot /lib/tests/crashtest 100 restart=on-failure stdout=capture "CRASH PASS\n" bootprobe crashcollect
+service oomtest oneshot /lib/tests/oomtest 100 restart=never stdout=capture "OOM PASS\n" bootprobe crashtest
+service desktopdemo daemon /sbin/desktopdemo 100 restart=always display=owner stderr=syslog login pkgtest bootprobe handoffcheck stdiocheck stdiobadbind dupcheck handlelimitcheck fileoffsetcheck seekcheck pollcheck logcollector pipeconsumer stdionullcheck fstest desktoptest pollwaitcheck pollmanycheck dupfallbackcheck rtctest proctest dirtest mmaptest powercheck nettest shelltest cwdcheck libctest linktest logtest mprotecttest udptest faulttest schedtest sigtest wptest dcachetest iotest perftest splashtest waitqtest supervisetest exectest permtest tcptest editortest fuzzycheck termtest crashtest oomtest

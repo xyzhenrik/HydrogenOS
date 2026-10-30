@@ -1,5 +1,6 @@
 #include "paging.h"
 #include "msr.h"
+#include "oom.h"
 #include "panic.h"
 #include "pmm.h"
 
@@ -93,7 +94,7 @@ static void paging_free_user_pdpt(uint64_t *pdpt_tbl) {
 }
 
 static uint64_t *alloc_table(void) {
-    uintptr_t phys = pmm_alloc_page();
+    uintptr_t phys = oom_alloc_page();
     if (!phys)
         return 0;
     uint64_t *tbl = (uint64_t *)(uintptr_t)phys;

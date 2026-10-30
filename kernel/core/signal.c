@@ -1,5 +1,6 @@
 #include "signal.h"
 
+#include "core/crash.h"
 #include "errno.h"
 #include "gdt.h"
 #include "paging.h"
@@ -137,9 +138,11 @@ static void signal_force(process_t *p, int sig) {
     state->pending |= SIGNAL_BIT(sig);
 }
 
-static void signal_terminate(process_t *p, int sig) {
-    if (SIGNAL_FAULT_MASK & SIGNAL_BIT(sig))
+void signal_terminate(process_t *p, int sig) {
+    if (SIGNAL_FAULT_MASK & SIGNAL_BIT(sig)) {
         signal_log_fatal_fault(p, sig);
+        crash_record_user_fault(p, signal_name(sig));
+    }
     p->signals.fatal_signal = sig;
     process_mark_exited(p, (int)SIGNAL_STATUS(sig));
 }
