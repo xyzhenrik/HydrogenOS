@@ -116,9 +116,9 @@
 - [x] **84.** Power-Management: sauberes Shutdown / Reboot via ACPI
 - [ ] **85.** Benutzer-Authentifizierung (`/etc/passwd`-Stil, `sys_getuid` / `sys_setuid`)
 - [ ] **86.** Datei-Permissions (Inode-Bits rwxrwxrwx, UID/GID, Kernel-Enforcement)
-- [x] **87.** Paketformat `.hpkg` (tar + JSON-Manifest: name, version, deps, files)
-- [~] **88.** Paketmanager-CLI `hpkg` (install / remove / list / update)
-- [ ] **89.** Paket-Repository-Metadaten-Format + lokales Repo-Tool
+- [x] **87.** Paketformat `.hpkg` (Textmanifest + sortierte Dateitabelle mit SHA-256, siehe `docs/HPKG.md`)
+- [x] **88.** Paketmanager-CLI `hpkg` (install / remove / list / info / verify / update; Paketdatenbank, Dateibesitz, Abhängigkeitsprüfung, Rollback)
+- [x] **89.** Paket-Repository-Metadaten-Format + lokales Repo-Tool (`index`, `tools/hpkg_repo.py`, `/var/lib/hpkg/repo`)
 - [ ] **90.** UEFI-Boot-Stub (EFI-Handoff → Kernel, neben BIOS/GRUB erhalten)
 - [ ] **91.** Boot-Splash-Screen (Framebuffer-Logo + Ladebalken)
 - [ ] **92.** GRUB-Konfiguration: Timeout, Menü-Styling, Kernel-Parameter-Passing

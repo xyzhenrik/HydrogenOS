@@ -264,9 +264,11 @@
 **Users / packaging**
 - `/etc/passwd` installed on the disk; `login` reads it and bootstraps the
   session (`login: root`, `LOGIN PASS`).
-- `.hpkg` format (magic `HPK1`, count, name/length/size/data entries) with
-  create, parse, install/extract and remove; `pkgtest` boots it end-to-end and
-  prints `PKG PASS`.
+- `hpkg` package manager (`docs/HPKG.md`): `.hpkg` archives with SHA-256,
+  package database in `/var/lib/hpkg/db`, file ownership, dependency check,
+  transactional install/upgrade with rollback, `remove`, `verify`, and a
+  local repository (`/var/lib/hpkg/repo`, built by `tools/hpkg_repo.py`);
+  `hpkgtest` prints `HPKG PASS`.
 
 **Verification**
 - `make ARCH=x86_64 build` OK; `ARCH=x86_64 tools/boot_smoke.sh` PASS

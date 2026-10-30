@@ -95,8 +95,6 @@ USER_DIRTEST_OBJ = $(BUILD_DIR)/user_dirtest.o
 USER_DIRTEST_ELF = $(BUILD_DIR)/user_dirtest.elf
 USER_LOGIN_OBJ = $(BUILD_DIR)/user_login.o
 USER_LOGIN_ELF = $(BUILD_DIR)/user_login.elf
-USER_PKGTEST_OBJ = $(BUILD_DIR)/user_pkgtest.o
-USER_PKGTEST_ELF = $(BUILD_DIR)/user_pkgtest.elf
 USER_PS_OBJ = $(BUILD_DIR)/user_ps.o
 USER_PS_ELF = $(BUILD_DIR)/user_ps.elf
 USER_PROCTEST_OBJ = $(BUILD_DIR)/user_proctest.o
@@ -205,6 +203,15 @@ USER_INIT_ELF = $(BUILD_DIR)/user_init.elf
 USER_SHELL_MODULES = shell line_editor input interrupt lexer parser brace expand env exec jobs builtins diag output account
 USER_SHELL_OBJS = $(foreach m,$(USER_SHELL_MODULES),$(BUILD_DIR)/user_shell_$(m).o)
 USER_SHELL_ELF = $(BUILD_DIR)/user_shell.elf
+USER_HPKG_MODULES = main common archive store repo
+USER_HPKG_OBJS = $(foreach m,$(USER_HPKG_MODULES),$(BUILD_DIR)/user_hpkg_$(m).o)
+USER_HPKG_ELF = $(BUILD_DIR)/user_hpkg.elf
+USER_SHA256_OBJ = $(BUILD_DIR)/user_sha256.o
+USER_HPKGTEST_OBJ = $(BUILD_DIR)/user_hpkgtest.o
+USER_HPKGTEST_ELF = $(BUILD_DIR)/user_hpkgtest.elf
+HPKG_REPO_DIR = $(BUILD_DIR)/hpkg_repo
+HPKG_REPO_STAMP = $(BUILD_DIR)/hpkg_repo.stamp
+HPKG_PACKAGE_FILES = $(shell find packages -type f 2>/dev/null)
 USER_SHELLTEST_OBJ = $(BUILD_DIR)/user_shelltest.o
 USER_SHELLTEST_ELF = $(BUILD_DIR)/user_shelltest.elf
 USER_CRT0_OBJ = $(BUILD_DIR)/user_crt0.o
@@ -297,7 +304,7 @@ ROOTFS_UNLISTED := $(filter-out $(ROOTFS_ELFS),$(USER_ELFS))
 ifneq ($(ROOTFS_UNLISTED),)
 $(error not placed by $(ROOTFS_MANIFEST): $(ROOTFS_UNLISTED))
 endif
-ROOTFS_ARGS = --manifest $(ROOTFS_MANIFEST) --build-dir $(BUILD_DIR) --init-rc $(INIT_CONFIG)
+ROOTFS_ARGS = --manifest $(ROOTFS_MANIFEST) --build-dir $(BUILD_DIR) --init-rc $(INIT_CONFIG) --repo $(HPKG_REPO_DIR)
 endif
 
 -include $(wildcard $(BUILD_DIR)/*.d)
@@ -715,13 +722,6 @@ $(USER_LOGIN_OBJ): userspace/login/login.c userspace/lib/syscall.h userspace/lib
 $(USER_LOGIN_ELF): $(USER_LOGIN_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
 	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_LOGIN_OBJ)
 
-$(USER_PKGTEST_OBJ): userspace/pkgtest/pkgtest.c userspace/lib/syscall.h userspace/lib/mini_libc.h
-	mkdir -p $(BUILD_DIR)
-	$(CC) $(USER_CFLAGS) -c $< -o $@
-
-$(USER_PKGTEST_ELF): $(USER_PKGTEST_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
-	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_PKGTEST_OBJ)
-
 $(USER_PS_OBJ): userspace/ps/ps.c userspace/lib/syscall.h userspace/lib/mini_libc.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(USER_CFLAGS) -c $< -o $@
@@ -1044,6 +1044,24 @@ $(BUILD_DIR)/user_shell_%.o: userspace/shell/%.c userspace/lib/syscall.h userspa
 $(USER_SHELL_ELF): $(USER_SHELL_OBJS) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
 	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_SHELL_OBJS)
 
+$(BUILD_DIR)/user_hpkg_%.o: userspace/hpkg/%.c $(wildcard userspace/hpkg/*.h) userspace/lib/sha256.h userspace/lib/syscall.h userspace/lib/mini_libc.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(USER_SHA256_OBJ): userspace/lib/sha256.c userspace/lib/sha256.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(USER_HPKG_ELF): $(USER_HPKG_OBJS) $(USER_SHA256_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
+	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_HPKG_OBJS) $(USER_SHA256_OBJ)
+
+$(USER_HPKGTEST_OBJ): userspace/hpkgtest/hpkgtest.c userspace/lib/sha256.h userspace/lib/syscall.h userspace/lib/mini_libc.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(USER_HPKGTEST_ELF): $(USER_HPKGTEST_OBJ) $(USER_SHA256_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
+	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_HPKGTEST_OBJ) $(USER_SHA256_OBJ)
+
 $(USER_SHELLTEST_OBJ): userspace/shelltest/shelltest.c userspace/lib/syscall.h userspace/lib/mini_libc.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(USER_CFLAGS) -c $< -o $@
@@ -1362,7 +1380,12 @@ smoke:
 clean:
 	rm -rf $(BUILD_DIR)
 
-$(ROOTFS_STAMP): tools/stage_rootfs.py $(ROOTFS_MANIFEST) $(ROOTFS_ELFS) $(INIT_CONFIG) $(FS_FILES)
+$(HPKG_REPO_STAMP): tools/hpkg_repo.py $(HPKG_PACKAGE_FILES)
+	mkdir -p $(BUILD_DIR)
+	python3 tools/hpkg_repo.py build packages $(HPKG_REPO_DIR)
+	touch $@
+
+$(ROOTFS_STAMP): tools/stage_rootfs.py $(ROOTFS_MANIFEST) $(ROOTFS_ELFS) $(INIT_CONFIG) $(FS_FILES) $(HPKG_REPO_STAMP)
 	mkdir -p $(BUILD_DIR)
 	python3 tools/stage_rootfs.py --out $(ROOTFS_STAGE) --static $(FS_DIR) $(ROOTFS_ARGS)
 	touch $@
