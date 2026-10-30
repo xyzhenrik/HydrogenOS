@@ -350,3 +350,6 @@ Open: no top bar.
   new `/bin/wc` (`-l -w -c`, stdin or files). Terminal completion now offers `chmod`, `chown`, `id`, `whoami` and the
   programs in `/bin` and `/sbin` (it used to scan `/`).
 - Open: Ctrl+D cannot end the input of a running foreground command (see `docs/TERMINAL.md`).
+Top bar (focused app name, clock), themed Editor surface, windows kept inside the work area.
+Open: no Escape key from the kernel keyboard driver, brace expansion and Ctrl+D EOF in the shell,
+`wc` missing, `ls` lists `./` and `../`.

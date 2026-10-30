@@ -271,7 +271,6 @@ void settings_palette(const Settings *settings, SettingsPalette *palette) {
 
     palette->wallpaper_top = light ? 0xE8EEF4u : 0x162030u;
     palette->wallpaper_bottom = light ? 0xC8D4E0u : 0x0C121Cu;
-    palette->wallpaper_text = light ? 0x1C2430u : 0xD0D8E0u;
 
     /* Taskbar and menu are glass tinted with the surface colour of the
        theme, so their icons and text take the ink colour of that theme. */
@@ -281,6 +280,7 @@ void settings_palette(const Settings *settings, SettingsPalette *palette) {
     palette->chrome_text = light ? 0x1C1C1Eu : 0xD0D8E0u;
     palette->chrome_dim = light ? 0x6E6E73u : 0x8090A0u;
     palette->chrome_icon = light ? 0x3A3A3Eu : 0xFFFFFFu;
+    palette->logo = light ? 0x1A7F9Fu : 0x56CCF2u;
 
     palette->title = light ? 0xE2E2E7u : 0x304050u;
     palette->title_focus = light ? 0xF6F6F9u : 0x425870u;
@@ -295,9 +295,9 @@ void settings_palette(const Settings *settings, SettingsPalette *palette) {
     palette->terminal_prompt = 0x60C060u;
     palette->terminal_dim = 0x8090A0u;
 
-    palette->document_bg = 0xF0F3F6u;
-    palette->document_text = 0x203040u;
-    palette->document_selection = 0xC9DCF5u;
+    palette->document_bg = light ? 0xF0F3F6u : 0x1E232Bu;
+    palette->document_text = light ? 0x203040u : 0xD6DCE4u;
+    palette->document_selection = light ? 0xC9DCF5u : 0x2F4B73u;
 
     palette->surface = light ? 0xF2F2F7u : 0x1C1C1Eu;
     palette->sidebar = light ? 0xE6E6EBu : 0x262629u;

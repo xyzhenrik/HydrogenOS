@@ -877,34 +877,46 @@ static const char *test_window_geometry(void) {
         return "wm work area";
     }
 
-    /* Title bar stays reachable: never above the work area, never below it,
-       and WM_MIN_TITLE_VISIBLE pixels remain at either side. */
+    /* The window stays inside the work area vertically, and WM_MIN_TITLE_VISIBLE
+       pixels of its title bar remain at either side. */
     work = wm_work_area(1000, 700, 0, 100);
     x = -5000; y = -5000;
-    wm_clamp_position(&work, 400, 30, &x, &y);
+    wm_clamp_position(&work, 400, 300, 30, &x, &y);
     if (x != WM_MIN_TITLE_VISIBLE - 400 || y != 0) {
         return "wm clamp top left";
     }
     x = 5000; y = 5000;
-    wm_clamp_position(&work, 400, 30, &x, &y);
-    if (x != 1000 - WM_MIN_TITLE_VISIBLE || y != 600 - 30) {
+    wm_clamp_position(&work, 400, 300, 30, &x, &y);
+    if (x != 1000 - WM_MIN_TITLE_VISIBLE || y != 600 - 300) {
         return "wm clamp bottom right";
     }
     x = 300; y = 200;
-    wm_clamp_position(&work, 400, 30, &x, &y);
+    wm_clamp_position(&work, 400, 300, 30, &x, &y);
     if (x != 300 || y != 200) {
         return "wm clamp inside";
     }
     x = -100; y = 0;
-    wm_clamp_position(&work, 40, 30, &x, &y);
+    wm_clamp_position(&work, 40, 300, 30, &x, &y);
     if (x != 0) {
         return "wm clamp narrow window";
     }
     work = wm_work_area(1000, 700, 40, 100);
     x = 0; y = 0;
-    wm_clamp_position(&work, 400, 30, &x, &y);
+    wm_clamp_position(&work, 400, 300, 30, &x, &y);
     if (y != 40) {
         return "wm clamp below top bar";
+    }
+    /* A window taller than the work area keeps only its title bar inside. */
+    x = 0; y = 5000;
+    wm_clamp_position(&work, 400, 900, 30, &x, &y);
+    if (y != 40 + 560 - 30) {
+        return "wm clamp tall window";
+    }
+    /* A window taller than the work area keeps only its title bar inside. */
+    x = 0; y = 5000;
+    wm_clamp_position(&work, 400, 900, 30, &x, &y);
+    if (y != 40 + 560 - 30) {
+        return "wm clamp tall window";
     }
 
     if (wm_dock_action(0, 0, 0) != WM_DOCK_LAUNCH ||
@@ -1240,12 +1252,12 @@ static const char *test_settings_palette(void) {
     }
     if (luma(light.surface) <= luma(dark.surface) || luma(light.card) <= luma(dark.card) ||
         luma(light.wallpaper_top) <= luma(dark.wallpaper_top) ||
-        luma(light.ink) >= luma(dark.ink) || luma(light.wallpaper_text) >= luma(dark.wallpaper_text)) {
+        luma(light.ink) >= luma(dark.ink)) {
         return "palette theme switch";
     }
     if (luma_distance(dark.ink, dark.surface) < 150 || luma_distance(light.ink, light.surface) < 150 ||
-        luma_distance(dark.wallpaper_text, dark.wallpaper_bottom) < 100 ||
-        luma_distance(light.wallpaper_text, light.wallpaper_bottom) < 100 ||
+        luma_distance(dark.document_text, dark.document_bg) < 150 ||
+        luma_distance(light.document_text, light.document_bg) < 150 ||
         luma_distance(dark.chrome_text, dark.taskbar) < 100 ||
         luma_distance(light.chrome_text, light.taskbar) < 100) {
         return "palette contrast";
@@ -1272,7 +1284,12 @@ static const char *test_settings_palette(void) {
         dark.title_border == dark.title || light.title_border == light.title) {
         return "palette title bar contrast";
     }
-    if (dark.terminal_bg != light.terminal_bg || dark.document_bg != light.document_bg) {
+    if (luma(light.document_bg) <= luma(dark.document_bg) ||
+        luma(light.document_text) >= luma(dark.document_text) ||
+        luma(light.document_selection) <= luma(dark.document_selection)) {
+        return "palette document follows theme";
+    }
+    if (dark.terminal_bg != light.terminal_bg) {
         return "palette theme independent tokens";
     }
 

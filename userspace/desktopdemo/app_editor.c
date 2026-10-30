@@ -121,6 +121,10 @@ static uint32_t mix(uint32_t bg, uint32_t fg, unsigned int alpha) {
     return gfx_mix(bg, fg, alpha) & 0x00FFFFFFu;
 }
 
+static unsigned int luma(uint32_t rgb) {
+    return (299u * ((rgb >> 16) & 0xFFu) + 587u * ((rgb >> 8) & 0xFFu) + 114u * (rgb & 0xFFu)) / 1000u;
+}
+
 static const char *reason(int error) {
     switch (error) {
     case ENOENT:  return "no such file or directory";
@@ -927,7 +931,9 @@ static Colors make_colors(const SettingsPalette *pal) {
     c.line = mix(c.bg, c.text, 12);
     c.thumb = mix(c.bg, c.text, 80);
     c.thumb_active = mix(c.bg, c.text, 140);
-    c.field = mix(c.bg, 0x00FFFFFFu, 200);
+    /* The prompt field is lifted off the page: white on a light page, a lighter
+       shade of the page on a dark one. */
+    c.field = mix(c.bg, 0x00FFFFFFu, luma(c.bg) > 128 ? 200 : 20);
     return c;
 }
 

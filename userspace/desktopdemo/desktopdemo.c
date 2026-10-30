@@ -17,8 +17,10 @@
 #define PAD       12
 #define LINE_H    16
 #define TASKBAR_H 56
-/* Height a top bar reserves above the work area; windows maximize below it. */
-#define TOPBAR_H  0
+/* Height of the top bar; windows maximize and drag below it. */
+#define TOPBAR_H  28
+/* Side margin of the top bar's contents. */
+#define TOPBAR_PAD 16
 #define MAX_APPS  8
 /* Rows a wheel notch scrolls the terminal by. */
 #define TERMINAL_WHEEL_ROWS 3
@@ -49,9 +51,9 @@ static int g_settings_save_failed;
 #define COL_BG_BOTTOM (g_th.wallpaper_bottom)
 #define COL_TASKBAR   (g_th.taskbar)
 #define COL_CHROME_TEXT (g_th.chrome_text)
-#define COL_WALLPAPER_TEXT (g_th.wallpaper_text)
 #define COL_CHROME_DIM  (g_th.chrome_dim)
 #define COL_CHROME_ICON (g_th.chrome_icon)
+#define COL_LOGO        (g_th.logo)
 #define COL_TITLE_BORDER (g_th.title_border)
 
 enum { APP_TERM = 0, APP_EDIT, APP_FILES, APP_SETTINGS, APP_KIND_COUNT };
@@ -83,6 +85,7 @@ static App g_apps[MAX_APPS];
 static int g_focus = -1;
 static int SW, SH;
 static Window *g_bg;
+static Window *g_topbar;
 static Window *g_taskbar;
 static Window *g_launcher;
 static int g_mx = -1, g_my = -1, g_btn = 0;
@@ -177,12 +180,25 @@ static void str_copy_to(char *dst, const char *src, int cap) {
 
 /* ---------------- icons ---------------- */
 
-/* An icon is drawn in its own colours (ICON_NATIVE) or as a silhouette in a
-   single ink colour, given as ICON_INK(rgb). */
-#define ICON_NATIVE 0u
+/* Icons are silhouettes in a single ink colour, given as ICON_INK(rgb). */
 #define ICON_INK(rgb) (0xFF000000u | ((rgb) & 0x00FFFFFFu))
 
-static void blit_icon(Window *win, int x, int y, const uint32_t *icon, int size, uint32_t ink) {
+/* The logo is a drop on a dark tile. Keyed out, only the drop remains, so it
+   sits on any chrome in a theme-appropriate ink instead of as a dark square.
+   Pixels at or below LOGO_KEY_LOW luma are tile, at or above LOGO_KEY_HIGH drop. */
+#define LOGO_KEY_LOW  48
+#define LOGO_KEY_HIGH 112
+
+/* Bilinear sample of one 8-bit channel (at bit offset shift) of four pixels;
+   wx and wy are 0..255 weights towards the right and lower neighbour. */
+static uint32_t icon_channel(uint32_t p00, uint32_t p10, uint32_t p01, uint32_t p11,
+                             uint32_t wx, uint32_t wy, int shift) {
+    uint32_t top = (((p00 >> shift) & 0xFF) * (256 - wx) + ((p10 >> shift) & 0xFF) * wx) >> 8;
+    uint32_t bottom = (((p01 >> shift) & 0xFF) * (256 - wx) + ((p11 >> shift) & 0xFF) * wx) >> 8;
+    return (top * (256 - wy) + bottom * wy) >> 8;
+}
+
+static void blit_icon(Window *win, int x, int y, const uint32_t *icon, int size, uint32_t ink, int key_dark) {
     if (!win || !win->surface || !icon || size <= 0) return;
     uint32_t *dst = (uint32_t *)win->surface;
     for (int py = 0; py < size; ++py) {
@@ -203,25 +219,20 @@ static void blit_icon(Window *win, int x, int y, const uint32_t *icon, int size,
             uint32_t p10 = icon[sy0 * ICON_SIZE + sx1];
             uint32_t p01 = icon[sy1 * ICON_SIZE + sx0];
             uint32_t p11 = icon[sy1 * ICON_SIZE + sx1];
-            uint32_t a00 = (p00 >> 24) & 0xFF, a10 = (p10 >> 24) & 0xFF;
-            uint32_t a01 = (p01 >> 24) & 0xFF, a11 = (p11 >> 24) & 0xFF;
-            uint32_t a0 = (a00 * (256 - wx) + a10 * wx) >> 8;
-            uint32_t a1 = (a01 * (256 - wx) + a11 * wx) >> 8;
-            uint32_t a = (a0 * (256 - wy) + a1 * wy) >> 8;
+            uint32_t a = icon_channel(p00, p10, p01, p11, (uint32_t)wx, (uint32_t)wy, 24);
+            if (key_dark) {
+                uint32_t r = icon_channel(p00, p10, p01, p11, (uint32_t)wx, (uint32_t)wy, 16);
+                uint32_t g = icon_channel(p00, p10, p01, p11, (uint32_t)wx, (uint32_t)wy, 8);
+                uint32_t b = icon_channel(p00, p10, p01, p11, (uint32_t)wx, (uint32_t)wy, 0);
+                int luma = (int)((299 * r + 587 * g + 114 * b) / 1000);
+                int key = (luma - LOGO_KEY_LOW) * 255 / (LOGO_KEY_HIGH - LOGO_KEY_LOW);
+                a = a * (uint32_t)(key < 0 ? 0 : (key > 255 ? 255 : key)) / 255;
+            }
             if (a == 0) continue;
-            uint32_t r = ((((p00 >> 16) & 0xFF) * (256 - wx) + ((p10 >> 16) & 0xFF) * wx) >> 8);
-            uint32_t r2 = ((((p01 >> 16) & 0xFF) * (256 - wx) + ((p11 >> 16) & 0xFF) * wx) >> 8);
-            r = (r * (256 - wy) + r2 * wy) >> 8;
-            uint32_t g = ((((p00 >> 8) & 0xFF) * (256 - wx) + ((p10 >> 8) & 0xFF) * wx) >> 8);
-            uint32_t g2 = ((((p01 >> 8) & 0xFF) * (256 - wx) + ((p11 >> 8) & 0xFF) * wx) >> 8);
-            g = (g * (256 - wy) + g2 * wy) >> 8;
-            uint32_t b = (((p00 & 0xFF) * (256 - wx) + (p10 & 0xFF) * wx) >> 8);
-            uint32_t b2 = (((p01 & 0xFF) * (256 - wx) + (p11 & 0xFF) * wx) >> 8);
-            b = (b * (256 - wy) + b2 * wy) >> 8;
             int dx = x + px, dy = y + py;
             if (dx < 0 || dy < 0 || dx >= win->w || dy >= win->h) continue;
             uint32_t *d = &dst[dy * win->w + dx];
-            uint32_t rgb = ink ? (ink & 0x00FFFFFFu) : (r << 16) | (g << 8) | b;
+            uint32_t rgb = ink & 0x00FFFFFFu;
             if (win->style.material == COMP_MATERIAL_GLASS)
                 *d = gfx_over(*d, 0xFF000000u | rgb, a);
             else
@@ -230,11 +241,16 @@ static void blit_icon(Window *win, int x, int y, const uint32_t *icon, int size,
     }
 }
 
-static void draw_icon_os(Window *win, int x, int y, int s) { blit_icon(win, x, y, icon_os, s, ICON_NATIVE); }
-static void draw_icon_terminal(Window *win, int x, int y, int s) { blit_icon(win, x, y, icon_terminal, s, ICON_INK(COL_CHROME_ICON)); }
-static void draw_icon_editor(Window *win, int x, int y, int s) { blit_icon(win, x, y, icon_editor, s, ICON_INK(COL_CHROME_ICON)); }
-static void draw_icon_files(Window *win, int x, int y, int s) { blit_icon(win, x, y, icon_files, s, ICON_INK(COL_CHROME_ICON)); }
-static void draw_icon_settings(Window *win, int x, int y, int s) { blit_icon(win, x, y, icon_settings, s, ICON_INK(COL_CHROME_ICON)); }
+/* The drop fills about three quarters of its tile, so it is drawn a third
+   larger, centred on the slot, to match the visual weight of the other icons. */
+static void draw_icon_os(Window *win, int x, int y, int s) {
+    int grown = s + s / 3;
+    blit_icon(win, x - (grown - s) / 2, y - (grown - s) / 2, icon_os, grown, ICON_INK(COL_LOGO), 1);
+}
+static void draw_icon_terminal(Window *win, int x, int y, int s) { blit_icon(win, x, y, icon_terminal, s, ICON_INK(COL_CHROME_ICON), 0); }
+static void draw_icon_editor(Window *win, int x, int y, int s) { blit_icon(win, x, y, icon_editor, s, ICON_INK(COL_CHROME_ICON), 0); }
+static void draw_icon_files(Window *win, int x, int y, int s) { blit_icon(win, x, y, icon_files, s, ICON_INK(COL_CHROME_ICON), 0); }
+static void draw_icon_settings(Window *win, int x, int y, int s) { blit_icon(win, x, y, icon_settings, s, ICON_INK(COL_CHROME_ICON), 0); }
 
 static void draw_clock(Window *win, int right_x, int y) {
     char buf[32];
@@ -284,6 +300,29 @@ static uint32_t chrome_clear(uint32_t solid_tint) {
     return g_settings.glass ? GLASS_CLEAR : solid_tint;
 }
 
+/* The text of a top bar row sits centred between its edges. */
+#define TOPBAR_TEXT_Y ((TOPBAR_H - 16) / 2)
+
+static const char *app_kind_name(int kind) {
+    switch (kind) {
+    case APP_TERM: return "Terminal";
+    case APP_EDIT: return "Editor";
+    case APP_FILES: return "Files";
+    default: return "Settings";
+    }
+}
+
+/* The name of the focused app on the left, the clock on the right. */
+static void draw_topbar(void) {
+    const char *name = g_focus >= 0 && g_apps[g_focus].used && !g_apps[g_focus].minimized
+                           ? app_kind_name(g_apps[g_focus].kind)
+                           : "HydrogenOS";
+    fill_rect(g_topbar, 0, 0, SW, TOPBAR_H, chrome_clear(COL_TASKBAR));
+    comp_text_render(g_topbar, TOPBAR_PAD, TOPBAR_TEXT_Y, name, COL_CHROME_TEXT);
+    draw_clock(g_topbar, SW - TOPBAR_PAD, TOPBAR_TEXT_Y);
+    fill_rect(g_topbar, 0, TOPBAR_H - 1, SW, 1, GLASS_INK | COL_TITLE_BORDER);
+}
+
 static void draw_taskbar(void) {
     int ty = SH - TASKBAR_H;
     fill_rect(g_taskbar, 0, 0, SW, TASKBAR_H, chrome_clear(COL_TASKBAR));
@@ -295,7 +334,6 @@ static void draw_taskbar(void) {
             fill_rect(g_taskbar, tb_icon_x(k), TASKBAR_H - 3, tb_icon_s(), 3,
                       GLASS_INK | (presence == 2 ? COL_ACCENT : COL_CHROME_DIM));
     }
-    draw_clock(g_taskbar, SW - 16, 20);
 }
 
 static void style_chrome_window(Window *win, uint32_t tint, unsigned int tint_alpha, int radius, int shadow) {
@@ -320,6 +358,7 @@ static void style_chrome_window(Window *win, uint32_t tint, unsigned int tint_al
 static void style_chrome(void) {
     unsigned int launcher_alpha = g_th.glass_alpha + LAUNCHER_EXTRA_OPACITY;
     if (launcher_alpha > LAUNCHER_MAX_OPACITY) launcher_alpha = LAUNCHER_MAX_OPACITY;
+    style_chrome_window(g_topbar, COL_TASKBAR, g_th.glass_alpha, 0, 0);
     style_chrome_window(g_taskbar, COL_TASKBAR, g_th.glass_alpha, 0, 0);
     style_chrome_window(g_launcher, COL_MENU, launcher_alpha, 16, 1);
 }
@@ -337,9 +376,8 @@ static void draw_background(void) {
         uint32_t c = ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
         for (int x = 0; x < SW; ++x) px[y * SW + x] = c;
     }
-    comp_text_render(g_bg, 24, 20, "HydrogenOS Desktop v0", COL_WALLPAPER_TEXT);
-    fill_rect(g_bg, 24, 42, 160, 2, COL_ACCENT);
     style_chrome();
+    draw_topbar();
     draw_taskbar();
 }
 
@@ -443,7 +481,14 @@ static void refresh_taskbar(void) {
     comp_damage_rect(g_bg, 0, SH - TASKBAR_H, SW, TASKBAR_H);
 }
 
-static void refresh_titlebars(void) {
+static void refresh_topbar(void) {
+    draw_topbar();
+    comp_damage_rect(g_bg, 0, 0, SW, TOPBAR_H);
+}
+
+/* Repaints what shows which window has the focus: the top bar and the title bars. */
+static void refresh_focus_chrome(void) {
+    refresh_topbar();
     for (int i = 0; i < MAX_APPS; ++i) {
         App *o = &g_apps[i];
         if (o->used && o->win && o->win->visible && !o->minimized) {
@@ -458,11 +503,12 @@ static void refresh_titlebars(void) {
     }
 }
 
-/* Puts the window on top of the other app windows. The taskbar stays above
-   them all, so a window's shadow never darkens it. */
+/* Puts the window on top of the other app windows. The top bar and the taskbar
+   stay above them all, so a window's shadow never darkens them. */
 static void raise_app_window(App *a) {
     a->focus_stamp = ++g_focus_clock;
     comp_raise(a->win);
+    comp_raise(g_topbar);
     comp_raise(g_taskbar);
 }
 
@@ -477,10 +523,10 @@ static int topmost_app(void) {
     return top;
 }
 
-/* The window under the pointer: the topmost visible one, taskbar excluded. */
+/* The window under the pointer: the topmost visible one, bars excluded. */
 static App *app_at(int mx, int my) {
     App *hit = 0;
-    if (my >= SH - TASKBAR_H) return 0;
+    if (my < TOPBAR_H || my >= SH - TASKBAR_H) return 0;
     for (int i = 0; i < MAX_APPS; ++i) {
         App *a = &g_apps[i];
         if (!a->used || a->minimized || !a->win || !a->win->visible) continue;
@@ -493,7 +539,7 @@ static App *app_at(int mx, int my) {
 static void bring_to_front(App *a, int idx) {
     g_focus = idx;
     if (a->win) raise_app_window(a);
-    refresh_titlebars();
+    refresh_focus_chrome();
 }
 
 static void focus_app(App *a) {
@@ -508,7 +554,7 @@ static void app_minimize(App *a) {
     a->resizing = 0;
     if (a->win) a->win->visible = 0;
     if (g_focus == app_index_of(a)) g_focus = topmost_app();
-    refresh_titlebars();
+    refresh_focus_chrome();
     refresh_taskbar();
 }
 
@@ -540,7 +586,7 @@ static void app_close(App *a) {
     a->resizing = 0;
     if (g_click_app == idx) g_click_app = -1;
     if (g_focus == idx) g_focus = topmost_app();
-    refresh_titlebars();
+    refresh_focus_chrome();
     refresh_taskbar();
 }
 
@@ -650,11 +696,7 @@ static int app_open_new(int kind) {
     a->win->bg_color = app_background(kind);
     style_app_window(a->win, 0);
 
-    const char *t = "Terminal";
-    if (kind == APP_EDIT) t = "Editor";
-    else if (kind == APP_FILES) t = "Files";
-    else if (kind == APP_SETTINGS) t = "Settings";
-    str_copy_to(a->title, t, sizeof(a->title));
+    str_copy_to(a->title, app_kind_name(kind), sizeof(a->title));
 
     if (kind == APP_TERM) {
         a->term = app_terminal_open(a->win, TITLE_H);
@@ -927,7 +969,7 @@ static void handle_drag(int mx, int my) {
             int nx = mx - a->drag_ox;
             int ny = my - a->drag_oy;
             CompRect work = work_area();
-            wm_clamp_position(&work, w->w, TITLE_H, &nx, &ny);
+            wm_clamp_position(&work, w->w, w->h, TITLE_H, &nx, &ny);
             if (nx == w->x && ny == w->y) continue;
             /* The compositor repaints where the window was and where it is,
                shadow included. */
@@ -1034,6 +1076,9 @@ int main(void) {
     if (!g_bg || !g_bg->surface) return 1;
     g_bg->bg_color = COL_BG_TOP;
 
+    g_topbar = comp_create_window(0, 0, SW, TOPBAR_H);
+    if (!g_topbar || !g_topbar->surface) return 1;
+
     g_taskbar = comp_create_window(0, SH - TASKBAR_H, SW, TASKBAR_H);
     if (!g_taskbar || !g_taskbar->surface) return 1;
 
@@ -1135,9 +1180,10 @@ int main(void) {
         unsigned long now_sec = time_ms() / 1000;
         if (now_sec != g_last_sec) {
             g_last_sec = now_sec;
-            fill_rect(g_taskbar, SW - 16 - CLOCK_W - 2, 16, CLOCK_W + 4, 20, chrome_clear(COL_TASKBAR));
-            draw_clock(g_taskbar, SW - 16, 20);
-            comp_damage_rect(g_bg, SW - 16 - CLOCK_W - 2, SH - TASKBAR_H + 16, CLOCK_W + 4, 20);
+            int clock_x = SW - TOPBAR_PAD - CLOCK_W - 2;
+            fill_rect(g_topbar, clock_x, TOPBAR_TEXT_Y, CLOCK_W + 4, 16, chrome_clear(COL_TASKBAR));
+            draw_clock(g_topbar, SW - TOPBAR_PAD, TOPBAR_TEXT_Y);
+            comp_damage_rect(g_bg, clock_x, TOPBAR_TEXT_Y, CLOCK_W + 4, 16);
             dirty = 1;
         }
 

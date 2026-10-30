@@ -515,7 +515,7 @@ static void draw_glass_card(const Painter *painter, const Settings *settings,
 
     draw_card(painter, card, 1);
     draw_text(painter, card->x + ROW_PAD, card->y + 10, "Glass effects", palette->ink);
-    draw_text(painter, card->x + ROW_PAD, card->y + 30, "Translucent taskbar and launcher",
+    draw_text(painter, card->x + ROW_PAD, card->y + 30, "Translucent bars and launcher",
               palette->ink_dim);
 
     fill_round(painter, track, SWITCH_HEIGHT / 2,
