@@ -1,4 +1,5 @@
 #include "settings_ui.h"
+#include "iconset.h"
 #include "mini_libc.h"
 
 #define GLYPH_WIDTH  8
@@ -10,8 +11,7 @@
 #define ITEM_HEIGHT         32
 #define ITEM_GAP            2
 #define ITEM_RADIUS         6
-#define ITEM_ICON           20
-#define ITEM_ICON_RADIUS    5
+#define ITEM_ICON           ICON_SIZE_TILE
 #define ITEM_PAD            8
 
 #define CONTENT_PAD  24
@@ -55,9 +55,9 @@ static const char *const section_names[SETTINGS_SECTION_COUNT] = {
     "Appearance", "Keyboard", "Display", "Network", "About",
 };
 
-/* Icon tile colours are fixed: they identify the section, not the theme. */
-static const uint32_t section_colors[SETTINGS_SECTION_COUNT] = {
-    0x5E5CE6u, 0x8E8E93u, 0x0A84FFu, 0x30D158u, 0x636366u,
+static const IconId section_icons[SETTINGS_SECTION_COUNT] = {
+    ICON_SECTION_APPEARANCE, ICON_SECTION_KEYBOARD, ICON_SECTION_DISPLAY,
+    ICON_SECTION_NETWORK, ICON_SECTION_ABOUT,
 };
 
 #define COLOR_WHITE        0xFFFFFFu
@@ -295,75 +295,6 @@ static void draw_check(const Painter *painter, int x, int y, uint32_t color) {
 
 /* ---------------- sidebar ---------------- */
 
-static void draw_appearance_glyph(const Painter *painter, const GfxRect *tile, uint32_t tint) {
-    GfxRect outer = rect_make(tile->x + 4, tile->y + 4, 12, 12);
-    GfxRect inner = rect_make(tile->x + 6, tile->y + 6, 8, 8);
-
-    fill_round(painter, &outer, 6, COLOR_WHITE, 255);
-    fill_round(painter, &inner, 4, tint, 255);
-    /* Left half of the inner disc, tested at doubled coordinates. */
-    for (int y = 0; y < 8; ++y) {
-        for (int x = 0; x < 4; ++x) {
-            int dx = 2 * x + 1 - 8;
-            int dy = 2 * y + 1 - 8;
-            if (dx * dx + dy * dy <= 64)
-                put_pixel(painter, inner.x + x, inner.y + y, COLOR_WHITE);
-        }
-    }
-}
-
-static void draw_keyboard_glyph(const Painter *painter, const GfxRect *tile, uint32_t tint) {
-    GfxRect body = rect_make(tile->x + 3, tile->y + 6, 14, 9);
-
-    fill_round(painter, &body, 2, COLOR_WHITE, 255);
-    for (int row = 0; row < 2; ++row) {
-        for (int key = 0; key < 4; ++key) {
-            GfxRect cap = rect_make(tile->x + 5 + key * 3, tile->y + 8 + row * 3, 2, 2);
-            fill_rect(painter, &cap, tint);
-        }
-    }
-}
-
-static void draw_display_glyph(const Painter *painter, const GfxRect *tile) {
-    GfxRect screen = rect_make(tile->x + 3, tile->y + 4, 14, 10);
-    GfxRect neck = rect_make(tile->x + 8, tile->y + 14, 4, 2);
-    GfxRect foot = rect_make(tile->x + 6, tile->y + 16, 8, 1);
-
-    fill_round(painter, &screen, 2, COLOR_WHITE, 255);
-    fill_rect(painter, &neck, COLOR_WHITE);
-    fill_rect(painter, &foot, COLOR_WHITE);
-}
-
-static void draw_network_glyph(const Painter *painter, const GfxRect *tile) {
-    for (int bar = 0; bar < 4; ++bar) {
-        int height = 4 + 3 * bar;
-        GfxRect column = rect_make(tile->x + 4 + 4 * bar, tile->y + 16 - height, 2, height);
-        fill_rect(painter, &column, COLOR_WHITE);
-    }
-}
-
-static void draw_about_glyph(const Painter *painter, const GfxRect *tile, uint32_t tint) {
-    GfxRect disc = rect_make(tile->x + 4, tile->y + 4, 12, 12);
-    GfxRect dot = rect_make(tile->x + 9, tile->y + 7, 2, 2);
-    GfxRect stem = rect_make(tile->x + 9, tile->y + 10, 2, 5);
-
-    fill_round(painter, &disc, 6, COLOR_WHITE, 255);
-    fill_rect(painter, &dot, tint);
-    fill_rect(painter, &stem, tint);
-}
-
-static void draw_glyph(const Painter *painter, int section, const GfxRect *tile) {
-    uint32_t tint = section_colors[section];
-
-    switch (section) {
-    case SETTINGS_SECTION_APPEARANCE: draw_appearance_glyph(painter, tile, tint); break;
-    case SETTINGS_SECTION_KEYBOARD:   draw_keyboard_glyph(painter, tile, tint); break;
-    case SETTINGS_SECTION_DISPLAY:    draw_display_glyph(painter, tile); break;
-    case SETTINGS_SECTION_NETWORK:    draw_network_glyph(painter, tile); break;
-    default:                          draw_about_glyph(painter, tile, tint); break;
-    }
-}
-
 static void draw_sidebar(const Painter *painter, const SettingsUi *ui,
                          const SettingsUiLayout *layout) {
     const SettingsPalette *palette = painter->palette;
@@ -384,8 +315,8 @@ static void draw_sidebar(const Painter *painter, const SettingsUi *ui,
         else if (ui->hover == SETTINGS_HIT_SECTION + i)
             fill_round(painter, item, ITEM_RADIUS, palette->ink, HOVER_OPACITY);
 
-        fill_round(painter, &icon, ITEM_ICON_RADIUS, section_colors[i], 255);
-        draw_glyph(painter, i, &icon);
+        icon_draw(&painter->canvas, section_icons[i], ITEM_ICON, icon.x, icon.y,
+                  palette->light, 255);
         draw_text(painter, icon.x + ITEM_ICON + ITEM_PAD, item->y + (item->h - GLYPH_HEIGHT) / 2,
                   section_names[i], selected ? palette->on_accent : palette->ink);
     }

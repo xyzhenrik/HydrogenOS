@@ -1,6 +1,7 @@
 #include "mini_libc.h"
 #include "compositor.h"
 #include "gfx_effects.h"
+#include "iconset.h"
 #include "settings.h"
 #include "settings_ui.h"
 #include "widgets.h"
@@ -585,6 +586,90 @@ static void fx_fill_solid(uint32_t *pixels, int count, uint32_t color) {
 #define FX_SUM_SHADOW_MASK 0x3FB639B6u
 #define FX_SUM_SHADOW      0xB57B8775u
 #define FX_SUM_GLASS       0x54492FEDu
+
+typedef struct IconUse {
+    IconId id;
+    int size;
+    int glyph;
+} IconUse;
+
+/* Every icon and size the desktop draws; all must exist in the generated set. */
+static const IconUse icon_uses[] = {
+    { ICON_TERMINAL, ICON_SIZE_APP, 0 }, { ICON_EDITOR, ICON_SIZE_APP, 0 },
+    { ICON_FILES, ICON_SIZE_APP, 0 }, { ICON_SETTINGS, ICON_SIZE_APP, 0 },
+    { ICON_FOLDER, ICON_SIZE_FILE, 0 }, { ICON_TEXT, ICON_SIZE_FILE, 0 },
+    { ICON_PAGE, ICON_SIZE_FILE, 0 }, { ICON_PROGRAM, ICON_SIZE_FILE, 0 },
+    { ICON_ARCHIVE, ICON_SIZE_FILE, 0 }, { ICON_IMAGE, ICON_SIZE_FILE, 0 },
+    { ICON_FOLDER, ICON_SIZE_FILE_SMALL, 0 }, { ICON_TEXT, ICON_SIZE_FILE_SMALL, 0 },
+    { ICON_PAGE, ICON_SIZE_FILE_SMALL, 0 }, { ICON_PROGRAM, ICON_SIZE_FILE_SMALL, 0 },
+    { ICON_ARCHIVE, ICON_SIZE_FILE_SMALL, 0 }, { ICON_IMAGE, ICON_SIZE_FILE_SMALL, 0 },
+    { ICON_PLACE_ROOT, ICON_SIZE_TILE, 0 }, { ICON_PLACE_HOME, ICON_SIZE_TILE, 0 },
+    { ICON_PLACE_TEMP, ICON_SIZE_TILE, 0 }, { ICON_PLACE_PROGRAMS, ICON_SIZE_TILE, 0 },
+    { ICON_SECTION_APPEARANCE, ICON_SIZE_TILE, 0 }, { ICON_SECTION_KEYBOARD, ICON_SIZE_TILE, 0 },
+    { ICON_SECTION_DISPLAY, ICON_SIZE_TILE, 0 }, { ICON_SECTION_NETWORK, ICON_SIZE_TILE, 0 },
+    { ICON_SECTION_ABOUT, ICON_SIZE_TILE, 0 },
+    { ICON_GLYPH_SEARCH, ICON_SIZE_GLYPH, 1 }, { ICON_GLYPH_POWER, ICON_SIZE_GLYPH, 1 },
+    { ICON_GLYPH_RESTART, ICON_SIZE_GLYPH, 1 }, { ICON_GLYPH_CHEVRON, ICON_SIZE_GLYPH, 1 },
+    { ICON_GLYPH_POWER, ICON_SIZE_GLYPH_LARGE, 1 }, { ICON_GLYPH_RESTART, ICON_SIZE_GLYPH_LARGE, 1 },
+    { ICON_GLYPH_BACK, ICON_SIZE_TOOLBAR, 1 }, { ICON_GLYPH_FORWARD, ICON_SIZE_TOOLBAR, 1 },
+    { ICON_GLYPH_UP, ICON_SIZE_TOOLBAR, 1 }, { ICON_GLYPH_VIEW_GRID, ICON_SIZE_TOOLBAR, 1 },
+    { ICON_GLYPH_VIEW_LIST, ICON_SIZE_TOOLBAR, 1 }, { ICON_GLYPH_NEW_FOLDER, ICON_SIZE_TOOLBAR, 1 },
+    { ICON_GLYPH_RENAME, ICON_SIZE_TOOLBAR, 1 }, { ICON_GLYPH_DELETE, ICON_SIZE_TOOLBAR, 1 },
+};
+
+#define ICON_TEST_SIZE 64
+#define ICON_TEST_SURFACE 0x00102030u
+
+static const char *test_icons(void) {
+    static uint32_t pixels[ICON_TEST_SIZE * ICON_TEST_SIZE];
+    GfxCanvas canvas = { pixels, ICON_TEST_SIZE, ICON_TEST_SIZE, ICON_TEST_SIZE, 0 };
+    uint32_t dark_sum;
+    uint32_t light_sum;
+    uint32_t clean_sum;
+
+    for (size_t i = 0; i < sizeof(icon_uses) / sizeof(icon_uses[0]); ++i) {
+        if (!icon_available(icon_uses[i].id, icon_uses[i].size, icon_uses[i].glyph)) {
+            return "icons set lacks a size the desktop draws";
+        }
+    }
+
+    fx_fill_solid(pixels, ICON_TEST_SIZE * ICON_TEST_SIZE, ICON_TEST_SURFACE);
+    icon_draw(&canvas, ICON_TERMINAL, ICON_SIZE_APP, 0, 0, 0, 255);
+    if (pixels[0] != ICON_TEST_SURFACE ||
+        pixels[(ICON_SIZE_APP / 2) * ICON_TEST_SIZE + ICON_SIZE_APP / 2] == ICON_TEST_SURFACE) {
+        return "icons colour blend";
+    }
+    dark_sum = gfx_checksum(pixels, ICON_TEST_SIZE, ICON_TEST_SIZE, ICON_TEST_SIZE);
+    fx_fill_solid(pixels, ICON_TEST_SIZE * ICON_TEST_SIZE, ICON_TEST_SURFACE);
+    icon_draw(&canvas, ICON_TERMINAL, ICON_SIZE_APP, 0, 0, 1, 255);
+    light_sum = gfx_checksum(pixels, ICON_TEST_SIZE, ICON_TEST_SIZE, ICON_TEST_SIZE);
+    if (dark_sum == light_sum) {
+        return "icons theme variants";
+    }
+
+    fx_fill_solid(pixels, ICON_TEST_SIZE * ICON_TEST_SIZE, ICON_TEST_SURFACE);
+    clean_sum = gfx_checksum(pixels, ICON_TEST_SIZE, ICON_TEST_SIZE, ICON_TEST_SIZE);
+    icon_draw(&canvas, ICON_GLYPH_VIEW_GRID, ICON_SIZE_TOOLBAR, 0, 0, 0, 255);
+    icon_draw_glyph(&canvas, ICON_TERMINAL, ICON_SIZE_APP, 0, 0, 0x00FFFFFFu, 255);
+    icon_draw_glyph(&canvas, ICON_GLYPH_VIEW_GRID, ICON_SIZE_TOOLBAR + 1, 0, 0, 0x00FFFFFFu, 255);
+    if (gfx_checksum(pixels, ICON_TEST_SIZE, ICON_TEST_SIZE, ICON_TEST_SIZE) != clean_sum) {
+        return "icons wrong kind or size draws";
+    }
+    icon_draw_glyph(&canvas, ICON_GLYPH_VIEW_GRID, ICON_SIZE_TOOLBAR, 0, 0, 0x00E0A040u, 255);
+    if (pixels[6 * ICON_TEST_SIZE + 6] != 0x00E0A040u || pixels[0] != ICON_TEST_SURFACE) {
+        return "icons glyph tint";
+    }
+
+    for (int i = 0; i < ICON_TEST_SIZE * ICON_TEST_SIZE; ++i) {
+        pixels[i] = 0;
+    }
+    canvas.has_alpha = 1;
+    icon_draw_glyph(&canvas, ICON_GLYPH_VIEW_GRID, ICON_SIZE_TOOLBAR, 0, 0, 0x00E0A040u, 255);
+    if (pixels[6 * ICON_TEST_SIZE + 6] != 0xFFE0A040u || pixels[0] != 0) {
+        return "icons blend on a surface with alpha";
+    }
+    return 0;
+}
 
 static const char *test_effects(void) {
     static uint32_t pixels[FX_SHADOW_W * FX_SHADOW_H];
@@ -1266,11 +1351,8 @@ static const char *test_settings_palette(void) {
         luma(light.chrome_text) >= luma(dark.chrome_text)) {
         return "palette chrome follows theme";
     }
-    if (luma_distance(dark.chrome_icon, dark.taskbar) < 100 ||
-        luma_distance(light.chrome_icon, light.taskbar) < 100 ||
-        luma_distance(dark.chrome_icon, dark.menu) < 100 ||
-        luma_distance(light.chrome_icon, light.menu) < 100) {
-        return "palette chrome icon contrast";
+    if (dark.light || !light.light) {
+        return "palette theme flag";
     }
     if (luma(light.title) <= luma(dark.title) || luma(light.title_focus) <= luma(dark.title_focus) ||
         luma(light.title_text) >= luma(dark.title_text) ||
@@ -1922,6 +2004,9 @@ int main(void) {
     }
     if (!failure) {
         failure = test_filemanager();
+    }
+    if (!failure) {
+        failure = test_icons();
     }
     if (!failure) {
         failure = test_effects();
