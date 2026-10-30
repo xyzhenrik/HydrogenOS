@@ -26,6 +26,43 @@ void elf64_dump_info(const void *image) {
     console_write("\n");
 }
 
+/* Permissions of one page: the union over every segment that touches it, so
+   that two segments sharing a page never lose each other's access. */
+static uint64_t elf64_page_flags(const elf64_phdr_t *ph, uint16_t count,
+                                 uintptr_t page) {
+    uint64_t flags = PAGE_NO_EXEC;
+    for (uint16_t i = 0; i < count; ++i) {
+        if (ph[i].p_type != ELF64_PT_LOAD || ph[i].p_memsz == 0)
+            continue;
+        uintptr_t first = (uintptr_t)ph[i].p_vaddr & ~0xFFFULL;
+        uintptr_t last = ((uintptr_t)ph[i].p_vaddr +
+                          (uintptr_t)ph[i].p_memsz - 1) & ~0xFFFULL;
+        if (page < first || page > last)
+            continue;
+        if (ph[i].p_flags & ELF64_PF_W)
+            flags |= PAGE_RW;
+        if (ph[i].p_flags & ELF64_PF_X)
+            flags &= ~PAGE_NO_EXEC;
+    }
+    return flags;
+}
+
+/* Segments are filled through writable mappings; only once every segment is
+   in place do read-only and non-executable pages get their final rights. */
+static void elf64_protect_segments(const elf64_phdr_t *ph, uint16_t count) {
+    uint64_t *pml4 = paging_current_pml4();
+    for (uint16_t i = 0; i < count; ++i) {
+        if (ph[i].p_type != ELF64_PT_LOAD || ph[i].p_memsz == 0)
+            continue;
+        uintptr_t first = (uintptr_t)ph[i].p_vaddr & ~0xFFFULL;
+        uintptr_t end = ((uintptr_t)ph[i].p_vaddr +
+                         (uintptr_t)ph[i].p_memsz + 0xFFF) & ~0xFFFULL;
+        for (uintptr_t page = first; page < end; page += 0x1000)
+            paging_user_protect_range(pml4, page, 0x1000,
+                                      elf64_page_flags(ph, count, page));
+    }
+}
+
 int elf64_load_image(const void *image, size_t size) {
     if (elf64_validate(image, size) != 0)
         return -1;
@@ -66,5 +103,6 @@ int elf64_load_image(const void *image, size_t size) {
             dst[b] = 0;
         }
     }
+    elf64_protect_segments(ph, eh->e_phnum);
     return 0;
 }

@@ -8,6 +8,7 @@
 
 struct kernel_pipe;
 struct net_socket;
+struct exit_record;
 
 enum {
     PROCESS_MAX_HANDLE = 64,
@@ -139,6 +140,10 @@ typedef struct process {
     uint32_t wait_result_pid;
     int wait_status;
     uint8_t wait_ready;
+    /* Reserved at creation for this process's own exit, and the exits of its
+     * children that have not been waited for. */
+    struct exit_record *own_exit_record;
+    struct exit_record *child_exit_records;
     int waiting_handle;
     uint8_t waiting_is_stdio;
     struct kernel_pipe *waiting_pipe;

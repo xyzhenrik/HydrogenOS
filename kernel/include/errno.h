@@ -7,6 +7,7 @@
 #define EIO        5
 #define E2BIG      7
 #define EBADF      9
+#define ECHILD     10
 #define EAGAIN     11
 #define ENOMEM     12
 #define EACCES     13

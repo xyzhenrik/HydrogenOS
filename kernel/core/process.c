@@ -1,6 +1,7 @@
 #include "process.h"
 #include "core/time.h"
 #include "errno.h"
+#include "exit_record.h"
 #include "keyboard.h"
 #include "pipe.h"
 #include "serial.h"
@@ -13,20 +14,10 @@
 #include "syscall.h"
 #include "usercopy.h"
 
-#define PROCESS_EXIT_SLOTS 32
-
-typedef struct process_exit_record {
-    uint32_t used;
-    uint32_t pid;
-    uint32_t parent_pid;
-    int status;
-} process_exit_record_t;
-
 static process_t kernel_proc;
 static process_t *current_proc = 0;
 static process_t *process_list = 0;
 static uint32_t next_pid = 1;
-static process_exit_record_t exit_records[PROCESS_EXIT_SLOTS];
 static char console_escape_pending[8];
 static uint32_t console_escape_len = 0;
 static uint32_t console_escape_pos = 0;
@@ -795,11 +786,17 @@ int process_next_info(uint32_t after_pid, process_info_t *out) {
 static void process_complete_wait(process_t *p) {
     if (!p || !p->wait_ready) return;
 
+    /* The pointer was validated when the wait began, but the status is only
+       written now, with p's address space active. copy_to_user() checks the
+       mapping again; if it has become invalid the wait fails and the exit
+       record stays with p, so a later wait can still collect the child. */
     p->frame.rax = p->wait_result_pid;
     if (p->waiting_status_ptr != 0 &&
         copy_to_user((void *)p->waiting_status_ptr, &p->wait_status,
                      sizeof(p->wait_status)) != 0) {
         p->frame.rax = (uint64_t)-PROCESS_ERR_EFAULT;
+    } else {
+        exit_record_claim(&p->child_exit_records, p->wait_result_pid, 0);
     }
 
     p->waiting_for_pid = 0;
@@ -1058,6 +1055,8 @@ void process_init(uint64_t *kernel_pml4) {
     kernel_proc.wait_result_pid = 0;
     kernel_proc.wait_status = 0;
     kernel_proc.wait_ready = 0;
+    kernel_proc.own_exit_record = 0;
+    kernel_proc.child_exit_records = 0;
     kernel_proc.waiting_handle = -1;
     kernel_proc.waiting_is_stdio = 0;
     kernel_proc.waiting_pipe = 0;
@@ -1067,12 +1066,6 @@ void process_init(uint64_t *kernel_pml4) {
     kernel_proc.kernel_wait_arg = 0;
     process_handles_reset(&kernel_proc);
     kernel_proc.next = 0;
-    for (int i = 0; i < PROCESS_EXIT_SLOTS; ++i) {
-        exit_records[i].used = 0;
-        exit_records[i].pid = 0;
-        exit_records[i].parent_pid = 0;
-        exit_records[i].status = 0;
-    }
     current_proc = &kernel_proc;
 }
 
@@ -1080,6 +1073,12 @@ process_t *process_create(uint64_t *pml4, uint32_t parent_pid) {
     if (!pml4) return 0;
     process_t *p = (process_t *)kalloc(sizeof(process_t));
     if (!p) return 0;
+    p->own_exit_record = exit_record_create();
+    if (!p->own_exit_record) {
+        kfree(p);
+        return 0;
+    }
+    p->child_exit_records = 0;
     p->pml4 = pml4;
     p->pid = next_pid++;
     p->parent_pid = parent_pid;
@@ -1145,6 +1144,9 @@ void process_destroy(process_t *p) {
         paging_destroy_user_pml4(p->pml4);
     }
     process_handles_release(p);
+    if (p->own_exit_record)
+        exit_record_destroy(p->own_exit_record);
+    exit_record_list_destroy(&p->child_exit_records);
     kfree(p);
 }
 
@@ -1165,39 +1167,25 @@ static void process_record_exit(process_t *p, int status) {
        pipe EOF/HUP propagates and processes blocked in poll/write wake up. */
     process_handles_release(p);
 
-    if (process_list) {
-        process_t *it = process_list;
-        do {
-            if (it->alive && it->pid == p->parent_pid &&
-                it->state == PROCESS_BLOCKED_WAIT &&
-                it->waiting_for_pid == p->pid) {
-                it->state = PROCESS_RUNNABLE;
-                it->wait_result_pid = p->pid;
-                it->wait_status = status;
-                it->wait_ready = 1;
-                return;
-            }
-            it = it->next;
-        } while (it && it != process_list);
-    }
+    /* Nobody can wait for the child of a process that is gone (or of the
+       kernel), so its record is simply dropped with the process. */
+    process_t *parent = process_find_by_pid(p->parent_pid);
+    if (!parent || !p->own_exit_record)
+        return;
+    exit_record_publish(&parent->child_exit_records, p->own_exit_record,
+                        p->pid, status);
+    p->own_exit_record = 0;
 
-    int slot = -1;
-    for (int i = 0; i < PROCESS_EXIT_SLOTS; ++i) {
-        if (exit_records[i].used && exit_records[i].pid == p->pid) {
-            slot = i;
-            break;
-        }
-        if (slot < 0 && !exit_records[i].used) {
-            slot = i;
-        }
+    /* A parent blocked on exactly this child is handed the status directly.
+       The record is published regardless and only claimed once the status has
+       actually reached the parent's memory. */
+    if (parent->state == PROCESS_BLOCKED_WAIT &&
+        parent->waiting_for_pid == p->pid) {
+        parent->state = PROCESS_RUNNABLE;
+        parent->wait_result_pid = p->pid;
+        parent->wait_status = status;
+        parent->wait_ready = 1;
     }
-    if (slot < 0) {
-        slot = 0;
-    }
-    exit_records[slot].used = 1;
-    exit_records[slot].pid = p->pid;
-    exit_records[slot].parent_pid = p->parent_pid;
-    exit_records[slot].status = status;
 }
 
 void process_mark_exited(process_t *p, int status) {
@@ -1301,19 +1289,8 @@ int process_bind_stdio_from_fd(process_t *dst, int stdio_fd,
 
 int process_wait(process_t *waiter, uint32_t pid, int *out_status) {
     if (!waiter || waiter == &kernel_proc || pid == 0) return -1;
-    for (int i = 0; i < PROCESS_EXIT_SLOTS; ++i) {
-        if (!exit_records[i].used || exit_records[i].pid != pid ||
-            exit_records[i].parent_pid != waiter->pid)
-            continue;
-        if (out_status) {
-            *out_status = exit_records[i].status;
-        }
-        exit_records[i].used = 0;
-        exit_records[i].pid = 0;
-        exit_records[i].parent_pid = 0;
-        exit_records[i].status = 0;
+    if (exit_record_claim(&waiter->child_exit_records, pid, out_status))
         return 0;
-    }
     if (process_find_child(waiter->pid, pid)) {
         return 1;
     }

@@ -591,7 +591,7 @@ uint64_t syscall_handle(regs_t *r) {
             return (uint64_t)-EFAULT;
         int rc = process_wait(proc, pid, &status);
         if (rc < 0)
-            return (uint64_t)-ENOENT;
+            return (uint64_t)-ECHILD;
         if (rc > 0)
             return 0;
         if (status_ptr &&
@@ -611,7 +611,7 @@ uint64_t syscall_handle(regs_t *r) {
             return (uint64_t)-EFAULT;
         int rc = process_wait(proc, pid, &status);
         if (rc < 0)
-            return (uint64_t)-ENOENT;
+            return (uint64_t)-ECHILD;
         if (rc == 0) {
             if (status_ptr &&
                 copy_to_user(status_ptr, &status, sizeof(status)) != 0)
