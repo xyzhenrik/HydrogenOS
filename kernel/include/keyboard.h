@@ -13,6 +13,9 @@ enum {
   KEY_HOME,
   KEY_END,
   KEY_DEL,
+  /* Request to open the launcher: the Super key, or Ctrl+Space. */
+  KEY_LAUNCHER,
+  KEY_ESCAPE,
 };
 
 int keyboard_read_char(void); // returns -1 if none

@@ -146,6 +146,8 @@ USER_REBOOT_OBJ = $(BUILD_DIR)/user_reboot.o
 USER_REBOOT_ELF = $(BUILD_DIR)/user_reboot.elf
 USER_POWERCHECK_OBJ = $(BUILD_DIR)/user_powercheck.o
 USER_POWERCHECK_ELF = $(BUILD_DIR)/user_powercheck.elf
+USER_FUZZYCHECK_OBJ = $(BUILD_DIR)/user_fuzzycheck.o
+USER_FUZZYCHECK_ELF = $(BUILD_DIR)/user_fuzzycheck.elf
 INIT_CONFIG = userspace/init/init.rc
 USER_COMPOSITOR_OBJ = $(BUILD_DIR)/user_compositor.o
 USER_COMPOSITOR_ELF = $(BUILD_DIR)/user_compositor.elf
@@ -174,6 +176,9 @@ USER_SETTINGS_OBJ = $(BUILD_DIR)/user_settings.o
 USER_SETTINGS_INFO_OBJ = $(BUILD_DIR)/user_settings_info.o
 USER_SETTINGS_UI_OBJ = $(BUILD_DIR)/user_settings_ui.o
 USER_SETTINGS_OBJS = $(USER_SETTINGS_OBJ) $(USER_SETTINGS_INFO_OBJ) $(USER_SETTINGS_UI_OBJ)
+USER_FUZZY_OBJ = $(BUILD_DIR)/user_fuzzy.o
+USER_SPOTLIGHT_OBJ = $(BUILD_DIR)/user_spotlight.o
+USER_LAUNCHER_OBJS = $(USER_SPOTLIGHT_OBJ) $(USER_FUZZY_OBJ)
 USER_DATE_OBJ = $(BUILD_DIR)/user_date.o
 USER_DATE_ELF = $(BUILD_DIR)/user_date.elf
 USER_RTCTEST_OBJ = $(BUILD_DIR)/user_rtctest.o
@@ -792,6 +797,13 @@ $(USER_POWERCHECK_OBJ): userspace/powercheck/powercheck.c userspace/lib/syscall.
 $(USER_POWERCHECK_ELF): $(USER_POWERCHECK_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
 	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_POWERCHECK_OBJ)
 
+$(USER_FUZZYCHECK_OBJ): userspace/fuzzycheck/fuzzycheck.c userspace/lib/fuzzy.h userspace/lib/mini_libc.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(USER_FUZZYCHECK_ELF): $(USER_FUZZYCHECK_OBJ) $(USER_FUZZY_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
+	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_FUZZYCHECK_OBJ) $(USER_FUZZY_OBJ)
+
 $(USER_PIPEPRODUCER_OBJ): userspace/pipeproducer/pipeproducer.c userspace/lib/syscall.h userspace/lib/mini_libc.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(USER_CFLAGS) -c $< -o $@
@@ -863,12 +875,20 @@ $(USER_GFX_EFFECTS_OBJ): userspace/lib/gfx_effects.c userspace/lib/gfx_effects.h
 $(USER_COMPOSITOR_ELF): $(USER_COMPOSITOR_OBJ) $(BUILD_DIR)/input_router.o $(USER_GFX_EFFECTS_OBJ) $(USER_DESKTOPTEST_THEME_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
 	$(LD) $(USER_LDFLAGS) --defsym main=comp_event_loop -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_COMPOSITOR_OBJ) $(BUILD_DIR)/input_router.o $(USER_GFX_EFFECTS_OBJ) $(USER_DESKTOPTEST_THEME_OBJ)
 
-$(USER_DESKTOPDEMO_OBJ): userspace/desktopdemo/desktopdemo.c userspace/compositor/compositor.h userspace/lib/mini_libc.h userspace/lib/syscall.h userspace/lib/wallclock.h userspace/lib/settings.h userspace/lib/settings_ui.h
+$(USER_DESKTOPDEMO_OBJ): userspace/desktopdemo/desktopdemo.c userspace/desktopdemo/spotlight.h userspace/compositor/compositor.h userspace/lib/mini_libc.h userspace/lib/syscall.h userspace/lib/wallclock.h userspace/lib/settings.h userspace/lib/settings_ui.h
 	mkdir -p $(BUILD_DIR)
-	$(CC) $(USER_CFLAGS) -Iuserspace/compositor -c $< -o $@
+	$(CC) $(USER_CFLAGS) -Iuserspace/compositor -Iuserspace/desktopdemo -c $< -o $@
 
-$(USER_DESKTOPDEMO_ELF): $(USER_DESKTOPDEMO_OBJ) $(USER_COMPOSITOR_OBJ) $(USER_GFX_EFFECTS_OBJ) $(USER_DESKTOPTEST_THEME_OBJ) $(USER_WALLCLOCK_OBJ) $(USER_SETTINGS_OBJS) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
-	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_DESKTOPDEMO_OBJ) $(USER_COMPOSITOR_OBJ) $(USER_GFX_EFFECTS_OBJ) $(USER_DESKTOPTEST_THEME_OBJ) $(USER_WALLCLOCK_OBJ) $(USER_SETTINGS_OBJS)
+$(USER_FUZZY_OBJ): userspace/lib/fuzzy.c userspace/lib/fuzzy.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(USER_SPOTLIGHT_OBJ): userspace/desktopdemo/spotlight.c userspace/desktopdemo/spotlight.h userspace/compositor/compositor.h userspace/lib/fuzzy.h userspace/lib/gfx_effects.h userspace/lib/mini_libc.h userspace/lib/settings.h userspace/lib/syscall.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -Iuserspace/compositor -Iuserspace/desktopdemo -c $< -o $@
+
+$(USER_DESKTOPDEMO_ELF): $(USER_DESKTOPDEMO_OBJ) $(USER_LAUNCHER_OBJS) $(USER_COMPOSITOR_OBJ) $(USER_GFX_EFFECTS_OBJ) $(USER_DESKTOPTEST_THEME_OBJ) $(USER_WALLCLOCK_OBJ) $(USER_SETTINGS_OBJS) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
+	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_DESKTOPDEMO_OBJ) $(USER_LAUNCHER_OBJS) $(USER_COMPOSITOR_OBJ) $(USER_GFX_EFFECTS_OBJ) $(USER_DESKTOPTEST_THEME_OBJ) $(USER_WALLCLOCK_OBJ) $(USER_SETTINGS_OBJS)
 
 $(USER_DESKTOPTEST_OBJ): userspace/desktoptest/desktoptest.c userspace/compositor/compositor.h userspace/lib/gfx_effects.h userspace/lib/mini_libc.h userspace/lib/widgets.h userspace/lib/layout.h userspace/lib/theme.h userspace/lib/taskbar.h userspace/lib/launcher.h userspace/lib/filemanager.h userspace/lib/settings.h userspace/lib/settings_info.h userspace/lib/settings_ui.h
 	mkdir -p $(BUILD_DIR)
@@ -979,7 +999,7 @@ $(USER_FAULTTEST_OBJ): userspace/faulttest/faulttest.c userspace/lib/syscall.h u
 $(USER_FAULTTEST_ELF): $(USER_FAULTTEST_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
 	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_FAULTTEST_OBJ)
 
-$(INITRD): $(USER_HELLO_ELF) $(USER_ECHO_ELF) $(USER_CAT_ELF) $(USER_TIME_ELF) $(USER_SLEEP_ELF) $(USER_PIPEREAD_ELF) $(USER_PIPEDELAYREAD_ELF) $(USER_PIPEPRODUCER_ELF) $(USER_PIPECONSUMER_ELF) $(USER_LOGPRODUCER_A_ELF) $(USER_LOGPRODUCER_B_ELF) $(USER_LOGCOLLECTOR_ELF) $(USER_BOOTPROBE_ELF) $(USER_HANDOFFCHECK_ELF) $(USER_STDIOCHECK_ELF) $(USER_STDIOBADBIND_ELF) $(USER_STDIONULLCHECK_ELF) $(USER_DUPCHECK_ELF) $(USER_HANDLELIMITCHECK_ELF) $(USER_FILEOFFSETCHECK_ELF) $(USER_SEEKCHECK_ELF) $(USER_POLLCHECK_ELF) $(USER_POLLWAITCHECK_ELF) $(USER_POLLWAKEWRITER_ELF) $(USER_POLLMANYCHECK_ELF) $(USER_CWDCHECK_ELF) $(USER_DUPFALLBACKCHECK_ELF) $(USER_FSTEST_ELF) $(USER_LOGIN_ELF) $(USER_PKGTEST_ELF) $(USER_LOGSINK_WRITER_A_ELF) $(USER_LOGSINK_WRITER_B_ELF) $(USER_TEEWRITER_ELF) $(USER_TEEREADER_A_ELF) $(USER_TEEREADER_B_ELF) $(USER_MMAPTEST_ELF) $(USER_COMPOSITOR_ELF) $(USER_DESKTOPDEMO_ELF) $(USER_DESKTOPTEST_ELF) $(USER_INIT_ELF) $(USER_SHELL_ELF) $(USER_SHELLTEST_ELF) $(INIT_CONFIG) tools/mkinitrd.py $(USER_DATE_ELF) $(USER_RTCTEST_ELF) $(USER_PS_ELF) $(USER_PROCTEST_ELF) $(USER_DIRTEST_ELF) $(USER_POWEROFF_ELF) $(USER_REBOOT_ELF) $(USER_POWERCHECK_ELF) $(USER_NETTEST_ELF) $(USER_PING_ELF) $(USER_LIBCTEST_ELF) $(USER_LINKTEST_ELF) $(USER_SYSLOGD_ELF) $(USER_LOGREAD_ELF) $(USER_LOGTEST_ELF) $(USER_MPROTECTTEST_ELF) $(USER_NSLOOKUP_ELF) $(USER_UDPTEST_ELF) $(USER_FAULTTEST_ELF) $(USER_SCHEDTEST_ELF) $(USER_SIGTEST_ELF)
+$(INITRD): $(USER_HELLO_ELF) $(USER_ECHO_ELF) $(USER_CAT_ELF) $(USER_TIME_ELF) $(USER_SLEEP_ELF) $(USER_PIPEREAD_ELF) $(USER_PIPEDELAYREAD_ELF) $(USER_PIPEPRODUCER_ELF) $(USER_PIPECONSUMER_ELF) $(USER_LOGPRODUCER_A_ELF) $(USER_LOGPRODUCER_B_ELF) $(USER_LOGCOLLECTOR_ELF) $(USER_BOOTPROBE_ELF) $(USER_HANDOFFCHECK_ELF) $(USER_STDIOCHECK_ELF) $(USER_STDIOBADBIND_ELF) $(USER_STDIONULLCHECK_ELF) $(USER_DUPCHECK_ELF) $(USER_HANDLELIMITCHECK_ELF) $(USER_FILEOFFSETCHECK_ELF) $(USER_SEEKCHECK_ELF) $(USER_POLLCHECK_ELF) $(USER_POLLWAITCHECK_ELF) $(USER_POLLWAKEWRITER_ELF) $(USER_POLLMANYCHECK_ELF) $(USER_CWDCHECK_ELF) $(USER_DUPFALLBACKCHECK_ELF) $(USER_FSTEST_ELF) $(USER_LOGIN_ELF) $(USER_PKGTEST_ELF) $(USER_LOGSINK_WRITER_A_ELF) $(USER_LOGSINK_WRITER_B_ELF) $(USER_TEEWRITER_ELF) $(USER_TEEREADER_A_ELF) $(USER_TEEREADER_B_ELF) $(USER_MMAPTEST_ELF) $(USER_COMPOSITOR_ELF) $(USER_DESKTOPDEMO_ELF) $(USER_DESKTOPTEST_ELF) $(USER_INIT_ELF) $(USER_SHELL_ELF) $(USER_SHELLTEST_ELF) $(INIT_CONFIG) tools/mkinitrd.py $(USER_DATE_ELF) $(USER_RTCTEST_ELF) $(USER_PS_ELF) $(USER_PROCTEST_ELF) $(USER_DIRTEST_ELF) $(USER_POWEROFF_ELF) $(USER_REBOOT_ELF) $(USER_POWERCHECK_ELF) $(USER_NETTEST_ELF) $(USER_PING_ELF) $(USER_LIBCTEST_ELF) $(USER_LINKTEST_ELF) $(USER_SYSLOGD_ELF) $(USER_LOGREAD_ELF) $(USER_LOGTEST_ELF) $(USER_MPROTECTTEST_ELF) $(USER_NSLOOKUP_ELF) $(USER_UDPTEST_ELF) $(USER_FAULTTEST_ELF) $(USER_SCHEDTEST_ELF) $(USER_SIGTEST_ELF) $(USER_FUZZYCHECK_ELF)
 	mkdir -p $(BUILD_DIR)
 	python3 tools/mkinitrd.py $@ \
 		user=$(USER_HELLO_ELF) \
@@ -1037,6 +1057,7 @@ $(INITRD): $(USER_HELLO_ELF) $(USER_ECHO_ELF) $(USER_CAT_ELF) $(USER_TIME_ELF) $
 		poweroff=$(USER_POWEROFF_ELF) \
 		reboot=$(USER_REBOOT_ELF) \
 		powercheck=$(USER_POWERCHECK_ELF) \
+		fuzzycheck=$(USER_FUZZYCHECK_ELF) \
 		compositor=$(USER_COMPOSITOR_ELF) \
 		desktopdemo=$(USER_DESKTOPDEMO_ELF) \
 		desktoptest=$(USER_DESKTOPTEST_ELF) \

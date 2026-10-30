@@ -112,7 +112,7 @@ void keyboard_handle_scancode(uint8_t scancode) {
     if (scancode == 0x3A) { caps = !caps; return; }
 
     if (scancode == 0x39) { // Space
-        buffer_put(' ');
+        buffer_put(ctrl ? KEY_LAUNCHER : ' ');
         return;
     }
 
@@ -126,10 +126,17 @@ void keyboard_handle_scancode(uint8_t scancode) {
             case 0x47: code = KEY_HOME; break;
             case 0x4F: code = KEY_END; break;
             case 0x53: code = KEY_DEL; break;
+            case 0x5B: /* left Super */
+            case 0x5C: code = KEY_LAUNCHER; break; /* right Super */
             default: break;
         }
         if (code) buffer_put(code);
         extended = 0;
+        return;
+    }
+
+    if (scancode == 0x01) {
+        buffer_put(KEY_ESCAPE);
         return;
     }
 
@@ -176,6 +183,8 @@ static void virtio_feed_key(int code, int value) {
             case 107: extended = 1; scancode = 0x4F; break; /* KEY_END */
             case 108: extended = 1; scancode = 0x50; break; /* KEY_DOWN */
             case 111: extended = 1; scancode = 0x53; break; /* KEY_DELETE */
+            case 125: extended = 1; scancode = 0x5B; break; /* KEY_LEFTMETA */
+            case 126: extended = 1; scancode = 0x5C; break; /* KEY_RIGHTMETA */
             default: return;
         }
     }

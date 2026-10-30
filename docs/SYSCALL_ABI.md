@@ -128,6 +128,9 @@ Beispiel: `-2` entspricht `ENOENT`.
 - Syscalls mit User-Puffern, die eine `PROT_NONE`-Seite beruehren, schlagen mit `-EFAULT` fehl. Das gilt auch fuer Ausgabepuffer auf `READ`-Seiten.
 - Beim Prozess-Exit werden alle Mappings automatisch freigegeben.
 - Die frueheren Nummern 34/35 (brk-artiges Mapping) sind stillgelegt und werden nicht wiederverwendet.
+## Tastatur (sys_kbd_read)
+- Liefert `-1`, wenn keine Taste ansteht, sonst ein Zeichen (ASCII, mit `\n`, `\b` und `\t`) oder einen Tastencode ab `0x100` fuer Tasten ohne Zeichen: `KBD_KEY_LEFT (0x100)`, `RIGHT`, `UP`, `DOWN`, `HOME`, `END`, `DELETE`, `KBD_KEY_LAUNCHER (0x107)` und `KBD_KEY_ESCAPE (0x108)`. Die Konstanten stehen in `userspace/lib/syscall.h`.
+- `KBD_KEY_LAUNCHER` kommt beim Druecken der Super-Taste (links oder rechts) und bei Strg+Leertaste. Die Konsole (stdin) sieht keinen dieser Codes; sie liefert Pfeile, Pos1, Ende und Entf als ANSI-Sequenzen und verwirft `LAUNCHER` und `ESCAPE`.
 ## Netzwerk (sys_net_info / sys_net_ping)
 - IPv4-Adressen werden als `uint32_t` mit dem ersten Oktett im hoechstwertigen Byte uebergeben (`10.0.2.15` = `0x0A00020F`).
 - `struct net_info` (32 Byte): `uint8_t mac[6]`, `uint16_t flags` (`NET_INFO_PRESENT = 1`, `NET_INFO_LINK_UP = 2`), `uint32_t ipv4`, `netmask`, `gateway`, `rx_frames`, `tx_frames`, `rx_dropped`.

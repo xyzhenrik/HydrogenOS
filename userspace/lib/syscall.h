@@ -334,6 +334,20 @@ static inline long sys_mouse_state(int *out) {
     return syscall1(SYS_MOUSE_STATE, (long)out);
 }
 
+/* sys_kbd_read() returns -1 when no key is pending, otherwise a character
+   (ASCII, with '\n', '\b' and '\t' as usual) or one of these codes for keys
+   that have none. They mirror the kernel's keyboard driver. */
+#define KBD_KEY_LEFT     0x100
+#define KBD_KEY_RIGHT    0x101
+#define KBD_KEY_UP       0x102
+#define KBD_KEY_DOWN     0x103
+#define KBD_KEY_HOME     0x104
+#define KBD_KEY_END      0x105
+#define KBD_KEY_DELETE   0x106
+/* The Super key or Ctrl+Space: opens the launcher. */
+#define KBD_KEY_LAUNCHER 0x107
+#define KBD_KEY_ESCAPE   0x108
+
 static inline long sys_kbd_read(void) {
     return syscall1(SYS_KBD_READ, 0);
 }
