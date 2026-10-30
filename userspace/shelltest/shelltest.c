@@ -90,6 +90,17 @@ static const ShellCase cases[] = {
     {"quoting",
      "echo a\\ b \"c \\\"d\\\" \\$e\" 'f  g' \"\" x # comment\n",
      "a b c \"d\" $e f  g  x\n", 0},
+    {"braces",
+     "echo {a,b}x pre{1,2}post x{a,b}{c,d} {a,b{c,d}}\n"
+     "echo {a,b\n"
+     "echo {a} {} a{,b} \\{x,y\\} '{x,y}' \"{x,y}\" ${SHELLTEST_IMPORTED}{1,2}\n"
+     "GREETING={a,b}; echo $GREETING\n"
+     "echo {a,b}{c,d}{e,f}{g,h}{i,j}{k,l}\n",
+     "ax bx pre1post pre2post xac xad xbc xbd a bc bd\n"
+     "{a,b\n"
+     "{a} {} a ab {x,y} {x,y} {x,y} yes1 yes2\n"
+     "{a,b}\n"
+     "shell: too many arguments\n", 1},
     {"kill",
      "sleep 300 &\n"
      "kill %1\n"

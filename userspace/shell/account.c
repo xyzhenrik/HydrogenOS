@@ -1,5 +1,7 @@
 #include "account.h"
 
+#include "builtin_names.h"
+
 #include "errno.h"
 #include "mini_libc.h"
 #include "output.h"
@@ -241,11 +243,10 @@ typedef struct AccountEntry {
     BuiltinFn fn;
 } AccountEntry;
 
+#define ACCOUNT_ENTRY(name) {#name, builtin_##name},
+
 static const AccountEntry commands[] = {
-    {"chmod", builtin_chmod},
-    {"chown", builtin_chown},
-    {"id", builtin_id},
-    {"whoami", builtin_whoami},
+    SHELL_ACCOUNT_NAMES(ACCOUNT_ENTRY)
 };
 
 BuiltinFn account_find(const char *name) {

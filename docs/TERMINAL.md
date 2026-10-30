@@ -30,14 +30,18 @@ for a command that reads standard input.
 | Left, Right, Home, End, Ctrl+A, Ctrl+E | Move the cursor |
 | Backspace, Delete, Ctrl+W, Ctrl+U, Ctrl+K | Delete a character, word, to the start, to the end |
 | Up, Down | History (64 entries) |
-| Tab | Complete a command name (builtins, programs in `/`) or a path relative to the shell's working directory; lists the candidates when the common prefix cannot grow |
+| Tab | Complete a command name (builtins, programs in `/bin` and `/sbin`) or a path relative to the shell's working directory; lists the candidates when the common prefix cannot grow |
 | Ctrl+C | Interrupt the foreground command; at an idle prompt, abandon the line |
 | Ctrl+D | At an empty idle prompt: end of input, the shell exits and a clean exit closes the window. On a non-empty line: delete the character under the cursor |
 | Ctrl+L | Scroll the screen so that the prompt is at the top |
 | Page Up, Page Down, mouse wheel | Scroll back through the 2000 line buffer |
 
-Ctrl+D cannot end the input of a single foreground command, because a pipe has
-one end of file for the whole shell.
+Ctrl+D cannot end the input of a single foreground command. The shell and its
+children share one input pipe, and a pipe has no in-band end of file: the only
+signal is closing the write end, which would end the shell as well, and a
+replacement pipe cannot be handed to the running shell. A real fix needs a
+terminal device with a line discipline (or a pipe operation that reports one
+end of file to the current readers and then continues).
 
 ## Interrupts
 

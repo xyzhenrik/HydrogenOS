@@ -535,6 +535,14 @@ static const char *test_filemanager(void) {
     if (fm_key(&fm, win, '\b') != 0) {
         return "filemanager up at root";
     }
+    /* Escape cancels the delete confirmation without touching the entry. */
+    if (!(fm_key(&fm, win, FM_KEY_DOWN) & FM_REDRAW) || !(fm_key(&fm, win, FM_KEY_DELETE) & FM_REDRAW) ||
+        !fm.confirm_delete) {
+        return "filemanager delete dialog";
+    }
+    if (!(fm_key(&fm, win, FM_KEY_ESCAPE) & FM_REDRAW) || fm.confirm_delete) {
+        return "filemanager escape cancels delete";
+    }
     if (!(fm_click(&fm, win, 0, 0) == 0) || fm_hover(&fm, win, -1, -1) != 0) {
         return "filemanager title bar";
     }

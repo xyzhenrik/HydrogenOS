@@ -143,6 +143,8 @@ USER_SYSLOGD_OBJ = $(BUILD_DIR)/user_syslogd.o
 USER_SYSLOGD_ELF = $(BUILD_DIR)/user_syslogd.elf
 USER_LOGREAD_OBJ = $(BUILD_DIR)/user_logread.o
 USER_LOGREAD_ELF = $(BUILD_DIR)/user_logread.elf
+USER_WC_OBJ = $(BUILD_DIR)/user_wc.o
+USER_WC_ELF = $(BUILD_DIR)/user_wc.elf
 USER_LOGTEST_OBJ = $(BUILD_DIR)/user_logtest.o
 USER_LOGTEST_ELF = $(BUILD_DIR)/user_logtest.elf
 USER_DNS_OBJ = $(BUILD_DIR)/user_dns.o
@@ -200,7 +202,7 @@ USER_EDITORTEST_OBJ = $(BUILD_DIR)/user_editortest.o
 USER_EDITORTEST_ELF = $(BUILD_DIR)/user_editortest.elf
 USER_INIT_OBJ = $(BUILD_DIR)/user_init.o
 USER_INIT_ELF = $(BUILD_DIR)/user_init.elf
-USER_SHELL_MODULES = shell line_editor input interrupt lexer parser expand env exec jobs builtins diag output account
+USER_SHELL_MODULES = shell line_editor input interrupt lexer parser brace expand env exec jobs builtins diag output account
 USER_SHELL_OBJS = $(foreach m,$(USER_SHELL_MODULES),$(BUILD_DIR)/user_shell_$(m).o)
 USER_SHELL_ELF = $(BUILD_DIR)/user_shell.elf
 USER_SHELLTEST_OBJ = $(BUILD_DIR)/user_shelltest.o
@@ -876,6 +878,13 @@ $(USER_LOGREAD_OBJ): userspace/logread/logread.c userspace/lib/mini_libc.h
 
 $(USER_LOGREAD_ELF): $(USER_LOGREAD_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
 	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_LOGREAD_OBJ)
+
+$(USER_WC_OBJ): userspace/wc/wc.c userspace/lib/mini_libc.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(USER_WC_ELF): $(USER_WC_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
+	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_WC_OBJ)
 
 $(USER_LOGTEST_OBJ): userspace/logtest/logtest.c userspace/lib/wallclock.h userspace/lib/syscall.h userspace/lib/mini_libc.h
 	mkdir -p $(BUILD_DIR)

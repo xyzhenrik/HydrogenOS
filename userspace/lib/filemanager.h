@@ -31,7 +31,8 @@ enum {
     FM_KEY_DOWN,
     FM_KEY_HOME,
     FM_KEY_END,
-    FM_KEY_DELETE
+    FM_KEY_DELETE,
+    FM_KEY_ESCAPE = 0x10A /* skips Page Up/Down and Insert, which Files ignores */
 };
 
 /* Result bits of the event functions. */
