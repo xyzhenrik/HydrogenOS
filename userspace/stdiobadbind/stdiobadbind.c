@@ -6,7 +6,7 @@ static int expect_spawn_failure_with_stdin_writer(void) {
     if (pipe(fds) != 0) {
         return -1;
     }
-    pid = spawn_with_stdio("/sleep", fds[1], -1, -1);
+    pid = spawn_with_stdio("/bin/sleep", fds[1], -1, -1);
     close(fds[0]);
     close(fds[1]);
     return pid < 0 ? 0 : -1;
@@ -18,7 +18,7 @@ static int expect_spawn_failure_with_stdout_reader(void) {
     if (pipe(fds) != 0) {
         return -1;
     }
-    pid = spawn_with_stdio("/sleep", -1, fds[0], -1);
+    pid = spawn_with_stdio("/bin/sleep", -1, fds[0], -1);
     close(fds[0]);
     close(fds[1]);
     return pid < 0 ? 0 : -1;
@@ -30,7 +30,7 @@ static int expect_spawn_failure_with_stderr_reader(void) {
     if (pipe(fds) != 0) {
         return -1;
     }
-    pid = spawn_with_stdio("/sleep", -1, -1, fds[0]);
+    pid = spawn_with_stdio("/bin/sleep", -1, -1, fds[0]);
     close(fds[0]);
     close(fds[1]);
     return pid < 0 ? 0 : -1;

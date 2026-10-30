@@ -306,7 +306,7 @@ uint64_t syscall_handle(regs_t *r) {
         return 0;
     }
     case SYS_KBD_READ: {
-        int c = keyboard_read_char();
+        int c = keyboard_read_event();
         return (uint64_t)(int64_t)c;
     }
     case SYS_MOUSE_STATE: {

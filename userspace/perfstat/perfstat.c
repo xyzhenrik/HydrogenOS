@@ -216,6 +216,26 @@ static void print_report(const hydrogen_perf_counters_t *c, uint64_t window_ms,
     }
 }
 
+static const char *const command_directories[] = {"/bin", "/sbin"};
+
+/* A name containing '/' is used as given; a bare name is looked up in the
+ * standard command directories, like the shell does with the default PATH. */
+static void resolve_command(const char *name, char *path, size_t capacity) {
+    stat_t info;
+
+    for (const char *c = name; *c; ++c) {
+        if (*c == '/') {
+            snprintf(path, capacity, "%s", name);
+            return;
+        }
+    }
+    for (size_t i = 0; i < sizeof(command_directories) / sizeof(command_directories[0]); ++i) {
+        snprintf(path, capacity, "%s/%s", command_directories[i], name);
+        if (stat(path, &info) == 0)
+            return;
+    }
+}
+
 static long run_command(int argc, char **argv) {
     const char *args[PERFSTAT_MAX_ARGS + 1];
     char path[PERFSTAT_PATH_CAP];
@@ -225,10 +245,7 @@ static long run_command(int argc, char **argv) {
         dprintf(2, "perfstat: too many arguments\n");
         return -1;
     }
-    if (argv[0][0] == '/')
-        snprintf(path, sizeof(path), "%s", argv[0]);
-    else
-        snprintf(path, sizeof(path), "/%s", argv[0]);
+    resolve_command(argv[0], path, sizeof(path));
     for (int i = 0; i < argc; ++i)
         args[i] = argv[i];
     args[argc] = 0;

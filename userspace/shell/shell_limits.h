@@ -13,4 +13,4 @@ enum {
     SHELL_PATH_MAX = 256,
 };
 
-#define SHELL_SELF_PATH "/shell"
+#define SHELL_SELF_PATH "/bin/shell"

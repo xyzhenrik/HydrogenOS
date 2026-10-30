@@ -273,20 +273,22 @@ void settings_palette(const Settings *settings, SettingsPalette *palette) {
     palette->wallpaper_bottom = light ? 0xC8D4E0u : 0x0C121Cu;
     palette->wallpaper_text = light ? 0x1C2430u : 0xD0D8E0u;
 
-    /* The light wallpaper shows through glass, so it needs a denser tint to
-       keep the white icons legible. */
-    palette->taskbar = light ? 0x1F2833u : 0x1B222Cu;
-    palette->menu = light ? 0x252F3Cu : 0x202834u;
-    palette->glass_alpha = light ? 200u : 150u;
-    palette->chrome_text = light ? 0xE6ECF2u : 0xD0D8E0u;
-    palette->chrome_dim = light ? 0xA4B0BEu : 0x8090A0u;
+    /* Taskbar and menu are glass tinted with the surface colour of the
+       theme, so their icons and text take the ink colour of that theme. */
+    palette->taskbar = light ? 0xF4F4F8u : 0x1B222Cu;
+    palette->menu = light ? 0xF8F8FBu : 0x202834u;
+    palette->glass_alpha = light ? 190u : 150u;
+    palette->chrome_text = light ? 0x1C1C1Eu : 0xD0D8E0u;
+    palette->chrome_dim = light ? 0x6E6E73u : 0x8090A0u;
+    palette->chrome_icon = light ? 0x3A3A3Eu : 0xFFFFFFu;
 
-    palette->title = 0x304050u;
-    palette->title_focus = 0x425870u;
-    palette->title_text = 0xD0D8E0u;
-    palette->close = 0xE06060u;
-    palette->minimize = 0xE0B050u;
-    palette->maximize = 0x60C060u;
+    palette->title = light ? 0xE2E2E7u : 0x304050u;
+    palette->title_focus = light ? 0xF6F6F9u : 0x425870u;
+    palette->title_text = light ? 0x1C1C1Eu : 0xD0D8E0u;
+    palette->title_border = light ? 0xC9C9CFu : 0x1E2A38u;
+    palette->close = light ? 0xFF5F57u : 0xE06060u;
+    palette->minimize = light ? 0xFEBC2Eu : 0xE0B050u;
+    palette->maximize = light ? 0x28C840u : 0x60C060u;
 
     palette->terminal_bg = 0x101820u;
     palette->terminal_text = 0xD0D8E0u;

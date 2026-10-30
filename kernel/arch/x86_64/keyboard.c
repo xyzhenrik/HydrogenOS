@@ -81,11 +81,17 @@ static inline void buffer_put(uint16_t c) {
     }
 }
 
-int keyboard_read_char(void) {
+int keyboard_read_event(void) {
     if (buf_head == buf_tail) return -1;
     uint16_t c = keybuf[buf_tail];
     buf_tail = (uint8_t)((buf_tail + 1) % KB_BUF_SIZE);
     return (int)(c);
+}
+
+/* Text consoles have no use for modifier flags on navigation keys. */
+int keyboard_read_char(void) {
+    int c = keyboard_read_event();
+    return c < 0 ? c : (c & KEY_CODE_MASK);
 }
 
 void keyboard_handle_scancode(uint8_t scancode) {
@@ -93,6 +99,7 @@ void keyboard_handle_scancode(uint8_t scancode) {
     static int extended = 0;
     static int altgr = 0;
     static int ctrl = 0;
+    static int alt = 0;
     static int caps = 0;
 
     if (scancode == 0xE0) { extended = 1; return; }
@@ -100,6 +107,7 @@ void keyboard_handle_scancode(uint8_t scancode) {
         uint8_t code = scancode & 0x7F;
         if (code == 0x2A || code == 0x36) shift = 0;
         if (code == 0x1D) ctrl = 0;
+        if (!extended && code == 0x38) alt = 0;
         if (extended && code == 0x38) altgr = 0;
         extended = 0;
         return;
@@ -108,11 +116,23 @@ void keyboard_handle_scancode(uint8_t scancode) {
      * otherwise the next key press is misread as an extended key and dropped. */
     if (scancode == 0x2A || scancode == 0x36) { shift = 1; extended = 0; return; }
     if (scancode == 0x1D) { ctrl = 1; extended = 0; return; }
+    if (!extended && scancode == 0x38) { alt = 1; return; }
     if (extended && scancode == 0x38) { altgr = 1; extended = 0; return; }
     if (scancode == 0x3A) { caps = !caps; return; }
 
+    if (scancode == 0x0F && alt) {
+        buffer_put(KEY_ALT_TAB);
+        extended = 0;
+        return;
+    }
+
     if (scancode == 0x39) { // Space
-        buffer_put(' ');
+        buffer_put(ctrl ? KEY_LAUNCHER : ' ');
+        return;
+    }
+
+    if (scancode == 0x01 && !extended) {
+        buffer_put(KEY_ESCAPE);
         return;
     }
 
@@ -126,9 +146,18 @@ void keyboard_handle_scancode(uint8_t scancode) {
             case 0x47: code = KEY_HOME; break;
             case 0x4F: code = KEY_END; break;
             case 0x53: code = KEY_DEL; break;
+            case 0x49: code = KEY_PAGE_UP; break;
+            case 0x51: code = KEY_PAGE_DOWN; break;
+            case 0x52: code = KEY_INSERT; break;
+            case 0x5B: /* left Super */
+            case 0x5C: code = KEY_LAUNCHER; break; /* right Super */
             default: break;
         }
-        if (code) buffer_put(code);
+        if (code) {
+            if (shift) code |= KEY_MOD_SHIFT;
+            if (ctrl) code |= KEY_MOD_CTRL;
+            buffer_put(code);
+        }
         extended = 0;
         return;
     }
@@ -175,7 +204,12 @@ static void virtio_feed_key(int code, int value) {
             case 106: extended = 1; scancode = 0x4D; break; /* KEY_RIGHT */
             case 107: extended = 1; scancode = 0x4F; break; /* KEY_END */
             case 108: extended = 1; scancode = 0x50; break; /* KEY_DOWN */
+            case 104: extended = 1; scancode = 0x49; break; /* KEY_PAGEUP */
+            case 109: extended = 1; scancode = 0x51; break; /* KEY_PAGEDOWN */
+            case 110: extended = 1; scancode = 0x52; break; /* KEY_INSERT */
             case 111: extended = 1; scancode = 0x53; break; /* KEY_DELETE */
+            case 125: extended = 1; scancode = 0x5B; break; /* KEY_LEFTMETA */
+            case 126: extended = 1; scancode = 0x5C; break; /* KEY_RIGHTMETA */
             default: return;
         }
     }

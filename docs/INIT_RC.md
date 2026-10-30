@@ -1,9 +1,10 @@
 # init.rc
 
-`/init.rc` is read by `init` (pid 1) at boot. If it is missing, unreadable or
-fails to parse, `init` falls back to the built-in configuration in
-`userspace/init/init.c`. The source of the shipped file is
-`userspace/init/init.rc`.
+`/etc/init.rc` is read by `init` (`/sbin/init`, pid 1) at boot. If it is
+missing, unreadable or fails to parse, `init` falls back to the built-in
+configuration in `userspace/init/init.c`. The source of the shipped file is
+`userspace/init/init.rc`; the image build installs it as `/etc/init.rc` (see
+[FS_LAYOUT.md](FS_LAYOUT.md)).
 
 Lines are processed in order. Empty lines and everything after `#` are
 ignored. Tokens are separated by whitespace; a token in double quotes may
@@ -22,7 +23,7 @@ service NAME TYPE PATH DELAY_MS [option ...] [DEPENDENCY ...]
 |-------|---------|
 | `NAME` | Unique service name (max 31 characters). |
 | `TYPE` | `oneshot`: run to completion before the next service starts. `supervised`: like `oneshot`, but defaults to `restart=always`. `daemon`: started without waiting for it; `init` supervises it in the background and restarts it according to its restart policy (see Supervision). |
-| `PATH` | Executable path (max 63 characters). |
+| `PATH` | Absolute executable path (max 63 characters): system services live in `/sbin`, boot self-tests in `/lib/tests`. |
 | `DELAY_MS` | Base delay in milliseconds before a restart or retry. |
 | `DEPENDENCY` | Name of an earlier service. The service only starts if every dependency completed successfully (a daemon counts as successful once it has been spawned). |
 
@@ -147,15 +148,15 @@ missed until the next wake-up anyway.
 ## Example
 
 ```
-service net oneshot /netup 100 retries=5
-service sync oneshot /sync 100 restart=on-failure retries=1 net
+service net oneshot /sbin/netup 100 retries=5
+service sync oneshot /sbin/sync 100 restart=on-failure retries=1 net
 ```
 
 `net` is retried up to five times with delays of 100, 200, 400, 800 and
 1600 ms. If it still fails, `sync` is skipped.
 
 ```
-service syslogd daemon /syslogd 100 log=server
+service syslogd daemon /sbin/syslogd 100 log=server
 service netd daemon /netd 200 restart=on-failure retries=5
 service migrate oneshot /migrate 100 restart=never timeout=5000
 ```

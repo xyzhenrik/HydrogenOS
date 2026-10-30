@@ -17,7 +17,7 @@ int main(void) {
     long control_fd;
     long n;
 
-    fd = open("/time", 0);
+    fd = open("/bin/time", 0);
     if (fd < 0) {
         write(1, "fileoffsetcheck: open failed\n", 29);
         return 1;
@@ -28,7 +28,7 @@ int main(void) {
         write(1, "fileoffsetcheck: dup failed\n", 28);
         return 2;
     }
-    control_fd = open("/time", 0);
+    control_fd = open("/bin/time", 0);
     if (control_fd < 0) {
         close((int)alias_fd);
         close((int)fd);

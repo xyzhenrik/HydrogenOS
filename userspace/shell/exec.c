@@ -3,6 +3,7 @@
 #include "builtins.h"
 #include "env.h"
 #include "expand.h"
+#include "interrupt.h"
 #include "jobs.h"
 #include "lexer.h"
 #include "mini_libc.h"
@@ -16,6 +17,7 @@ enum {
     STATUS_USAGE = 2,
     STATUS_CANNOT_EXECUTE = 126,
     STATUS_NOT_FOUND = 127,
+    STATUS_INTERRUPTED = 130,
 };
 
 typedef struct PreparedRedirect {
@@ -47,6 +49,7 @@ typedef struct StdioPlan {
 static int last_status = 0;
 static int exit_requested = 0;
 static int interactive = 0;
+static int terminal_host = 0;
 
 static ShellTokenList tokens;
 static ShellProgram program;
@@ -62,6 +65,8 @@ int exec_last_status(void) { return last_status; }
 void exec_request_exit(void) { exit_requested = 1; }
 int exec_exit_requested(void) { return exit_requested; }
 void exec_set_interactive(int value) { interactive = value; }
+void exec_set_terminal_host(int value) { terminal_host = value; }
+int exec_terminal_host(void) { return terminal_host; }
 
 static int expand_token(const char *line, const ShellToken *token,
                         PreparedCommand *cmd, char **out,
@@ -213,6 +218,8 @@ static int run_in_shell(BuiltinFn fn, PreparedCommand *cmd) {
     if (stdio_plan_apply(&plan, cmd) != 0)
         return STATUS_FAILURE;
     redirected = plan.fds[0] != 0 || plan.fds[1] != 1 || plan.fds[2] != 2;
+    if (redirected)
+        out_pause_color(1);
     if (redirected && fn) {
         out_flush();
         /* Save all three first: a target such as 2>&1 refers to the fd as
@@ -223,6 +230,7 @@ static int run_in_shell(BuiltinFn fn, PreparedCommand *cmd) {
                 out_error("shell", 0, "cannot save standard streams");
                 restore_stdio(&plan, saved);
                 stdio_plan_close(&plan);
+                out_pause_color(0);
                 return STATUS_FAILURE;
             }
             saved[i] = (int)fd;
@@ -236,6 +244,7 @@ static int run_in_shell(BuiltinFn fn, PreparedCommand *cmd) {
             if (dup2(src, i) < 0) {
                 restore_stdio(&plan, saved);
                 stdio_plan_close(&plan);
+                out_pause_color(0);
                 out_error("shell", 0, "cannot redirect standard streams");
                 return STATUS_FAILURE;
             }
@@ -246,6 +255,13 @@ static int run_in_shell(BuiltinFn fn, PreparedCommand *cmd) {
     out_flush();
     restore_stdio(&plan, saved);
     stdio_plan_close(&plan);
+    out_pause_color(0);
+    /* A builtin cut short by Ctrl+C leaves the cursor mid-line, where a
+     * killed child would have the shell end it. */
+    if (fn && interrupt_pending()) {
+        out_char(2, '\n');
+        out_flush();
+    }
     return status;
 }
 
@@ -262,7 +278,7 @@ static int contains_slash(const char *s) {
     return 0;
 }
 
-/* Looks name up along $PATH (default "/") into resolved_path. */
+/* Looks name up along $PATH (default "/bin:/sbin") into resolved_path. */
 static int resolve_external(const char *name) {
     size_t name_len = strlen(name);
     const char *dirs;
@@ -274,7 +290,7 @@ static int resolve_external(const char *name) {
     }
     dirs = env_get("PATH", 4);
     if (!dirs || !*dirs)
-        dirs = "/";
+        dirs = "/bin:/sbin";
     while (*dirs) {
         size_t dir_len = 0;
         size_t len;
@@ -453,6 +469,7 @@ static void report_signal_death(int status) {
 
 static int wait_all(const int *pids, int count, long status_pid) {
     int result = 0;
+    interrupt_set_targets(pids, count);
     for (int i = 0; i < count; ++i) {
         int status = 0;
         if (wait_pid(pids[i], &status) < 0) {
@@ -460,9 +477,11 @@ static int wait_all(const int *pids, int count, long status_pid) {
         } else if (WIFSIGNALED(status)) {
             report_signal_death(status);
         }
+        interrupt_target_reaped(pids[i]);
         if (pids[i] == status_pid)
             result = jobs_exit_code(status);
     }
+    interrupt_set_targets(0, 0);
     return result;
 }
 
@@ -585,6 +604,10 @@ int exec_line(const char *line) {
     }
     for (int i = 0; i < program.pipeline_count; ++i) {
         const ShellPipeline *pipeline = &program.pipelines[i];
+        if (interrupt_pending()) {
+            last_status = STATUS_INTERRUPTED;
+            break;
+        }
         if (pipeline->connector == CONNECT_IF_SUCCESS && last_status != 0)
             continue;
         if (pipeline->connector == CONNECT_IF_FAILURE && last_status == 0)
@@ -598,5 +621,7 @@ int exec_line(const char *line) {
         if (exit_requested)
             break;
     }
+    if (interrupt_pending())
+        last_status = STATUS_INTERRUPTED;
     return last_status;
 }

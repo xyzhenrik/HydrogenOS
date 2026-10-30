@@ -22,7 +22,7 @@ int main(void) {
     long control_fd;
     long n;
 
-    control_fd = open("/time", 0);
+    control_fd = open("/bin/time", 0);
     if (control_fd < 0) {
         write(1, "seekcheck: control open failed\n", 31);
         return 1;
@@ -34,7 +34,7 @@ int main(void) {
         return 2;
     }
 
-    fd = open("/time", 0);
+    fd = open("/bin/time", 0);
     if (fd < 0) {
         write(1, "seekcheck: open failed\n", 23);
         return 3;

@@ -6,7 +6,7 @@
 #include <stdarg.h>
 #include <stdint.h>
 
-#define SCRATCH_FILE "/libctest.tmp"
+#define SCRATCH_FILE "/tmp/libctest.tmp"
 
 #define CHECK(cond)                                    \
     do {                                               \
@@ -462,7 +462,7 @@ static int environment_child(int argc, char **argv) {
 static int run_child(const char *mode, const char *const *envp) {
     const char *argv[] = {"libctest", mode, 0};
     int status = -1;
-    long pid = spawn_args("/libctest", argv, envp, SPAWN_STDIO_NULL, SPAWN_STDIO_NULL,
+    long pid = spawn_args("/lib/tests/libctest", argv, envp, SPAWN_STDIO_NULL, SPAWN_STDIO_NULL,
                           SPAWN_STDIO_NULL);
     if (pid <= 0)
         return -1000;
@@ -678,7 +678,7 @@ static int check_stream_edges(void) {
     CHECK(fclose(f) == 0);
 
     errno = 0;
-    CHECK(fopen("/libctest.missing", "r") == 0 && errno == ENOENT);
+    CHECK(fopen("/tmp/libctest.missing", "r") == 0 && errno == ENOENT);
     errno = 0;
     CHECK(fopen(SCRATCH_FILE, "q") == 0 && errno == EINVAL);
     errno = 0;

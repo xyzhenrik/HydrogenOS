@@ -48,7 +48,7 @@ int main(void) {
         return 2;
     }
 
-    if (open("/time", 0) != -EMFILE_ERRNO) {
+    if (open("/bin/time", 0) != -EMFILE_ERRNO) {
         close_handles(dup_fds, count);
         write(1, "handlelimitcheck: open did not hit emfile\n", 42);
         return 3;
@@ -65,7 +65,7 @@ int main(void) {
     /* Free one slot and verify it becomes usable again. */
     close(dup_fds[count - 1]);
     dup_fds[count - 1] = -1;
-    fd = open("/time", 0);
+    fd = open("/bin/time", 0);
     if (fd < 0) {
         close_handles(dup_fds, count);
         write(1, "handlelimitcheck: open did not recover\n", 39);

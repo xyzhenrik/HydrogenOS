@@ -76,7 +76,7 @@ static long spawn_child(unsigned status, unsigned delay_ms, int out_fd) {
     snprintf(status_arg, sizeof(status_arg), "%u", status);
     snprintf(delay_arg, sizeof(delay_arg), "%u", delay_ms);
     const char *argv[] = {"wptest", "child", status_arg, delay_arg, 0};
-    return spawn_args("/wptest", argv, 0, SPAWN_STDIO_NULL, out_fd,
+    return spawn_args("/lib/tests/wptest", argv, 0, SPAWN_STDIO_NULL, out_fd,
                       SPAWN_STDIO_INHERIT);
 }
 
@@ -237,7 +237,7 @@ static int check_unreaped_children(void) {
 
 static int check_orphans(void) {
     const char *argv[] = {"wptest", "orphaner", 0};
-    long orphaner = spawn_args("/wptest", argv, 0, SPAWN_STDIO_NULL,
+    long orphaner = spawn_args("/lib/tests/wptest", argv, 0, SPAWN_STDIO_NULL,
                                SPAWN_STDIO_NULL, SPAWN_STDIO_INHERIT);
     if (orphaner <= 0)
         return fail("spawn orphaner", orphaner);
@@ -258,7 +258,7 @@ static int check_orphans(void) {
 
 static int run_access_child(const char *role, int expected_status) {
     const char *argv[] = {"wptest", role, 0};
-    long pid = spawn_args("/wptest", argv, 0, SPAWN_STDIO_NULL,
+    long pid = spawn_args("/lib/tests/wptest", argv, 0, SPAWN_STDIO_NULL,
                           SPAWN_STDIO_NULL, SPAWN_STDIO_INHERIT);
     if (pid <= 0)
         return fail(role, pid);

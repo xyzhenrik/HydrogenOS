@@ -123,7 +123,7 @@ static int role_crash(void) {
 
 static long spawn_role(const char *role, int in_fd, int out_fd) {
     const char *argv[] = {"perftest", role, 0};
-    return spawn_args("/perftest", argv, 0, in_fd, out_fd, SPAWN_STDIO_INHERIT);
+    return spawn_args("/lib/tests/perftest", argv, 0, in_fd, out_fd, SPAWN_STDIO_INHERIT);
 }
 
 static int check_interface(void) {

@@ -51,7 +51,7 @@ static int chain_next(int argc, char **argv, unsigned long remaining) {
     next_argv[ARG_CHAIN] = chain_text;
     next_argv[argc] = 0;
     return fail("chain execv",
-                execv("/exechelper", (const char *const *)next_argv));
+                execv("/lib/tests/exechelper", (const char *const *)next_argv));
 }
 
 int main(int argc, char **argv) {

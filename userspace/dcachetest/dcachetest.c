@@ -23,18 +23,18 @@ typedef struct dcache_counters {
 } dcache_counters_t;
 
 static const char *const cleanup_files[] = {
-    "/dctree/a/b/c/d/e/f/g/leaf.txt", "/dctree/fresh.txt", "/dctree/gone.txt",
-    "/dctree/old.txt", "/dctree/new.txt", "/dctree/r_src", "/dctree/r_dst",
-    "/dctree/m1/dir/inner.txt", "/dctree/m2/dir/inner.txt", "/dctree/hl",
-    "/dctree/orig", "/dctree/t1", "/dctree/t2", "/dctree/sl", "/dctree/dang",
-    "/dctree/later", "/dctree/d1/kept.txt", "/dctree/d2/kept.txt",
+    "/tmp/dctree/a/b/c/d/e/f/g/leaf.txt", "/tmp/dctree/fresh.txt", "/tmp/dctree/gone.txt",
+    "/tmp/dctree/old.txt", "/tmp/dctree/new.txt", "/tmp/dctree/r_src", "/tmp/dctree/r_dst",
+    "/tmp/dctree/m1/dir/inner.txt", "/tmp/dctree/m2/dir/inner.txt", "/tmp/dctree/hl",
+    "/tmp/dctree/orig", "/tmp/dctree/t1", "/tmp/dctree/t2", "/tmp/dctree/sl", "/tmp/dctree/dang",
+    "/tmp/dctree/later", "/tmp/dctree/d1/kept.txt", "/tmp/dctree/d2/kept.txt",
 };
 
 static const char *const cleanup_dirs[] = {
-    "/dctree/a/b/c/d/e/f/g", "/dctree/a/b/c/d/e/f", "/dctree/a/b/c/d/e",
-    "/dctree/a/b/c/d", "/dctree/a/b/c", "/dctree/a/b", "/dctree/a",
-    "/dctree/m1/dir", "/dctree/m2/dir", "/dctree/m1", "/dctree/m2",
-    "/dctree/d1", "/dctree/d2", "/dctree",
+    "/tmp/dctree/a/b/c/d/e/f/g", "/tmp/dctree/a/b/c/d/e/f", "/tmp/dctree/a/b/c/d/e",
+    "/tmp/dctree/a/b/c/d", "/tmp/dctree/a/b/c", "/tmp/dctree/a/b", "/tmp/dctree/a",
+    "/tmp/dctree/m1/dir", "/tmp/dctree/m2/dir", "/tmp/dctree/m1", "/tmp/dctree/m2",
+    "/tmp/dctree/d1", "/tmp/dctree/d2", "/tmp/dctree",
 };
 
 static int fail(const char *reason) {
@@ -44,8 +44,8 @@ static int fail(const char *reason) {
 
 /* A name longer than anything the cache stores. */
 static void long_path(char *out, char fill) {
-    size_t base = strlen("/dctree/");
-    memcpy(out, "/dctree/", base);
+    size_t base = strlen("/tmp/dctree/");
+    memcpy(out, "/tmp/dctree/", base);
     for (size_t i = 0; i < LONG_NAME_LEN; ++i)
         out[base + i] = fill;
     out[base + LONG_NAME_LEN] = '\0';
@@ -144,11 +144,11 @@ static int make_dirs(const char *const *paths, size_t count) {
 
 static int check_repeated_lookups(void) {
     static const char *const dirs[] = {
-        "/dctree/a", "/dctree/a/b", "/dctree/a/b/c",
-        "/dctree/a/b/c/d", "/dctree/a/b/c/d/e", "/dctree/a/b/c/d/e/f",
-        "/dctree/a/b/c/d/e/f/g",
+        "/tmp/dctree/a", "/tmp/dctree/a/b", "/tmp/dctree/a/b/c",
+        "/tmp/dctree/a/b/c/d", "/tmp/dctree/a/b/c/d/e", "/tmp/dctree/a/b/c/d/e/f",
+        "/tmp/dctree/a/b/c/d/e/f/g",
     };
-    const char *deep = "/dctree/a/b/c/d/e/f/g/leaf.txt";
+    const char *deep = "/tmp/dctree/a/b/c/d/e/f/g/leaf.txt";
     if (make_dirs(dirs, sizeof(dirs) / sizeof(dirs[0])) != 0)
         return fail("create deep directories");
     if (sys_writef(deep, "deep", 4) != 0)
@@ -183,95 +183,95 @@ static int check_repeated_lookups(void) {
 
 static int check_negative_entries(void) {
     dcache_counters_t before, after;
-    if (!is_absent("/dctree/fresh.txt"))
+    if (!is_absent("/tmp/dctree/fresh.txt"))
         return fail("fresh.txt exists early");
     if (read_counters(&before) != 0)
         return fail("read counters");
-    if (!is_absent("/dctree/fresh.txt"))
+    if (!is_absent("/tmp/dctree/fresh.txt"))
         return fail("fresh.txt exists early on repeat");
     if (read_counters(&after) != 0)
         return fail("read counters again");
     if (after.negative_hits <= before.negative_hits)
         return fail("absent name was not served from the cache");
 
-    if (sys_writef("/dctree/fresh.txt", "fresh", 5) != 0)
+    if (sys_writef("/tmp/dctree/fresh.txt", "fresh", 5) != 0)
         return fail("create fresh.txt");
     stat_t st;
-    if (stat("/dctree/fresh.txt", &st) != 0 || st.st_size != 5)
+    if (stat("/tmp/dctree/fresh.txt", &st) != 0 || st.st_size != 5)
         return fail("negative entry survived create");
-    if (!content_is("/dctree/fresh.txt", "fresh"))
+    if (!content_is("/tmp/dctree/fresh.txt", "fresh"))
         return fail("fresh.txt content");
 
     /* A dangling symlink turns valid once its target appears. */
-    if (sys_symlink("later", "/dctree/dang") != 0)
+    if (sys_symlink("later", "/tmp/dctree/dang") != 0)
         return fail("dangling symlink");
-    if (stat("/dctree/dang", &st) != -ERR_ENOENT)
+    if (stat("/tmp/dctree/dang", &st) != -ERR_ENOENT)
         return fail("dangling symlink resolved");
-    if (sys_writef("/dctree/later", "later", 5) != 0)
+    if (sys_writef("/tmp/dctree/later", "later", 5) != 0)
         return fail("create symlink target");
-    if (!content_is("/dctree/dang", "later"))
+    if (!content_is("/tmp/dctree/dang", "later"))
         return fail("symlink did not see its new target");
     return 0;
 }
 
 static int check_unlink(void) {
     stat_t st;
-    if (sys_writef("/dctree/gone.txt", "first", 5) != 0)
+    if (sys_writef("/tmp/dctree/gone.txt", "first", 5) != 0)
         return fail("create gone.txt");
-    if (stat("/dctree/gone.txt", &st) != 0)
+    if (stat("/tmp/dctree/gone.txt", &st) != 0)
         return fail("stat gone.txt");
-    if (sys_unlink("/dctree/gone.txt") != 0)
+    if (sys_unlink("/tmp/dctree/gone.txt") != 0)
         return fail("unlink gone.txt");
-    if (!is_absent("/dctree/gone.txt"))
+    if (!is_absent("/tmp/dctree/gone.txt"))
         return fail("unlinked name still resolves");
-    if (sys_writef("/dctree/gone.txt", "second", 6) != 0)
+    if (sys_writef("/tmp/dctree/gone.txt", "second", 6) != 0)
         return fail("recreate gone.txt");
-    if (!content_is("/dctree/gone.txt", "second"))
+    if (!content_is("/tmp/dctree/gone.txt", "second"))
         return fail("recreated file shows stale content");
     return 0;
 }
 
 static int check_rename(void) {
     stat_t before, after, st;
-    if (sys_writef("/dctree/old.txt", "one", 3) != 0)
+    if (sys_writef("/tmp/dctree/old.txt", "one", 3) != 0)
         return fail("create old.txt");
-    if (stat("/dctree/old.txt", &before) != 0 || !is_absent("/dctree/new.txt"))
+    if (stat("/tmp/dctree/old.txt", &before) != 0 || !is_absent("/tmp/dctree/new.txt"))
         return fail("warm rename names");
-    if (sys_rename("/dctree/old.txt", "/dctree/new.txt") != 0)
+    if (sys_rename("/tmp/dctree/old.txt", "/tmp/dctree/new.txt") != 0)
         return fail("rename");
-    if (!is_absent("/dctree/old.txt"))
+    if (!is_absent("/tmp/dctree/old.txt"))
         return fail("old name survives rename");
-    if (stat("/dctree/new.txt", &after) != 0 || after.st_ino != before.st_ino)
+    if (stat("/tmp/dctree/new.txt", &after) != 0 || after.st_ino != before.st_ino)
         return fail("new name after rename");
-    if (!content_is("/dctree/new.txt", "one"))
+    if (!content_is("/tmp/dctree/new.txt", "one"))
         return fail("renamed content");
 
-    if (sys_writef("/dctree/r_src", "src", 3) != 0 ||
-        sys_writef("/dctree/r_dst", "dst", 3) != 0)
+    if (sys_writef("/tmp/dctree/r_src", "src", 3) != 0 ||
+        sys_writef("/tmp/dctree/r_dst", "dst", 3) != 0)
         return fail("create replace pair");
-    if (stat("/dctree/r_src", &st) != 0 || stat("/dctree/r_dst", &st) != 0)
+    if (stat("/tmp/dctree/r_src", &st) != 0 || stat("/tmp/dctree/r_dst", &st) != 0)
         return fail("warm replace pair");
-    if (sys_rename("/dctree/r_src", "/dctree/r_dst") != 0)
+    if (sys_rename("/tmp/dctree/r_src", "/tmp/dctree/r_dst") != 0)
         return fail("rename over existing");
-    if (!is_absent("/dctree/r_src"))
+    if (!is_absent("/tmp/dctree/r_src"))
         return fail("source survives replacing rename");
-    if (!content_is("/dctree/r_dst", "src"))
+    if (!content_is("/tmp/dctree/r_dst", "src"))
         return fail("replaced target shows old inode");
 
     /* A directory moves together with everything below it. */
-    if (sys_mkdir("/dctree/m1") != 0 || sys_mkdir("/dctree/m2") != 0 ||
-        sys_mkdir("/dctree/m1/dir") != 0)
+    if (sys_mkdir("/tmp/dctree/m1") != 0 || sys_mkdir("/tmp/dctree/m2") != 0 ||
+        sys_mkdir("/tmp/dctree/m1/dir") != 0)
         return fail("create move directories");
-    if (sys_writef("/dctree/m1/dir/inner.txt", "inner", 5) != 0)
+    if (sys_writef("/tmp/dctree/m1/dir/inner.txt", "inner", 5) != 0)
         return fail("create inner file");
-    if (!content_is("/dctree/m1/dir/inner.txt", "inner") ||
-        !is_absent("/dctree/m2/dir"))
+    if (!content_is("/tmp/dctree/m1/dir/inner.txt", "inner") ||
+        !is_absent("/tmp/dctree/m2/dir"))
         return fail("warm directory move");
-    if (sys_rename("/dctree/m1/dir", "/dctree/m2/dir") != 0)
+    if (sys_rename("/tmp/dctree/m1/dir", "/tmp/dctree/m2/dir") != 0)
         return fail("rename directory");
-    if (!is_absent("/dctree/m1/dir") || !is_absent("/dctree/m1/dir/inner.txt"))
+    if (!is_absent("/tmp/dctree/m1/dir") || !is_absent("/tmp/dctree/m1/dir/inner.txt"))
         return fail("old directory path survives rename");
-    if (!content_is("/dctree/m2/dir/inner.txt", "inner"))
+    if (!content_is("/tmp/dctree/m2/dir/inner.txt", "inner"))
         return fail("moved directory contents");
 
     dcache_counters_t counters;
@@ -281,64 +281,64 @@ static int check_rename(void) {
 }
 
 static int check_rmdir(void) {
-    if (sys_mkdir("/dctree/d1") != 0)
+    if (sys_mkdir("/tmp/dctree/d1") != 0)
         return fail("mkdir d1");
-    if (sys_writef("/dctree/d1/kept.txt", "kept", 4) != 0)
+    if (sys_writef("/tmp/dctree/d1/kept.txt", "kept", 4) != 0)
         return fail("create d1 file");
-    if (!content_is("/dctree/d1/kept.txt", "kept") || !is_absent("/dctree/d1/ghost"))
+    if (!content_is("/tmp/dctree/d1/kept.txt", "kept") || !is_absent("/tmp/dctree/d1/ghost"))
         return fail("warm d1");
-    if (sys_unlink("/dctree/d1/kept.txt") != 0 || sys_rmdir("/dctree/d1") != 0)
+    if (sys_unlink("/tmp/dctree/d1/kept.txt") != 0 || sys_rmdir("/tmp/dctree/d1") != 0)
         return fail("remove d1");
-    if (!is_absent("/dctree/d1") || !is_absent("/dctree/d1/kept.txt"))
+    if (!is_absent("/tmp/dctree/d1") || !is_absent("/tmp/dctree/d1/kept.txt"))
         return fail("removed directory still resolves");
 
     /* The next directory probably reuses d1's inode number. */
-    if (sys_mkdir("/dctree/d2") != 0)
+    if (sys_mkdir("/tmp/dctree/d2") != 0)
         return fail("mkdir d2");
-    if (!is_dir("/dctree/d2") || !is_absent("/dctree/d2/kept.txt") ||
-        !is_absent("/dctree/d2/ghost"))
+    if (!is_dir("/tmp/dctree/d2") || !is_absent("/tmp/dctree/d2/kept.txt") ||
+        !is_absent("/tmp/dctree/d2/ghost"))
         return fail("new directory inherited stale entries");
-    if (sys_writef("/dctree/d2/kept.txt", "again", 5) != 0 ||
-        !content_is("/dctree/d2/kept.txt", "again"))
+    if (sys_writef("/tmp/dctree/d2/kept.txt", "again", 5) != 0 ||
+        !content_is("/tmp/dctree/d2/kept.txt", "again"))
         return fail("file in reused directory");
-    if (sys_mkdir("/dctree/d1") != 0 || !is_dir("/dctree/d1"))
+    if (sys_mkdir("/tmp/dctree/d1") != 0 || !is_dir("/tmp/dctree/d1"))
         return fail("recreate d1");
     return 0;
 }
 
 static int check_links(void) {
     stat_t st;
-    if (sys_writef("/dctree/orig", "linked", 6) != 0)
+    if (sys_writef("/tmp/dctree/orig", "linked", 6) != 0)
         return fail("create orig");
-    if (!is_absent("/dctree/hl"))
+    if (!is_absent("/tmp/dctree/hl"))
         return fail("hl exists early");
-    if (sys_link("/dctree/orig", "/dctree/hl") != 0)
+    if (sys_link("/tmp/dctree/orig", "/tmp/dctree/hl") != 0)
         return fail("hard link");
-    if (stat("/dctree/hl", &st) != 0 || st.st_nlink != 2)
+    if (stat("/tmp/dctree/hl", &st) != 0 || st.st_nlink != 2)
         return fail("negative entry survived link");
-    if (sys_unlink("/dctree/orig") != 0)
+    if (sys_unlink("/tmp/dctree/orig") != 0)
         return fail("unlink orig");
-    if (!is_absent("/dctree/orig"))
+    if (!is_absent("/tmp/dctree/orig"))
         return fail("unlinked name resolves");
-    if (!content_is("/dctree/hl", "linked") || stat("/dctree/hl", &st) != 0 ||
+    if (!content_is("/tmp/dctree/hl", "linked") || stat("/tmp/dctree/hl", &st) != 0 ||
         st.st_nlink != 1)
         return fail("surviving link name");
 
     /* An entry names the link itself; the target is looked up on every use. */
-    if (sys_writef("/dctree/t1", "first", 5) != 0 ||
-        sys_writef("/dctree/t2", "other", 5) != 0)
+    if (sys_writef("/tmp/dctree/t1", "first", 5) != 0 ||
+        sys_writef("/tmp/dctree/t2", "other", 5) != 0)
         return fail("create symlink targets");
-    if (sys_symlink("t1", "/dctree/sl") != 0)
+    if (sys_symlink("t1", "/tmp/dctree/sl") != 0)
         return fail("create symlink");
-    if (!content_is("/dctree/sl", "first") || !content_is("/dctree/sl", "first"))
+    if (!content_is("/tmp/dctree/sl", "first") || !content_is("/tmp/dctree/sl", "first"))
         return fail("read through symlink");
-    if (sys_unlink("/dctree/sl") != 0 || sys_symlink("t2", "/dctree/sl") != 0)
+    if (sys_unlink("/tmp/dctree/sl") != 0 || sys_symlink("t2", "/tmp/dctree/sl") != 0)
         return fail("retarget symlink");
-    if (!content_is("/dctree/sl", "other"))
+    if (!content_is("/tmp/dctree/sl", "other"))
         return fail("symlink followed a cached target");
-    if (sys_unlink("/dctree/t2") != 0 || sys_writef("/dctree/t2", "third", 5) != 0)
+    if (sys_unlink("/tmp/dctree/t2") != 0 || sys_writef("/tmp/dctree/t2", "third", 5) != 0)
         return fail("replace symlink target");
-    if (!content_is("/dctree/sl", "third"))
+    if (!content_is("/tmp/dctree/sl", "third"))
         return fail("symlink followed a stale inode");
     return 0;
 }
@@ -369,7 +369,7 @@ static int check_bounded_size(void) {
     if (read_counters(&before) != 0)
         return fail("read counters");
     for (int i = 0; i < DCT_FLOOD_NAMES; ++i) {
-        snprintf(path, sizeof(path), "/dctree/flood%d", i);
+        snprintf(path, sizeof(path), "/tmp/dctree/flood%d", i);
         if (!is_absent(path))
             return fail("flood name exists");
     }
@@ -381,16 +381,16 @@ static int check_bounded_size(void) {
         return fail("full cache did not evict");
 
     /* Evicted or not, answers must stay correct. */
-    if (!content_is("/dctree/a/b/c/d/e/f/g/leaf.txt", "deep"))
+    if (!content_is("/tmp/dctree/a/b/c/d/e/f/g/leaf.txt", "deep"))
         return fail("deep file after flood");
-    if (!content_is("/dctree/fresh.txt", "fresh"))
+    if (!content_is("/tmp/dctree/fresh.txt", "fresh"))
         return fail("fresh.txt after flood");
     return 0;
 }
 
 int main(void) {
     remove_leftovers();
-    if (sys_mkdir("/dctree") != 0)
+    if (sys_mkdir("/tmp/dctree") != 0)
         return fail("mkdir dctree");
     int rc = check_repeated_lookups();
     if (rc == 0)
@@ -410,7 +410,7 @@ int main(void) {
     remove_leftovers();
     if (rc != 0)
         return rc;
-    if (!is_absent("/dctree"))
+    if (!is_absent("/tmp/dctree"))
         return fail("cleanup");
     printf("DCACHE PASS\n");
     return 0;

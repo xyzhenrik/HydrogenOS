@@ -95,7 +95,7 @@ static long spawn_role(const char *role, const unsigned *args, unsigned count,
         argv[argc++] = text[i];
     }
     argv[argc] = 0;
-    return spawn_args("/waitqtest", argv, 0, in_fd, out_fd, SPAWN_STDIO_INHERIT);
+    return spawn_args("/lib/tests/waitqtest", argv, 0, in_fd, out_fd, SPAWN_STDIO_INHERIT);
 }
 
 static long spawn_one(const char *role, unsigned arg, int in_fd, int out_fd) {

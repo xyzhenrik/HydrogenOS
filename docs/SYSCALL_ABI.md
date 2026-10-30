@@ -44,7 +44,7 @@ Beispiel: `-2` entspricht `ENOENT`.
 - Handles tragen intern Read-/Write-Rechte passend zum Ressourcentyp; `sys_spawn_with_stdio` weist Bindings mit falscher Richtung (z. B. Writer auf `stdin`, Reader auf `stdout`) jetzt direkt ab.
 - `sys_handle_set_inherit` arbeitet jetzt auf beliebigen FDs, nicht mehr nur auf `fd >= 3`; damit koennen auch explizite stdio-Bindings fuer spaetere `spawn`-Aufrufe als vererbbar bzw. close-on-spawn markiert werden.
 - `sys_spawn_with_stdio` versteht zusaetzlich negative Steuerwerte: `-2` = stdio vom Parent unveraendert erben, `-3` = Null-stdio binden; `-1` bleibt "Binding loeschen".
-- Das aktuelle Userspace-`init` nutzt `sys_spawn_with_stdio`, um die in `/init.rc` beschriebenen einfachen stdio-Topologien (`stdin=inherit|null|pipe|channel|tee`, `stdout=inherit|null|capture|channel|tee|logsink`, `stderr=inherit|null|capture|channel|tee|logsink`) aufzubauen.
+- Das aktuelle Userspace-`init` nutzt `sys_spawn_with_stdio`, um die in `/etc/init.rc` beschriebenen einfachen stdio-Topologien (`stdin=inherit|null|pipe|channel|tee`, `stdout=inherit|null|capture|channel|tee|logsink`, `stderr=inherit|null|capture|channel|tee|logsink`) aufzubauen.
 - Zusaetzlich kann `init` `stdout`/`stderr` eines Services mit `stdout=syslog`, `stderr=syslog` oder `log=syslog` (beides) an den Log-Daemon `syslogd` binden; Details in `docs/SYSLOG.md`.
 - Die aktuelle `init`-Channel-Schicht modelliert einen Reader pro benanntem Channel; mehrere Writer auf denselben Channel werden unterstuetzt und nutzen denselben Pipe-Stream.
 - Zusaetzlich baut `init` rein im Userspace gepufferte `tee`-Kanaele fuer spaetere Mehrfach-Leser und deklarative `logsink`s fuer aggregierte Service-Ausgaben ueber dieselbe Kernel-ABI.
@@ -207,6 +207,12 @@ Beispiel: `-2` entspricht `ENOENT`.
 - Fehlerzustaende (`-ECONNRESET` nach RST, `-ETIMEDOUT` nach 6 erfolglosen Wiederholungen eines Datensegments) meldet die naechste `sys_read`/`sys_write` einmalig; danach liefert `sys_read` `0` und `sys_write` `-EPIPE`. `sys_read`/`sys_write` ohne Verbindung liefern `-ENOTCONN`.
 - Protokoll: RFC-793-Zustandsmaschine mit aktivem und passivem Open, gleichzeitigem Open und allen Close-Zustaenden, MSS-Option (1460), Pruefsumme mit Pseudo-Header, Retransmission-Timer nach RFC 6298 (Start 300 ms, Minimum 200 ms, Maximum 8 s, Karns Algorithmus), Go-back-N-Wiederholung, Fenster von 8 KiB je Richtung, Zero-Window-Probes, RST-Behandlung nach RFC 5961 (nur exakte Sequenznummer) und RFC 1337 (kein Abbau in TIME_WAIT). Nicht implementiert: Staukontrolle (der 8-KiB-Sendepuffer begrenzt die Daten im Flug), Wiederzusammensetzen ausser Reihenfolge (eine Luecke verwirft das Segment, der Sender wiederholt), Fenster-Skalierung, SACK, Urgent-Daten, Keepalive.
 - Beispiele: `userspace/tcptest` (Loopback, Fehlerpfade, Halb-Close, Reset, Backlog, 64-KiB-Echo zwischen zwei Prozessen) und `userspace/nc` (`nc HOST PORT`, `nc -l PORT`).
+
+## Tastatur (sys_kbd_read, 39)
+- Nicht blockierend: liefert das naechste Ereignis oder `-1`, wenn keines ansteht.
+- Druckbare Tasten und Steuerzeichen kommen als ASCII-Wert (Ctrl+Buchstabe = 1..26, Enter `\n`, Backspace `\b`, Tab `\t`).
+- Tasten ohne Zeichen liegen ab `0x100`: Left, Right, Up, Down, Home, End, Delete, PageUp, PageDown, Insert, Escape, Alt+Tab, Launcher (in dieser Reihenfolge; siehe `userspace/lib/kbd_keys.h`). `KBD_KEY_LAUNCHER` kommt beim Druecken der Super-Taste (links oder rechts) und bei Strg+Leertaste, `KBD_KEY_ALT_TAB` bei Alt+Tab. Die Konsole (stdin) sieht keinen dieser beiden Codes und verwirft Escape.
+- Navigationstasten (Pfeile, Home, End, Delete, PageUp/Down, Insert) tragen die gehaltenen Modifier als Flag-Bits: `0x1000` Shift, `0x2000` Ctrl; Maske fuer den Tastencode `0x0FFF`. Die Konsole (`read` auf stdin) sieht diese Flags nie.
 
 ## Error Codes (Subset)
 Diese errno-Werte sind als Startmenge vorgesehen:

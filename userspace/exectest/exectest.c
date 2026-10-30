@@ -3,12 +3,12 @@
 #include "signal.h"
 #include "syscall.h"
 
-#define HELPER_PATH "/exechelper"
-#define TRUNCATED_PATH "/exectest.trunc"
+#define HELPER_PATH "/lib/tests/exechelper"
+#define TRUNCATED_PATH "/tmp/exectest.trunc"
 #define TRUNCATED_BYTES 120
-#define EMPTY_PATH "/exectest.empty"
-#define BROKEN_PATH "/exectest.broken"
-#define TEXT_PATH "/exectest.text"
+#define EMPTY_PATH "/tmp/exectest.empty"
+#define BROKEN_PATH "/tmp/exectest.broken"
+#define TEXT_PATH "/tmp/exectest.text"
 #define EXECUTABLE_MODE 0755
 #define CHAIN_LENGTH 10
 #define HUGE_ARG_BYTES 4000
@@ -107,8 +107,8 @@ static int check_failures(void) {
     long fd;
     long got;
 
-    if (check_fails("missing file", execve("/exectest.missing", argv, 0), -ENOENT) ||
-        check_fails("not executable", execve("/init.rc", argv, 0), -EACCES) ||
+    if (check_fails("missing file", execve("/tmp/exectest.missing", argv, 0), -ENOENT) ||
+        check_fails("not executable", execve("/etc/init.rc", argv, 0), -EACCES) ||
         check_fails("null path", execve(0, argv, 0), -EFAULT) ||
         check_fails("bad argv entry", execve(HELPER_PATH, bad_argv, 0), -EFAULT) ||
         check_fails("bad argv vector",

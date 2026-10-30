@@ -3,7 +3,7 @@
 #include "syscall.h"
 
 #define DEFAULT_ACCOUNT "root"
-#define DEFAULT_SHELL "/shell"
+#define DEFAULT_SHELL "/bin/shell"
 #define ENV_ENTRY_CAP (PASSWD_PATH_MAX + 8)
 #define SHELL_ARGS_MAX 8
 

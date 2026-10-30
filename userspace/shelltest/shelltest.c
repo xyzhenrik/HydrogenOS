@@ -17,16 +17,16 @@ enum {
 
 static const ShellCase cases[] = {
     {"redirect",
-     "echo first > /shelltest.txt\n"
-     "echo second >> /shelltest.txt\n"
-     "cat < /shelltest.txt\n"
-     "echo third 1>/shelltest.txt; cat /shelltest.txt\n"
-     "> /shelltest.txt; cat /shelltest.txt\n"
-     "rm /shelltest.txt\n",
+     "echo first > /tmp/shelltest.txt\n"
+     "echo second >> /tmp/shelltest.txt\n"
+     "cat < /tmp/shelltest.txt\n"
+     "echo third 1>/tmp/shelltest.txt; cat /tmp/shelltest.txt\n"
+     "> /tmp/shelltest.txt; cat /tmp/shelltest.txt\n"
+     "rm /tmp/shelltest.txt\n",
      "first\nsecond\nthird\n", 0},
     {"pipeline",
      "echo piped through three | cat | cat\n"
-     "echo external | /echo\n",
+     "echo external | /bin/echo\n",
      "piped through three\n"
      "echo: type a line and press Enter\nexternal\n", 0},
     {"env",
@@ -37,47 +37,56 @@ static const ShellCase cases[] = {
      "unset GREETING\n"
      "echo \"[$GREETING]\"\n",
      "hello, hellos $GREETING yes\n"
-     "SHELLTEST_IMPORTED=yes\nPATH=/\nGREETING=hello\n"
+     "SHELLTEST_IMPORTED=yes\nPATH=/bin:/sbin\nGREETING=hello\n"
      "[]\n", 0},
     {"status",
      "false; echo $?\n"
      "true; echo ${?}\n"
-     "missing_command 2> /shelltest.err; echo $?\n"
-     "cat /shelltest.err\n"
-     "cat /shelltest.none 2>&1 | cat\n"
+     "missing_command 2> /tmp/shelltest.err; echo $?\n"
+     "cat /tmp/shelltest.err\n"
+     "cat /tmp/shelltest.none 2>&1 | cat\n"
      "false && echo wrong || echo fallback\n"
-     "rm /shelltest.err\n",
+     "rm /tmp/shelltest.err\n",
      "1\n0\n127\n"
      "shell: missing_command: command not found\n"
-     "cat: /shelltest.none: cannot open\n"
+     "cat: /tmp/shelltest.none: cannot open\n"
      "fallback\n", 0},
+    {"path",
+     "hello\n"
+     "PATH=/sbin\n"
+     "hello 2>&1; echo $?\n"
+     "PATH=/bin:/sbin\n"
+     "hello\n",
+     "Hello from user mode via sys_write!\n"
+     "shell: hello: command not found\n127\n"
+     "Hello from user mode via sys_write!\n", 0},
     {"jobs",
-     "echo background > /shelltest.bg &\n"
+     "echo background > /tmp/shelltest.bg &\n"
      "wait\n"
-     "cat /shelltest.bg\n"
+     "cat /tmp/shelltest.bg\n"
      "jobs\n"
      "sleep 300 &\n"
      "jobs\n"
      "wait %1; echo $?\n"
      "jobs\n"
-     "rm /shelltest.bg\n",
+     "rm /tmp/shelltest.bg\n",
      "background\n[1] Running  sleep 300\n0\n", 0},
     {"joblist",
-     "sleep 300 && echo listed > /shelltest.bgl &\n"
+     "sleep 300 && echo listed > /tmp/shelltest.bgl &\n"
      "jobs\n"
      "wait\n"
-     "cat /shelltest.bgl\n"
-     "rm /shelltest.bgl\n",
-     "[1] Running  sleep 300 && echo listed > /shelltest.bgl\nlisted\n", 0},
+     "cat /tmp/shelltest.bgl\n"
+     "rm /tmp/shelltest.bgl\n",
+     "[1] Running  sleep 300 && echo listed > /tmp/shelltest.bgl\nlisted\n", 0},
     {"continuation",
      "echo con\\\ntinued \\\n  two \"x\\\ny\"\n",
      "continued two xy\n", 0},
     {"copy",
-     "echo data > /shelltest.cp\n"
-     "cp /shelltest.cp /./shelltest.cp 2>&1\n"
-     "cat /shelltest.cp\n"
-     "rm /shelltest.cp\n",
-     "cp: /./shelltest.cp: source and destination are the same file\ndata\n", 0},
+     "echo data > /tmp/shelltest.cp\n"
+     "cp /tmp/shelltest.cp /./tmp/shelltest.cp 2>&1\n"
+     "cat /tmp/shelltest.cp\n"
+     "rm /tmp/shelltest.cp\n",
+     "cp: /./tmp/shelltest.cp: source and destination are the same file\ndata\n", 0},
     {"quoting",
      "echo a\\ b \"c \\\"d\\\" \\$e\" 'f  g' \"\" x # comment\n",
      "a b c \"d\" $e f  g  x\n", 0},
@@ -91,10 +100,10 @@ static const ShellCase cases[] = {
      "kill 99999 2>&1; echo $?\n",
      "143\n137\nkill: 99999: no such process\n1\n", 0},
     {"exec",
-     "echo via exec | exec /echo\n"
+     "echo via exec | exec /bin/echo\n"
      "exec /missing_program 2>&1; echo $?\n"
      "echo before\n"
-     "exec /echo\n"
+     "exec /bin/echo\n"
      "echo never\n",
      "echo: type a line and press Enter\nvia exec\n"
      "exec: /missing_program: command not found\n127\n"
@@ -164,7 +173,7 @@ static int run_case(const ShellCase *c) {
         dprintf(2, "SHELL FAIL %s: pipe\n", c->name);
         return -1;
     }
-    pid = spawn_args("/shell", argv, shell_env, SPAWN_STDIO_NULL, fds[1], fds[1]);
+    pid = spawn_args("/bin/shell", argv, shell_env, SPAWN_STDIO_NULL, fds[1], fds[1]);
     close(fds[1]);
     if (pid <= 0) {
         close(fds[0]);

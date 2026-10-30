@@ -289,8 +289,8 @@ static int fault_case(const char *name) {
 }
 
 static int run_child(const char *name, int expected_status) {
-    const char *argv[] = { "/mprotecttest", name, 0 };
-    long pid = spawn_args("/mprotecttest", argv, 0, SPAWN_STDIO_NULL,
+    const char *argv[] = { "/lib/tests/mprotecttest", name, 0 };
+    long pid = spawn_args("/lib/tests/mprotecttest", argv, 0, SPAWN_STDIO_NULL,
                           SPAWN_STDIO_NULL, SPAWN_STDIO_NULL);
     if (pid <= 0)
         return fail("spawn fault child");

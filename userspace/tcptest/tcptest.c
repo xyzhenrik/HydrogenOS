@@ -123,7 +123,7 @@ static int check_socket_errors(void) {
 
     EXPECT("listen bad fd", sys_listen(60, 1), ERR_EBADF);
     EXPECT("connect bad fd", sys_connect(60, LOOPBACK, BASE_PORT), ERR_EBADF);
-    file = open("/hello.txt", OPEN_READ);
+    file = open("/home/user/hello.txt", OPEN_READ);
     if (file >= 0) {
         EXPECT("connect file", sys_connect((int)file, LOOPBACK, BASE_PORT),
                ERR_ENOTSOCK);
@@ -254,7 +254,7 @@ static int check_backlog(void) {
     EXPECT("first connect", sys_connect((int)first, LOOPBACK, BASE_PORT + 4), 0);
 
     snprintf(text, sizeof(text), "%u", BASE_PORT + 4);
-    pid = spawn_args("/tcptest", argv, 0, SPAWN_STDIO_NULL, SPAWN_STDIO_NULL,
+    pid = spawn_args("/lib/tests/tcptest", argv, 0, SPAWN_STDIO_NULL, SPAWN_STDIO_NULL,
                      SPAWN_STDIO_INHERIT);
     if (pid < 0)
         return fail("spawn late client", pid);
@@ -340,7 +340,7 @@ static int check_echo_transfer(void) {
     unsigned long deadline;
 
     snprintf(text, sizeof(text), "%u", ECHO_PORT);
-    pid = spawn_args("/tcptest", argv, 0, SPAWN_STDIO_NULL, SPAWN_STDIO_NULL,
+    pid = spawn_args("/lib/tests/tcptest", argv, 0, SPAWN_STDIO_NULL, SPAWN_STDIO_NULL,
                      SPAWN_STDIO_INHERIT);
     if (pid < 0)
         return fail("spawn server", pid);

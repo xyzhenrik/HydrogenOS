@@ -121,7 +121,7 @@ static int expect_dup_implicit_stdout(void) {
     long pid;
     int status = -1;
 
-    pid = spawn_with_stdio("/dupfallbackcheck",
+    pid = spawn_with_stdio("/lib/tests/dupfallbackcheck",
                            SPAWN_STDIO_INHERIT,
                            SPAWN_STDIO_CLEAR,
                            SPAWN_STDIO_CLEAR);
@@ -155,7 +155,7 @@ static int expect_dup3_inherit_handle(void) {
         return 42;
     }
     close(fds[1]);
-    pid = spawn_with_stdio("/piperead",
+    pid = spawn_with_stdio("/lib/tests/piperead",
                            SPAWN_STDIO_INHERIT,
                            SPAWN_STDIO_NULL,
                            SPAWN_STDIO_NULL);
@@ -192,7 +192,7 @@ static int expect_dup3_close_on_spawn_handle(void) {
         return 52;
     }
     close(fds[1]);
-    pid = spawn_with_stdio("/piperead",
+    pid = spawn_with_stdio("/lib/tests/piperead",
                            SPAWN_STDIO_INHERIT,
                            SPAWN_STDIO_NULL,
                            SPAWN_STDIO_NULL);
@@ -232,7 +232,7 @@ static int expect_dup3_close_on_spawn_stdout(void) {
         return 62;
     }
     close(fds[1]);
-    pid = spawn("/time");
+    pid = spawn("/bin/time");
     if (pid < 0) {
         dup2((int)saved_stdout, 1);
         close((int)saved_stdout);

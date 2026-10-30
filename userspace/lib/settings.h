@@ -30,13 +30,13 @@
 typedef struct Settings {
     int theme;   /* SETTINGS_THEME_* */
     int accent;  /* index into the accent table */
-    int glass;   /* nonzero: blurred, translucent taskbar and menu */
+    int glass;   /* nonzero: blurred, translucent taskbar and launcher */
     int layout;  /* SETTINGS_LAYOUT_* */
 } Settings;
 
-/* Colour tokens of the desktop session, all 0x00RRGGBB. Window furniture, the
-   terminal, the taskbar and the menu stay dark in both themes because their
-   icons are white; the wallpaper and the Settings surfaces follow the theme. */
+/* Colour tokens of the desktop session, all 0x00RRGGBB. The wallpaper, the
+   window title bars, the taskbar, the menu and the Settings surfaces follow
+   the theme; the terminal and the document surface keep their own look. */
 typedef struct SettingsPalette {
     uint32_t wallpaper_top;
     uint32_t wallpaper_bottom;
@@ -49,6 +49,7 @@ typedef struct SettingsPalette {
     unsigned int glass_alpha;
     uint32_t chrome_text;
     uint32_t chrome_dim;
+    uint32_t chrome_icon;   /* ink of the monochrome app icons on chrome */
 
     uint32_t accent;
     uint32_t on_accent;
@@ -56,6 +57,7 @@ typedef struct SettingsPalette {
     uint32_t title;
     uint32_t title_focus;
     uint32_t title_text;
+    uint32_t title_border;  /* hairline between title bar and content */
     uint32_t close;
     uint32_t minimize;
     uint32_t maximize;

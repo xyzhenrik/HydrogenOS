@@ -101,6 +101,14 @@ int expand_word(const char *raw, size_t raw_len, int last_status, char *out,
         *error = "word too long";
         return -1;
     }
+    /* A leading ~ stands for $HOME; quoting it or an unset HOME keeps it. */
+    if (raw_len > 0 && raw[0] == '~' && (raw_len == 1 || raw[1] == '/')) {
+        const char *home = env_get("HOME", 4);
+        if (home && home[0]) {
+            put_string(&b, home);
+            i = 1;
+        }
+    }
     while (i < raw_len) {
         char c = raw[i];
         if (c == '\\' && i + 1 < raw_len && raw[i + 1] == '\n') {

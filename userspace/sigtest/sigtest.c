@@ -326,7 +326,7 @@ static int fail(const char *what) {
 /* Starts this program in the given child mode with its stdout connected to a
  * pipe, and returns once the child reports it is set up. */
 static long start_child(const char *mode, const char *arg1, const char *arg2) {
-    const char *argv[5] = {"/sigtest", mode, arg1, arg2, 0};
+    const char *argv[5] = {"/lib/tests/sigtest", mode, arg1, arg2, 0};
     int fds[2];
     long pid;
     long count = 0;
@@ -334,7 +334,7 @@ static long start_child(const char *mode, const char *arg1, const char *arg2) {
 
     if (pipe(fds) != 0)
         return -1;
-    pid = spawn_args("/sigtest", argv, 0, SPAWN_STDIO_NULL, fds[1],
+    pid = spawn_args("/lib/tests/sigtest", argv, 0, SPAWN_STDIO_NULL, fds[1],
                      SPAWN_STDIO_NULL);
     close(fds[1]);
     if (pid > 0) {

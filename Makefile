@@ -178,6 +178,8 @@ USER_REBOOT_OBJ = $(BUILD_DIR)/user_reboot.o
 USER_REBOOT_ELF = $(BUILD_DIR)/user_reboot.elf
 USER_POWERCHECK_OBJ = $(BUILD_DIR)/user_powercheck.o
 USER_POWERCHECK_ELF = $(BUILD_DIR)/user_powercheck.elf
+USER_FUZZYCHECK_OBJ = $(BUILD_DIR)/user_fuzzycheck.o
+USER_FUZZYCHECK_ELF = $(BUILD_DIR)/user_fuzzycheck.elf
 INIT_CONFIG = userspace/init/init.rc
 USER_COMPOSITOR_OBJ = $(BUILD_DIR)/user_compositor.o
 USER_COMPOSITOR_ELF = $(BUILD_DIR)/user_compositor.elf
@@ -192,9 +194,13 @@ USER_DESKTOPTEST_TASKBAR_OBJ = $(BUILD_DIR)/user_desktoptest_taskbar.o
 USER_DESKTOPTEST_LAUNCHER_OBJ = $(BUILD_DIR)/user_desktoptest_launcher.o
 USER_DESKTOPTEST_FILEMANAGER_OBJ = $(BUILD_DIR)/user_desktoptest_filemanager.o
 USER_GFX_EFFECTS_OBJ = $(BUILD_DIR)/user_gfx_effects.o
+USER_EDITOR_LIB_OBJS = $(BUILD_DIR)/user_textbuffer.o $(BUILD_DIR)/user_textedit.o $(BUILD_DIR)/user_clipboard.o
+USER_APP_EDITOR_OBJ = $(BUILD_DIR)/user_app_editor.o
+USER_EDITORTEST_OBJ = $(BUILD_DIR)/user_editortest.o
+USER_EDITORTEST_ELF = $(BUILD_DIR)/user_editortest.elf
 USER_INIT_OBJ = $(BUILD_DIR)/user_init.o
 USER_INIT_ELF = $(BUILD_DIR)/user_init.elf
-USER_SHELL_MODULES = shell line_editor lexer parser expand env exec jobs builtins diag output account
+USER_SHELL_MODULES = shell line_editor input interrupt lexer parser expand env exec jobs builtins diag output account
 USER_SHELL_OBJS = $(foreach m,$(USER_SHELL_MODULES),$(BUILD_DIR)/user_shell_$(m).o)
 USER_SHELL_ELF = $(BUILD_DIR)/user_shell.elf
 USER_SHELLTEST_OBJ = $(BUILD_DIR)/user_shelltest.o
@@ -206,6 +212,14 @@ USER_SETTINGS_OBJ = $(BUILD_DIR)/user_settings.o
 USER_SETTINGS_INFO_OBJ = $(BUILD_DIR)/user_settings_info.o
 USER_SETTINGS_UI_OBJ = $(BUILD_DIR)/user_settings_ui.o
 USER_SETTINGS_OBJS = $(USER_SETTINGS_OBJ) $(USER_SETTINGS_INFO_OBJ) $(USER_SETTINGS_UI_OBJ)
+USER_FUZZY_OBJ = $(BUILD_DIR)/user_fuzzy.o
+USER_SPOTLIGHT_OBJ = $(BUILD_DIR)/user_spotlight.o
+USER_LAUNCHER_MODEL_OBJ = $(BUILD_DIR)/user_launcher_model.o
+USER_LAUNCHER_OBJS = $(USER_SPOTLIGHT_OBJ) $(USER_LAUNCHER_MODEL_OBJ) $(USER_FUZZY_OBJ)
+USER_TERMINAL_OBJ = $(BUILD_DIR)/user_terminal.o
+USER_APP_TERMINAL_OBJ = $(BUILD_DIR)/user_app_terminal.o
+USER_TERMTEST_OBJ = $(BUILD_DIR)/user_termtest.o
+USER_TERMTEST_ELF = $(BUILD_DIR)/user_termtest.elf
 USER_DATE_OBJ = $(BUILD_DIR)/user_date.o
 USER_DATE_ELF = $(BUILD_DIR)/user_date.elf
 USER_RTCTEST_OBJ = $(BUILD_DIR)/user_rtctest.o
@@ -268,7 +282,21 @@ DISK_IMG = $(BUILD_DIR)/disk.img
 FS_DIR = fsroot
 FS_FILES = $(shell find $(FS_DIR) -type f 2>/dev/null)
 USER_ELFS = $(foreach v,$(filter USER_%_ELF,$(.VARIABLES)),$($(v)))
-$(DISK_IMG): $(USER_ELFS) $(INIT_CONFIG)
+
+# The root filesystem is staged once from fsroot/ plus the programs placed by
+# tools/rootfs.manifest; the disk image and the initrd both pack that tree.
+ROOTFS_STAGE = $(BUILD_DIR)/rootfs
+ROOTFS_STAMP = $(BUILD_DIR)/rootfs.stamp
+ifeq ($(ARCH),x86_64)
+ROOTFS_MANIFEST = tools/rootfs.manifest
+HASH := \#
+ROOTFS_ELFS := $(shell awk '{ sub(/$(HASH).*/, "") } NF { for (i = 2; i <= NF; ++i) print "$(BUILD_DIR)/user_" $$i ".elf" }' $(ROOTFS_MANIFEST))
+ROOTFS_UNLISTED := $(filter-out $(ROOTFS_ELFS),$(USER_ELFS))
+ifneq ($(ROOTFS_UNLISTED),)
+$(error not placed by $(ROOTFS_MANIFEST): $(ROOTFS_UNLISTED))
+endif
+ROOTFS_ARGS = --manifest $(ROOTFS_MANIFEST) --build-dir $(BUILD_DIR) --init-rc $(INIT_CONFIG)
+endif
 
 -include $(wildcard $(BUILD_DIR)/*.d)
 
@@ -951,6 +979,13 @@ $(USER_POWERCHECK_OBJ): userspace/powercheck/powercheck.c userspace/lib/syscall.
 $(USER_POWERCHECK_ELF): $(USER_POWERCHECK_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
 	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_POWERCHECK_OBJ)
 
+$(USER_FUZZYCHECK_OBJ): userspace/fuzzycheck/fuzzycheck.c userspace/lib/fuzzy.h userspace/lib/launcher_model.h userspace/lib/mini_libc.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(USER_FUZZYCHECK_ELF): $(USER_FUZZYCHECK_OBJ) $(USER_LAUNCHER_MODEL_OBJ) $(USER_FUZZY_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
+	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_FUZZYCHECK_OBJ) $(USER_LAUNCHER_MODEL_OBJ) $(USER_FUZZY_OBJ)
+
 $(USER_PIPEPRODUCER_OBJ): userspace/pipeproducer/pipeproducer.c userspace/lib/syscall.h userspace/lib/mini_libc.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(USER_CFLAGS) -c $< -o $@
@@ -1022,14 +1057,57 @@ $(USER_GFX_EFFECTS_OBJ): userspace/lib/gfx_effects.c userspace/lib/gfx_effects.h
 $(USER_COMPOSITOR_ELF): $(USER_COMPOSITOR_OBJ) $(BUILD_DIR)/input_router.o $(USER_GFX_EFFECTS_OBJ) $(USER_DESKTOPTEST_THEME_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
 	$(LD) $(USER_LDFLAGS) --defsym main=comp_event_loop -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_COMPOSITOR_OBJ) $(BUILD_DIR)/input_router.o $(USER_GFX_EFFECTS_OBJ) $(USER_DESKTOPTEST_THEME_OBJ)
 
-$(USER_DESKTOPDEMO_OBJ): userspace/desktopdemo/desktopdemo.c userspace/compositor/compositor.h userspace/lib/mini_libc.h userspace/lib/syscall.h userspace/lib/wallclock.h userspace/lib/settings.h userspace/lib/settings_ui.h
+$(USER_DESKTOPDEMO_OBJ): userspace/desktopdemo/desktopdemo.c userspace/desktopdemo/spotlight.h userspace/compositor/compositor.h userspace/lib/mini_libc.h userspace/lib/syscall.h userspace/lib/wallclock.h userspace/lib/settings.h userspace/lib/settings_ui.h userspace/lib/window_geometry.h userspace/lib/filemanager.h userspace/desktopdemo/app_terminal.h userspace/lib/terminal.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -Iuserspace/compositor -Iuserspace/desktopdemo -c $< -o $@
+
+$(USER_FUZZY_OBJ): userspace/lib/fuzzy.c userspace/lib/fuzzy.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(USER_LAUNCHER_MODEL_OBJ): userspace/lib/launcher_model.c userspace/lib/launcher_model.h userspace/lib/fuzzy.h userspace/lib/mini_libc.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(USER_SPOTLIGHT_OBJ): userspace/desktopdemo/spotlight.c userspace/desktopdemo/spotlight.h userspace/compositor/compositor.h userspace/lib/launcher_model.h userspace/lib/gfx_effects.h userspace/lib/mini_libc.h userspace/lib/settings.h userspace/lib/syscall.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -Iuserspace/compositor -Iuserspace/desktopdemo -c $< -o $@
+
+$(USER_DESKTOPDEMO_ELF): $(USER_DESKTOPDEMO_OBJ) $(USER_LAUNCHER_OBJS) $(USER_APP_TERMINAL_OBJ) $(USER_TERMINAL_OBJ) $(USER_APP_EDITOR_OBJ) $(USER_EDITOR_LIB_OBJS) $(USER_COMPOSITOR_OBJ) $(USER_GFX_EFFECTS_OBJ) $(USER_DESKTOPTEST_THEME_OBJ) $(USER_DESKTOPTEST_FILEMANAGER_OBJ) $(USER_WALLCLOCK_OBJ) $(USER_SETTINGS_OBJS) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
+	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_DESKTOPDEMO_OBJ) $(USER_LAUNCHER_OBJS) $(USER_APP_TERMINAL_OBJ) $(USER_TERMINAL_OBJ) $(USER_APP_EDITOR_OBJ) $(USER_EDITOR_LIB_OBJS) $(USER_COMPOSITOR_OBJ) $(USER_GFX_EFFECTS_OBJ) $(USER_DESKTOPTEST_THEME_OBJ) $(USER_DESKTOPTEST_FILEMANAGER_OBJ) $(USER_WALLCLOCK_OBJ) $(USER_SETTINGS_OBJS)
+
+$(USER_APP_EDITOR_OBJ): userspace/desktopdemo/app_editor.c
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(USER_CFLAGS) -Iuserspace/compositor -c $< -o $@
 
-$(USER_DESKTOPDEMO_ELF): $(USER_DESKTOPDEMO_OBJ) $(USER_COMPOSITOR_OBJ) $(USER_GFX_EFFECTS_OBJ) $(USER_DESKTOPTEST_THEME_OBJ) $(USER_WALLCLOCK_OBJ) $(USER_SETTINGS_OBJS) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
-	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_DESKTOPDEMO_OBJ) $(USER_COMPOSITOR_OBJ) $(USER_GFX_EFFECTS_OBJ) $(USER_DESKTOPTEST_THEME_OBJ) $(USER_WALLCLOCK_OBJ) $(USER_SETTINGS_OBJS)
+$(USER_EDITOR_LIB_OBJS): $(BUILD_DIR)/user_%.o: userspace/lib/%.c
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -c $< -o $@
 
-$(USER_DESKTOPTEST_OBJ): userspace/desktoptest/desktoptest.c userspace/compositor/compositor.h userspace/lib/gfx_effects.h userspace/lib/mini_libc.h userspace/lib/widgets.h userspace/lib/layout.h userspace/lib/theme.h userspace/lib/taskbar.h userspace/lib/launcher.h userspace/lib/filemanager.h userspace/lib/settings.h userspace/lib/settings_info.h userspace/lib/settings_ui.h
+# The terminal completes command names from the shell's builtin list.
+$(USER_TERMINAL_OBJ): userspace/lib/terminal.c userspace/lib/terminal.h userspace/shell/builtin_names.h userspace/lib/mini_libc.h userspace/lib/signal.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -Iuserspace/shell -c $< -o $@
+
+$(USER_APP_TERMINAL_OBJ): userspace/desktopdemo/app_terminal.c userspace/desktopdemo/app_terminal.h userspace/lib/terminal.h userspace/lib/settings.h userspace/compositor/compositor.h userspace/lib/mini_libc.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -Iuserspace/compositor -c $< -o $@
+
+$(USER_TERMTEST_OBJ): userspace/termtest/termtest.c userspace/lib/terminal.h userspace/lib/mini_libc.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(USER_TERMTEST_ELF): $(USER_TERMTEST_OBJ) $(USER_TERMINAL_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
+	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_TERMTEST_OBJ) $(USER_TERMINAL_OBJ)
+
+$(USER_EDITORTEST_OBJ): userspace/editortest/editortest.c
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(USER_EDITORTEST_ELF): $(USER_EDITORTEST_OBJ) $(USER_EDITOR_LIB_OBJS) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
+	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_EDITORTEST_OBJ) $(USER_EDITOR_LIB_OBJS)
+
+$(USER_DESKTOPTEST_OBJ): userspace/desktoptest/desktoptest.c userspace/compositor/compositor.h userspace/lib/gfx_effects.h userspace/lib/mini_libc.h userspace/lib/widgets.h userspace/lib/layout.h userspace/lib/theme.h userspace/lib/taskbar.h userspace/lib/launcher.h userspace/lib/filemanager.h userspace/lib/settings.h userspace/lib/settings_info.h userspace/lib/settings_ui.h userspace/lib/window_geometry.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(USER_CFLAGS) -Iuserspace/compositor -c $< -o $@
 
@@ -1053,9 +1131,9 @@ $(USER_DESKTOPTEST_LAUNCHER_OBJ): userspace/lib/launcher.c userspace/lib/launche
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(USER_CFLAGS) -c $< -o $@
 
-$(USER_DESKTOPTEST_FILEMANAGER_OBJ): userspace/lib/filemanager.c userspace/lib/filemanager.h userspace/lib/widgets.h userspace/lib/mini_libc.h
+$(USER_DESKTOPTEST_FILEMANAGER_OBJ): userspace/lib/filemanager.c userspace/lib/filemanager.h userspace/lib/settings.h userspace/lib/gfx_effects.h userspace/compositor/compositor.h userspace/lib/mini_libc.h
 	mkdir -p $(BUILD_DIR)
-	$(CC) $(USER_CFLAGS) -c $< -o $@
+	$(CC) $(USER_CFLAGS) -Iuserspace/compositor -c $< -o $@
 
 $(USER_DESKTOPTEST_ELF): $(USER_DESKTOPTEST_OBJ) $(USER_COMPOSITOR_OBJ) $(USER_GFX_EFFECTS_OBJ) $(USER_DESKTOPTEST_WIDGETS_OBJ) $(USER_DESKTOPTEST_LAYOUT_OBJ) $(USER_DESKTOPTEST_THEME_OBJ) $(USER_DESKTOPTEST_TASKBAR_OBJ) $(USER_DESKTOPTEST_LAUNCHER_OBJ) $(USER_DESKTOPTEST_FILEMANAGER_OBJ) $(USER_WALLCLOCK_OBJ) $(USER_SETTINGS_OBJS) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
 	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_DESKTOPTEST_OBJ) $(USER_COMPOSITOR_OBJ) $(USER_GFX_EFFECTS_OBJ) $(USER_DESKTOPTEST_WIDGETS_OBJ) $(USER_DESKTOPTEST_LAYOUT_OBJ) $(USER_DESKTOPTEST_THEME_OBJ) $(USER_DESKTOPTEST_TASKBAR_OBJ) $(USER_DESKTOPTEST_LAUNCHER_OBJ) $(USER_DESKTOPTEST_FILEMANAGER_OBJ) $(USER_WALLCLOCK_OBJ) $(USER_SETTINGS_OBJS)
@@ -1138,89 +1216,9 @@ $(USER_FAULTTEST_OBJ): userspace/faulttest/faulttest.c userspace/lib/syscall.h u
 $(USER_FAULTTEST_ELF): $(USER_FAULTTEST_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
 	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_FAULTTEST_OBJ)
 
-$(INITRD): $(USER_HELLO_ELF) $(USER_ECHO_ELF) $(USER_CAT_ELF) $(USER_TIME_ELF) $(USER_SLEEP_ELF) $(USER_PIPEREAD_ELF) $(USER_PIPEDELAYREAD_ELF) $(USER_PIPEPRODUCER_ELF) $(USER_PIPECONSUMER_ELF) $(USER_LOGPRODUCER_A_ELF) $(USER_LOGPRODUCER_B_ELF) $(USER_LOGCOLLECTOR_ELF) $(USER_BOOTPROBE_ELF) $(USER_HANDOFFCHECK_ELF) $(USER_STDIOCHECK_ELF) $(USER_STDIOBADBIND_ELF) $(USER_STDIONULLCHECK_ELF) $(USER_DUPCHECK_ELF) $(USER_HANDLELIMITCHECK_ELF) $(USER_FILEOFFSETCHECK_ELF) $(USER_SEEKCHECK_ELF) $(USER_POLLCHECK_ELF) $(USER_POLLWAITCHECK_ELF) $(USER_POLLWAKEWRITER_ELF) $(USER_POLLMANYCHECK_ELF) $(USER_CWDCHECK_ELF) $(USER_DUPFALLBACKCHECK_ELF) $(USER_FSTEST_ELF) $(USER_LOGIN_ELF) $(USER_PKGTEST_ELF) $(USER_LOGSINK_WRITER_A_ELF) $(USER_LOGSINK_WRITER_B_ELF) $(USER_TEEWRITER_ELF) $(USER_TEEREADER_A_ELF) $(USER_TEEREADER_B_ELF) $(USER_MMAPTEST_ELF) $(USER_COMPOSITOR_ELF) $(USER_DESKTOPDEMO_ELF) $(USER_DESKTOPTEST_ELF) $(USER_INIT_ELF) $(USER_SHELL_ELF) $(USER_SHELLTEST_ELF) $(INIT_CONFIG) tools/mkinitrd.py $(USER_DATE_ELF) $(USER_RTCTEST_ELF) $(USER_PS_ELF) $(USER_PROCTEST_ELF) $(USER_DIRTEST_ELF) $(USER_POWEROFF_ELF) $(USER_REBOOT_ELF) $(USER_POWERCHECK_ELF) $(USER_NETTEST_ELF) $(USER_PING_ELF) $(USER_LIBCTEST_ELF) $(USER_LINKTEST_ELF) $(USER_SYSLOGD_ELF) $(USER_LOGREAD_ELF) $(USER_LOGTEST_ELF) $(USER_MPROTECTTEST_ELF) $(USER_NSLOOKUP_ELF) $(USER_UDPTEST_ELF) $(USER_FAULTTEST_ELF) $(USER_SCHEDTEST_ELF) $(USER_SIGTEST_ELF) $(USER_WPTEST_ELF) $(USER_DCACHETEST_ELF) $(USER_IOTEST_ELF) $(USER_PERFTEST_ELF) $(USER_TOP_ELF) $(USER_PERFSTAT_ELF) $(USER_SPLASHTEST_ELF) $(USER_WAITQTEST_ELF) $(USER_SUPERVISETEST_ELF) $(USER_SUPERVISEFLAP_ELF) $(USER_SUPERVISEHANG_ELF) $(USER_EXECTEST_ELF) $(USER_EXECHELPER_ELF) $(USER_PERMTEST_ELF) $(USER_TCPTEST_ELF) $(USER_NC_ELF)
+$(INITRD): $(ROOTFS_STAMP) tools/mkinitrd.py
 	mkdir -p $(BUILD_DIR)
-	python3 tools/mkinitrd.py $@ \
-		user=$(USER_HELLO_ELF) \
-		echo=$(USER_ECHO_ELF) \
-		cat=$(USER_CAT_ELF) \
-		time=$(USER_TIME_ELF) \
-		sleep=$(USER_SLEEP_ELF) \
-		piperead=$(USER_PIPEREAD_ELF) \
-		pipedelayread=$(USER_PIPEDELAYREAD_ELF) \
-		pipeproducer=$(USER_PIPEPRODUCER_ELF) \
-		pipeconsumer=$(USER_PIPECONSUMER_ELF) \
-		logproducer_a=$(USER_LOGPRODUCER_A_ELF) \
-		logproducer_b=$(USER_LOGPRODUCER_B_ELF) \
-		logcollector=$(USER_LOGCOLLECTOR_ELF) \
-		bootprobe=$(USER_BOOTPROBE_ELF) \
-		handoffcheck=$(USER_HANDOFFCHECK_ELF) \
-		stdiocheck=$(USER_STDIOCHECK_ELF) \
-		stdiobadbind=$(USER_STDIOBADBIND_ELF) \
-		stdionullcheck=$(USER_STDIONULLCHECK_ELF) \
-		dupcheck=$(USER_DUPCHECK_ELF) \
-		handlelimitcheck=$(USER_HANDLELIMITCHECK_ELF) \
-		fileoffsetcheck=$(USER_FILEOFFSETCHECK_ELF) \
-		seekcheck=$(USER_SEEKCHECK_ELF) \
-		pollcheck=$(USER_POLLCHECK_ELF) \
-		pollwaitcheck=$(USER_POLLWAITCHECK_ELF) \
-		pollwakewriter=$(USER_POLLWAKEWRITER_ELF) \
-		pollmanycheck=$(USER_POLLMANYCHECK_ELF) \
-		cwdcheck=$(USER_CWDCHECK_ELF) \
-		fstest=$(USER_FSTEST_ELF) \
-		dirtest=$(USER_DIRTEST_ELF) \
-		login=$(USER_LOGIN_ELF) \
-		pkgtest=$(USER_PKGTEST_ELF) \
-		ps=$(USER_PS_ELF) \
-		proctest=$(USER_PROCTEST_ELF) \
-		nettest=$(USER_NETTEST_ELF) \
-		schedtest=$(USER_SCHEDTEST_ELF) \
-		sigtest=$(USER_SIGTEST_ELF) \
-		wptest=$(USER_WPTEST_ELF) \
-		iotest=$(USER_IOTEST_ELF) \
-		perftest=$(USER_PERFTEST_ELF) \
-		top=$(USER_TOP_ELF) \
-		perfstat=$(USER_PERFSTAT_ELF) \
-		splashtest=$(USER_SPLASHTEST_ELF) \
-		waitqtest=$(USER_WAITQTEST_ELF) \
-		supervisetest=$(USER_SUPERVISETEST_ELF) \
-		superviseflap=$(USER_SUPERVISEFLAP_ELF) \
-		supervisehang=$(USER_SUPERVISEHANG_ELF) \
-		exectest=$(USER_EXECTEST_ELF) \
-		exechelper=$(USER_EXECHELPER_ELF) \
-		permtest=$(USER_PERMTEST_ELF) \
-		ping=$(USER_PING_ELF) \
-		linktest=$(USER_LINKTEST_ELF) \
-		dcachetest=$(USER_DCACHETEST_ELF) \
-		syslogd=$(USER_SYSLOGD_ELF) \
-		logread=$(USER_LOGREAD_ELF) \
-		logtest=$(USER_LOGTEST_ELF) \
-		nslookup=$(USER_NSLOOKUP_ELF) \
-		udptest=$(USER_UDPTEST_ELF) \
-		tcptest=$(USER_TCPTEST_ELF) \
-		nc=$(USER_NC_ELF) \
-		dupfallbackcheck=$(USER_DUPFALLBACKCHECK_ELF) \
-		logsink_writer_a=$(USER_LOGSINK_WRITER_A_ELF) \
-		logsink_writer_b=$(USER_LOGSINK_WRITER_B_ELF) \
-		teewriter=$(USER_TEEWRITER_ELF) \
-		teereader_a=$(USER_TEEREADER_A_ELF) \
-		teereader_b=$(USER_TEEREADER_B_ELF) \
-		mmaptest=$(USER_MMAPTEST_ELF) \
-		libctest=$(USER_LIBCTEST_ELF) \
-		mprotecttest=$(USER_MPROTECTTEST_ELF) \
-		faulttest=$(USER_FAULTTEST_ELF) \
-		poweroff=$(USER_POWEROFF_ELF) \
-		reboot=$(USER_REBOOT_ELF) \
-		powercheck=$(USER_POWERCHECK_ELF) \
-		compositor=$(USER_COMPOSITOR_ELF) \
-		desktopdemo=$(USER_DESKTOPDEMO_ELF) \
-		desktoptest=$(USER_DESKTOPTEST_ELF) \
-		init.rc=$(INIT_CONFIG) \
-		init=$(USER_INIT_ELF) \
-		shell=$(USER_SHELL_ELF) \
-		date=$(USER_DATE_ELF) \
-		rtctest=$(USER_RTCTEST_ELF) \
-		shelltest=$(USER_SHELLTEST_ELF)
+	python3 tools/mkinitrd.py $@ $(ROOTFS_STAGE)
 endif
 
 $(BUILD_DIR)/syscall.o: kernel/core/syscall.c kernel/core/usercopy.h kernel/core/process.h kernel/fs/vfs.h kernel/mm/paging.h kernel/include/syscall.h $(ARCH_DIR)/isr.h kernel/include/console.h kernel/include/tty.h
@@ -1355,25 +1353,19 @@ smoke:
 clean:
 	rm -rf $(BUILD_DIR)
 
-$(DISK_IMG): $(FS_FILES)
+$(ROOTFS_STAMP): tools/stage_rootfs.py $(ROOTFS_MANIFEST) $(ROOTFS_ELFS) $(INIT_CONFIG) $(FS_FILES)
+	mkdir -p $(BUILD_DIR)
+	python3 tools/stage_rootfs.py --out $(ROOTFS_STAGE) --static $(FS_DIR) $(ROOTFS_ARGS)
+	touch $@
+
+$(DISK_IMG): $(ROOTFS_STAMP)
 	mkdir -p $(BUILD_DIR)
 	@if command -v mke2fs >/dev/null 2>&1; then \
-		rm -rf $(BUILD_DIR)/stagedisk; mkdir -p $(BUILD_DIR)/stagedisk; \
-		if [ -d $(FS_DIR) ]; then cp -a $(FS_DIR)/. $(BUILD_DIR)/stagedisk/ 2>/dev/null || true; fi; \
-		mkdir -p $(BUILD_DIR)/stagedisk/bin $(BUILD_DIR)/stagedisk/etc $(BUILD_DIR)/stagedisk/tmp $(BUILD_DIR)/stagedisk/home/user $(BUILD_DIR)/stagedisk/var/log; \
-		find $(BUILD_DIR)/stagedisk -type d -exec chmod 755 {} +; \
-		find $(BUILD_DIR)/stagedisk -type f -exec chmod 644 {} +; \
-		chmod 777 $(BUILD_DIR)/stagedisk/tmp; \
-		for f in $(BUILD_DIR)/user_*.elf; do \
-			[ -e "$$f" ] || continue; \
-			n=$$(basename $$f .elf); n=$${n#user_}; \
-			install -m 755 $$f $(BUILD_DIR)/stagedisk/$$n; \
-		done; \
-		install -m 644 $(INIT_CONFIG) $(BUILD_DIR)/stagedisk/init.rc; \
 		rm -f $(DISK_IMG); \
-		mke2fs -t ext2 -F -b 1024 -E root_owner=0:0 -d $(BUILD_DIR)/stagedisk $(DISK_IMG) 16M; \
-		{ find $(BUILD_DIR)/stagedisk -mindepth 1 -printf 'sif /%P uid 0\nsif /%P gid 0\n'; \
-		  printf 'sif /home/user uid 1000\nsif /home/user gid 1000\n'; } | debugfs -w -f - $(DISK_IMG) >/dev/null; \
+		mke2fs -t ext2 -F -b 1024 -E root_owner=0:0 -d $(ROOTFS_STAGE) $(DISK_IMG) 16M; \
+		{ find $(ROOTFS_STAGE) -mindepth 1 -printf 'sif /%P uid 0\nsif /%P gid 0\n'; \
+		  printf 'sif /home/user uid 1000\nsif /home/user gid 1000\n'; \
+		  find $(ROOTFS_STAGE)/home/user -mindepth 1 -printf 'sif /home/user/%P uid 1000\nsif /home/user/%P gid 1000\n'; } | debugfs -w -f - $(DISK_IMG) >/dev/null; \
 	else \
 		dd if=/dev/zero of=$(DISK_IMG) bs=1M count=16; \
 	fi

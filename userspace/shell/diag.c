@@ -4,8 +4,8 @@
 #include "output.h"
 
 /* Interactive probes for the pipe, inheritance and poll primitives. They
- * print what the kernel reports and spawn the helper programs /piperead,
- * /pipedelayread and /pollwakewriter. */
+ * print what the kernel reports and spawn the helper programs piperead,
+ * pipedelayread and pollwakewriter from /lib/tests. */
 
 static void write_poll_mask(long mask) {
   int wrote = 0;
@@ -90,7 +90,7 @@ static int diag_piperun(int argc, char **argv) {
     return 1;
   }
   out_flush();
-  long pid = spawn("/piperead");
+  long pid = spawn("/lib/tests/piperead");
   if (pid < 0) {
     out_str(2, "piperun: spawn failed\n");
     close(fds[0]);
@@ -128,7 +128,7 @@ static int diag_pipenoinherit(int argc, char **argv) {
     return 1;
   }
   out_flush();
-  long pid = spawn("/piperead");
+  long pid = spawn("/lib/tests/piperead");
   if (pid < 0) {
     out_str(2, "pipenoinherit: spawn failed\n");
     close(fds[0]);
@@ -167,7 +167,7 @@ static int diag_pipeeof(int argc, char **argv) {
   }
   close(fds[1]);
   out_flush();
-  long pid = spawn("/piperead");
+  long pid = spawn("/lib/tests/piperead");
   if (pid < 0) {
     out_str(2, "pipeeof: spawn failed\n");
     close(fds[0]);
@@ -203,7 +203,7 @@ static int diag_pipeblock(int argc, char **argv) {
     return 1;
   }
   out_flush();
-  long pid = spawn("/piperead");
+  long pid = spawn("/lib/tests/piperead");
   if (pid < 0) {
     out_str(2, "pipeblock: spawn failed\n");
     close(fds[0]);
@@ -262,7 +262,7 @@ static int diag_pipefull(int argc, char **argv) {
     return 1;
   }
   out_flush();
-  long pid = spawn("/pipedelayread");
+  long pid = spawn("/lib/tests/pipedelayread");
   if (pid < 0) {
     out_str(2, "pipefull: spawn failed\n");
     close(fds[0]);
@@ -410,7 +410,7 @@ static int diag_pollwaitpipe(int argc, char **argv) {
   out_str(1, " ms\n");
 
   out_flush();
-  pid = spawn_with_stdio("/pollwakewriter", SPAWN_STDIO_NULL, fds[1],
+  pid = spawn_with_stdio("/lib/tests/pollwakewriter", SPAWN_STDIO_NULL, fds[1],
                          SPAWN_STDIO_NULL);
   if (pid < 0) {
     out_str(2, "pollwaitpipe: spawn failed\n");
@@ -502,7 +502,7 @@ static int diag_pollmanypipe(int argc, char **argv) {
   out_char(1, '\n');
 
   out_flush();
-  pid = spawn_with_stdio("/pollwakewriter", SPAWN_STDIO_NULL, right[1],
+  pid = spawn_with_stdio("/lib/tests/pollwakewriter", SPAWN_STDIO_NULL, right[1],
                          SPAWN_STDIO_NULL);
   if (pid < 0) {
     out_str(2, "pollmanypipe: spawn failed\n");

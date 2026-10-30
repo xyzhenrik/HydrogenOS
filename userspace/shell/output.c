@@ -9,10 +9,14 @@ enum {
     TTY_COLOR_WHITE = 15,
 };
 
+static const char ansi_error[] = "\x1b[91m";
+static const char ansi_reset[] = "\x1b[0m";
+
 static char buffer[OUTPUT_BUFFER_CAP];
 static size_t buffer_len = 0;
 static int buffer_fd = -1;
-static int color_enabled = 0;
+static OutColor color_mode = OUT_COLOR_NONE;
+static int color_paused = 0;
 
 static void write_all(int fd, const char *buf, size_t len) {
     while (len > 0) {
@@ -67,13 +71,26 @@ void out_u64(int fd, unsigned long value) {
         out_char(fd, digits[--count]);
 }
 
+/* Console tinting never reaches a stream. ANSI sequences do, so they only go
+ * to the shell's own stderr: a message for a child's stderr (a pipe or file)
+ * must stay plain text. */
+static int tint_enabled(int fd) {
+    if (color_mode == OUT_COLOR_ANSI)
+        return fd == 2 && !color_paused;
+    return color_mode == OUT_COLOR_CONSOLE;
+}
+
 void out_error_to(int fd, const char *prefix, const char *subject,
                   const char *message) {
+    int tint;
     if (fd < 0)
         return;
     out_flush();
-    if (color_enabled)
+    tint = tint_enabled(fd);
+    if (tint && color_mode == OUT_COLOR_CONSOLE)
         tty_set_color(TTY_COLOR_RED, TTY_COLOR_BLACK);
+    else if (tint)
+        out_str(fd, ansi_error);
     out_str(fd, prefix);
     if (subject) {
         out_str(fd, ": ");
@@ -81,9 +98,11 @@ void out_error_to(int fd, const char *prefix, const char *subject,
     }
     out_str(fd, ": ");
     out_str(fd, message);
+    if (tint && color_mode == OUT_COLOR_ANSI)
+        out_str(fd, ansi_reset);
     out_char(fd, '\n');
     out_flush();
-    if (color_enabled)
+    if (tint && color_mode == OUT_COLOR_CONSOLE)
         tty_set_color(TTY_COLOR_WHITE, TTY_COLOR_BLACK);
 }
 
@@ -91,4 +110,6 @@ void out_error(const char *prefix, const char *subject, const char *message) {
     out_error_to(2, prefix, subject, message);
 }
 
-void out_set_color(int enabled) { color_enabled = enabled; }
+void out_set_color(OutColor mode) { color_mode = mode; }
+
+void out_pause_color(int paused) { color_paused = paused; }

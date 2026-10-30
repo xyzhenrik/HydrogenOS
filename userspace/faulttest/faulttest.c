@@ -66,8 +66,8 @@ static void expect_fault(const char *name, const char *pointer, long result) {
     X("mkdir path", sys_mkdir((const char *)bad)) \
     X("rmdir path", sys_rmdir((const char *)bad)) \
     X("unlink path", sys_unlink((const char *)bad)) \
-    X("rename old path", sys_rename((const char *)bad, "/faulttest.new")) \
-    X("rename new path", sys_rename("/faulttest.old", (const char *)bad)) \
+    X("rename old path", sys_rename((const char *)bad, "/tmp/faulttest.new")) \
+    X("rename new path", sys_rename("/tmp/faulttest.old", (const char *)bad)) \
     X("writef path", sys_writef((const char *)bad, "x", 1)) \
     X("spawn path", sys_spawn((const char *)bad, 0)) \
     X("spawn_with_stdio path", \
@@ -77,19 +77,19 @@ static void expect_fault(const char *name, const char *pointer, long result) {
       sys_spawn_args((const char *)bad, 0, 0, SPAWN_STDIO_INHERIT, \
                      SPAWN_STDIO_INHERIT, SPAWN_STDIO_INHERIT)) \
     X("spawn_args argv", \
-      sys_spawn_args("/echo", (const char *const *)bad, 0, \
+      sys_spawn_args("/bin/echo", (const char *const *)bad, 0, \
                      SPAWN_STDIO_INHERIT, SPAWN_STDIO_INHERIT, \
                      SPAWN_STDIO_INHERIT)) \
     X("spawn_args envp", \
-      sys_spawn_args("/echo", 0, (const char *const *)bad, \
+      sys_spawn_args("/bin/echo", 0, (const char *const *)bad, \
                      SPAWN_STDIO_INHERIT, SPAWN_STDIO_INHERIT, \
                      SPAWN_STDIO_INHERIT)) \
     X("spawn_args argv entry", \
-      sys_spawn_args("/echo", argv_with(bad), 0, SPAWN_STDIO_INHERIT, \
+      sys_spawn_args("/bin/echo", argv_with(bad), 0, SPAWN_STDIO_INHERIT, \
                      SPAWN_STDIO_INHERIT, SPAWN_STDIO_INHERIT)) \
     X("write buffer", sys_write(1, (const void *)bad, BAD_LEN)) \
     X("read buffer", sys_read(0, (void *)bad, BAD_LEN)) \
-    X("writef data", sys_writef("/faulttest.tmp", (const void *)bad, BAD_LEN)) \
+    X("writef data", sys_writef("/tmp/faulttest.tmp", (const void *)bad, BAD_LEN)) \
     X("fb_blit source", sys_fb_blit(0, 0, 2, 2, (const void *)bad)) \
     X("fb_blit_strided source", \
       sys_fb_blit_strided(0, 0, 2, 2, (const void *)bad, 8)) \
@@ -143,7 +143,7 @@ static void check_bad_lengths(void) {
         expect_fault("read length", "valid", sys_read(0, scratch, lengths[i]));
     }
     expect_fault("writef length", "valid",
-                 sys_writef("/faulttest.tmp", scratch, 0xFFFFFFFFul));
+                 sys_writef("/tmp/faulttest.tmp", scratch, 0xFFFFFFFFul));
 }
 
 static void check_page_boundaries(void) {
@@ -222,7 +222,7 @@ static int check_valid_calls(void) {
         fail("syscall with valid pointers");
         return -1;
     }
-    open_fd = (int)sys_open("/faulttest", OPEN_READ);
+    open_fd = (int)sys_open("/lib/tests/faulttest", OPEN_READ);
     if (open_fd < 3) {
         fail("open own executable");
         return -1;

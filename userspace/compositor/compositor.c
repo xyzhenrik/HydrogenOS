@@ -116,6 +116,13 @@ static void damage_add_rect(int x, int y, int w, int h) {
     if (x + w > comp_w) w = comp_w - x;
     if (y + h > comp_h) h = comp_h - y;
     if (w <= 0 || h <= 0) return;
+    /* Drawing text damages its whole window per string, so repeats are common. */
+    for (int i = 0; i < comp_damage_cnt; ++i) {
+        const CompRect *known = &comp_damages[i];
+        if (x >= known->x && y >= known->y &&
+            x + w <= known->x + known->w && y + h <= known->y + known->h)
+            return;
+    }
     CompRect r = { x, y, w, h };
     if (comp_damage_cnt >= COMP_MAX_DAMAGES) {
         /* Never drop damage: widen the last slot to cover the new rect. */
@@ -162,8 +169,7 @@ static const GfxShadow *window_shadow(const Window *win) {
     return gfx_shadow_get(radius, fx->shadow_blur_radius);
 }
 
-/* Screen area a window paints: its rectangle plus its shadow. */
-static CompRect window_extent(const Window *win) {
+CompRect comp_window_extent(const Window *win) {
     CompRect extent = { win->x, win->y, win->w, win->h };
     const GfxShadow *shadow = window_shadow(win);
     if (shadow) {
@@ -301,7 +307,7 @@ int comp_destroy_window(Window *win) {
         }
     }
     if (comp_focused_id == win->id) comp_focused_id = 0;
-    CompRect extent = window_extent(win);
+    CompRect extent = comp_window_extent(win);
     damage_add(&extent);
     struct CompWindowState *st = win->state;
     if (st->presented && st->last_visible) damage_add(&st->last_extent);
@@ -332,11 +338,13 @@ int comp_resize_window(Window *win, int w, int h) {
         win->surface = buf;
         st->surface_capacity = capacity;
     }
-    damage_add_rect(win->x, win->y, win->w, win->h);
+    CompRect before = comp_window_extent(win);
     win->w = w;
     win->h = h;
     win->damaged = 1;
-    damage_add_rect(win->x, win->y, win->w, win->h);
+    CompRect after = comp_window_extent(win);
+    damage_add(&before);
+    damage_add(&after);
     return 0;
 }
 
@@ -385,7 +393,7 @@ int comp_raise(Window *win) {
         }
     }
     /* The shadow now falls over windows it used to be beneath. */
-    CompRect extent = window_extent(win);
+    CompRect extent = comp_window_extent(win);
     damage_add(&extent);
     return 0;
 }
@@ -404,7 +412,8 @@ int comp_focus(Window *win) {
 int comp_damage_window(Window *win) {
     if (!win) return -1;
     win->damaged = 1;
-    damage_add_rect(win->x, win->y, win->w, win->h);
+    CompRect extent = comp_window_extent(win);
+    damage_add(&extent);
     return 0;
 }
 
@@ -543,7 +552,7 @@ static void reconcile_windows(void) {
         if (!win) continue;
         struct CompWindowState *st = win->state;
         CompRect rect = { win->x, win->y, win->w, win->h };
-        CompRect extent = window_extent(win);
+        CompRect extent = comp_window_extent(win);
         int visible = win->visible != 0;
         int restyled = !style_equal(&win->style, &st->last_style);
         /* The extent also depends on live theme shadow tokens, so compare it
@@ -651,6 +660,21 @@ static void glass_refresh(Window *win, int z_index) {
     if (rect_clip(&spread, &view, &repaint)) damage_add(&repaint);
 }
 
+/* Each frame is composed into the back buffer over the damaged areas only,
+   so after the flip the new back buffer is a frame behind. Copying the
+   damage over keeps both buffers equal to the complete current frame, which
+   is what lets presenting a merged bounding box of several damage rects show
+   no stale pixels in the gaps between them. */
+static void sync_back_buffer(void) {
+    for (int d = 0; d < comp_damage_cnt; ++d) {
+        const CompRect *r = &comp_damages[d];
+        for (int y = r->y; y < r->y + r->h; ++y) {
+            size_t offset = (size_t)y * (size_t)comp_w + (size_t)r->x;
+            memcpy(comp_back + offset, comp_front + offset, (size_t)r->w * sizeof(uint32_t));
+        }
+    }
+}
+
 int comp_render(void) {
     if (!comp_initialized) return -1;
     reconcile_windows();
@@ -682,6 +706,7 @@ int comp_render(void) {
         comp_last_damages[i] = comp_damages[i];
 
     comp_flip();
+    sync_back_buffer();
     comp_damage_cnt = 0;
     return 0;
 }
@@ -710,9 +735,25 @@ int comp_present(void) {
     return 0;
 }
 
+/* True when the bounding box of a and b covers nothing but a and b. Presenting
+   a box that covers more would blit pixels this frame did not compose: the
+   front buffer holds an older frame there. */
+static int rects_tile(const DamageRect *a, const DamageRect *b) {
+    int x0 = a->x < b->x ? a->x : b->x;
+    int y0 = a->y < b->y ? a->y : b->y;
+    int x1 = a->x + a->w > b->x + b->w ? a->x + a->w : b->x + b->w;
+    int y1 = a->y + a->h > b->y + b->h ? a->y + a->h : b->y + b->h;
+    int ix0 = a->x > b->x ? a->x : b->x;
+    int iy0 = a->y > b->y ? a->y : b->y;
+    int ix1 = a->x + a->w < b->x + b->w ? a->x + a->w : b->x + b->w;
+    int iy1 = a->y + a->h < b->y + b->h ? a->y + a->h : b->y + b->h;
+    long overlap = ix1 > ix0 && iy1 > iy0 ? (long)(ix1 - ix0) * (iy1 - iy0) : 0;
+    return (long)(x1 - x0) * (y1 - y0) <= (long)a->w * a->h + (long)b->w * b->h - overlap;
+}
+
 int comp_present_damage(void) {
     if (!comp_front) return -1;
-    /* Merge overlapping/adjacent damage rects to reduce blit count. */
+    /* Merge damage rects that tile exactly to reduce the blit count. */
     for (int i = 0; i < comp_last_damage_cnt; ++i) {
         DamageRect *a = &comp_last_damages[i];
         if (a->w <= 0 || a->h <= 0) continue;
@@ -721,8 +762,7 @@ int comp_present_damage(void) {
             DamageRect *b = &comp_last_damages[j];
             if (b->w <= 0 || b->h <= 0) continue;
             int bx1 = b->x + b->w, by1 = b->y + b->h;
-            if (b->x <= ax1 + 1 && bx1 + 1 >= a->x &&
-                b->y <= ay1 + 1 && by1 + 1 >= a->y) {
+            if (rects_tile(a, b)) {
                 int nx = a->x < b->x ? a->x : b->x;
                 int ny = a->y < b->y ? a->y : b->y;
                 int nx1 = ax1 > bx1 ? ax1 : bx1;
@@ -791,21 +831,46 @@ int comp_window_count(void) {
     return comp_window_cnt;
 }
 
-/* Simple bitmap glyph renderer (fallback for unavailable TrueType). */
-static void glyph_render(uint32_t *buf, int stride, int buf_w, int buf_h,
+/* Simple bitmap glyph renderer (fallback for unavailable TrueType). Pixels
+   outside the clip rectangle are left alone. */
+static void glyph_render(uint32_t *buf, int stride, const CompRect *clip,
                         int x, int y, unsigned char ch, uint32_t color) {
-    if (!buf || ch < 32) return;
+    if (!buf || ch <= 32) return;
     const unsigned char *glyph = comp_font8x16[ch];
     for (int row = 0; row < 16; ++row) {
+        int py = y + row;
+        if (py < clip->y || py >= clip->y + clip->h) continue;
         unsigned char bits = glyph[row];
         for (int col = 0; col < 8; ++col) {
             if (bits & (1u << (7 - col))) {
                 int px = x + col;
-                int py = y + row;
-                if (px < 0 || py < 0 || px >= buf_w || py >= buf_h) continue;
+                if (px < clip->x || px >= clip->x + clip->w) continue;
                 buf[py * stride + px] = color;
             }
         }
+    }
+}
+
+void comp_text_draw(Window *win, int x, int y, const char *text, size_t length,
+                    uint32_t color, const CompRect *clip) {
+    if (!win || !text) return;
+    uint32_t *surf = (uint32_t *)win->surface;
+    if (!surf || !window_surface_ok(win)) return;
+    CompRect bounds = { 0, 0, win->w, win->h };
+    CompRect area;
+    if (clip) {
+        if (!rect_clip(&bounds, clip, &area)) return;
+    } else {
+        area = bounds;
+    }
+    /* Glass surfaces carry content opacity in the alpha byte. */
+    uint32_t ink = win->style.material == COMP_MATERIAL_GLASS
+        ? (color | 0xFF000000u) : (color & 0x00FFFFFFu);
+    int cx = x;
+    for (size_t i = 0; i < length && text[i]; ++i) {
+        glyph_render(surf, win->w, &area, cx, y, (unsigned char)text[i], ink);
+        cx += 8;
+        if (cx >= area.x + area.w) break;
     }
 }
 
@@ -818,6 +883,7 @@ void text_render(Window *win, int x, int y, const char *text, uint32_t color) {
     /* Glass surfaces carry content opacity in the alpha byte. */
     uint32_t ink = win->style.material == COMP_MATERIAL_GLASS
         ? (color | 0xFF000000u) : (color & 0x00FFFFFFu);
+    CompRect all = { 0, 0, win->w, win->h };
     int cx = x;
     int cy = y;
     for (size_t i = 0; text[i]; ++i) {
@@ -825,7 +891,7 @@ void text_render(Window *win, int x, int y, const char *text, uint32_t color) {
         if (ch == '\n') { cx = x; cy += 16; continue; }
         if (ch == '\r') { cx = x; continue; }
         if (ch < 32) continue;
-        glyph_render(surf, win->w, win->w, win->h, cx, cy, ch, ink);
+        glyph_render(surf, win->w, &all, cx, cy, ch, ink);
         cx += 8;
     }
     win->damaged = 1;

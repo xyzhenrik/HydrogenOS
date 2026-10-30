@@ -29,8 +29,8 @@
 #define RUNNABLE_PROGRAM TEST_DIR "/runnable"
 #define PLAIN_PROGRAM TEST_DIR "/plain"
 
-#define SELF_PROGRAM "/permtest"
-#define LOGIN_PROGRAM "/login"
+#define SELF_PROGRAM "/lib/tests/permtest"
+#define LOGIN_PROGRAM "/sbin/login"
 #define MODE_UNPRIVILEGED "unprivileged"
 #define MODE_AS_ROOT "as-root"
 #define MODE_AS_USER "as-user"
