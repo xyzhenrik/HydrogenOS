@@ -479,51 +479,67 @@ static const char *test_launcher(void) {
 }
 
 static const char *test_filemanager(void) {
-    Surface *surface;
-    const char *path;
-    const FmEntry *entry;
-    int index;
+    FileManager fm;
+    Settings settings;
+    SettingsPalette palette;
+    Window *win;
+    const uint32_t *pixels;
+    int folders;
 
-    surface = surface_create(TEST_SURFACE_W, TEST_SURFACE_H);
-    if (!surface) {
-        return "filemanager surface";
-    }
-
-    if (fm_init(".") != 0) {
+    settings_defaults(&settings);
+    settings_palette(&settings, &palette);
+    if (fm_init(&fm, &palette, 30, "/") != 0) {
         return "filemanager init";
     }
-    if (fm_get_count() <= 0) {
+    if (strcmp(fm.path, "/") != 0 || fm.count <= 0) {
         return "filemanager entries";
     }
-    path = fm_get_path();
-    if (!path || path[0] == '\0') {
-        return "filemanager path";
+    folders = 0;
+    for (int i = 0; i < fm.count; ++i) {
+        if (strcmp(fm.entries[i].name, ".") == 0 || strcmp(fm.entries[i].name, "..") == 0) {
+            return "filemanager dot entries";
+        }
+        if (fm.entries[i].kind == FM_KIND_FOLDER) {
+            if (folders != i) {
+                return "filemanager folders first";
+            }
+            ++folders;
+        }
     }
-    entry = fm_get_entry(0);
-    if (!entry || entry->name[0] == '\0') {
-        return "filemanager entry";
-    }
-    if (fm_get_entry(-1) != 0 || fm_get_entry(fm_get_count()) != 0) {
-        return "filemanager bounds";
-    }
-
-    if (fm_draw(surface) != 0) {
-        return "filemanager draw";
-    }
-    if (surface->pixels[0] != 0xFF1E1E2Eu) {
-        return "filemanager background";
+    if (folders == 0) {
+        return "filemanager folders";
     }
 
-    /* First icon cell starts at (8, 24); clicking it selects entry 0. */
-    index = fm_handle_click(9, 25);
-    if (index != 0) {
-        return "filemanager click";
+    win = comp_create_window(0, 0, 700, 480);
+    if (!win || !win->surface) {
+        return "filemanager window";
     }
-    if (!fm_get_selected_name()) {
-        return "filemanager selected";
+    fm_draw(&fm, win);
+    pixels = (const uint32_t *)win->surface;
+    if ((pixels[(win->h - 2) * win->w + 4] & 0x00FFFFFFu) != palette.sidebar ||
+        (pixels[(win->h - 2) * win->w + win->w - 4] & 0x00FFFFFFu) != palette.surface) {
+        return "filemanager paint";
     }
 
-    surface_destroy(surface);
+    /* Arrow keys select, Enter opens the selected folder, Backspace goes up. */
+    if (!(fm_key(&fm, win, FM_KEY_DOWN) & FM_REDRAW) || fm.selected != 0) {
+        return "filemanager select";
+    }
+    if (!(fm_key(&fm, win, '\n') & FM_REDRAW) || fm.path[1] == 0 || fm.back_count != 1) {
+        return "filemanager open folder";
+    }
+    if (!(fm_key(&fm, win, '\b') & FM_REDRAW) || strcmp(fm.path, "/") != 0) {
+        return "filemanager up";
+    }
+    if (fm_key(&fm, win, '\b') != 0) {
+        return "filemanager up at root";
+    }
+    if (!(fm_click(&fm, win, 0, 0) == 0) || fm_hover(&fm, win, -1, -1) != 0) {
+        return "filemanager title bar";
+    }
+
+    fm_destroy(&fm);
+    comp_destroy_window(win);
     return 0;
 }
 
