@@ -119,7 +119,7 @@ typedef struct Place {
 
 static const Place places[PLACE_COUNT] = {
     { "Root",     "/",     0x8E8E93u },
-    { "Home",     "/home", 0x0A84FFu },
+    { "Home",     "/home/user", 0x0A84FFu },
     { "Temp",     "/tmp",  0xFF9F0Au },
     { "Programs", "/bin",  0x5E5CE6u },
 };

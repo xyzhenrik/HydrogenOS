@@ -1017,6 +1017,9 @@ int main(void) {
     }
     SW = (int)info[0];
     SH = (int)info[1];
+    /* Prompts that start from the working directory, such as the editor's Save
+       As, should open in the user's home. A missing home leaves the root. */
+    (void)chdir("/home/user");
     if (SW <= 0 || SH <= 0) return 1;
 
     sys_console_cursor(0);

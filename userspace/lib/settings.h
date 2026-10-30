@@ -30,7 +30,7 @@
 typedef struct Settings {
     int theme;   /* SETTINGS_THEME_* */
     int accent;  /* index into the accent table */
-    int glass;   /* nonzero: blurred, translucent taskbar and menu */
+    int glass;   /* nonzero: blurred, translucent taskbar and launcher */
     int layout;  /* SETTINGS_LAYOUT_* */
 } Settings;
 
