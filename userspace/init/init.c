@@ -24,7 +24,7 @@ typedef enum init_stdio_mode {
 } init_stdio_mode_t;
 
 enum {
-    INIT_MAX_SERVICES = 48,
+    INIT_MAX_SERVICES = 96,
     INIT_MAX_CHANNELS = 16,
     INIT_MAX_TEES = 16,
     INIT_MAX_LOGSINKS = 16,
