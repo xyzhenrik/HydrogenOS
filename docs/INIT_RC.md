@@ -37,6 +37,7 @@ Options and dependencies may be mixed in any order after `DELAY_MS`.
 | `stderr=...` | Same modes as `stdout`. |
 | `stdin=channel NAME`, `stdout=channel NAME`, `stderr=channel NAME` | Connect to a named pipe shared by several services. The write end is closed after the last writer has been started or skipped, so the reader sees end-of-file. |
 | `stdin=tee NAME`, `stdout=tee NAME`, `stderr=tee NAME` | Collect output into a named buffer and replay it to a reader. |
+| `display=owner` | Marks a `daemon` that takes over the screen by presenting full frames. Without one, init removes the boot splash when startup ends (see Boot progress). |
 | `stdout=logsink NAME`, `stderr=logsink NAME` | Collect output into a log sink declared with `logsink`. |
 
 A run counts as failed if the service exits with a non-zero status, cannot be
@@ -74,6 +75,16 @@ init: NAME skipped, dependency DEP did not start
 At the end of startup `init` logs `init: N service(s) failed or skipped` if
 anything did not start. Daemons that did start keep running; if no daemon is
 running, `init` exits with status 1 after a failure.
+
+## Boot progress
+
+While the kernel's boot splash is up, `init` reports its progress by writing
+`services DONE TOTAL` to `/proc/boot` before it handles each service, and
+`services TOTAL TOTAL` once the table is processed. If no daemon marked
+`display=owner` was started, it then writes `end`, which removes the splash so
+that the console is visible; failed services alone do not. A display owner
+that has not replaced the splash within 30 seconds after startup is also
+answered with `end`. See `docs/BOOT_SPLASH.md`.
 
 ## Example
 

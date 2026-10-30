@@ -1,13 +1,16 @@
 # /proc — synthetic process and kernel information
 
-`procfs` (`kernel/fs/procfs.{c,h}`) is a read-only filesystem that the VFS
+`procfs` (`kernel/fs/procfs.{c,h}`) is a filesystem that the VFS
 mounts at `/proc` during `vfs_init`, right after the root filesystem.
 It has no backing store: every `read`/`stat` renders the file from live
 kernel state. Offsets are honoured against that fresh rendering, so a reader
 that needs a consistent snapshot should fetch the file with one large read
 (all files fit in 2 KiB).
 
-Writes, `mkdir`, `unlink` and `rename` below `/proc` fail.
+`/proc/boot` accepts progress reports for the boot splash through
+`SYS_WRITEF` from init only (see `docs/BOOT_SPLASH.md`). Every other write,
+and `mkdir`, `unlink` and `rename` below `/proc`, fail (`-EROFS` for files,
+`-ENOENT` for unknown paths).
 
 ## Layout
 
@@ -19,6 +22,8 @@ Writes, `mkdir`, `unlink` and `rename` below `/proc` fail.
 | `/proc/dcache`       | file | directory entry cache counters (`docs/DCACHE.md`) |
 | `/proc/stat`         | file | system-wide performance counters           |
 | `/proc/interrupts`   | file | per-vector interrupt counts                |
+| `/proc/boot`         | file | boot splash state and progress             |
+| `/proc/cmdline`      | file | kernel command line, one line              |
 | `/proc/<pid>/`       | dir  | one per live process, listed in pid order  |
 | `/proc/<pid>/status` | file | per-process status                         |
 | `/proc/<pid>/stat`   | file | per-process CPU accounting                 |
@@ -68,6 +73,9 @@ not by line number; new fields may be appended.
 `/proc/interrupts` has one line `<vector>: <count> <name>` per vector that has
 fired, counts right-aligned, e.g. `  32:        10231 timer`. Vector 128 is
 the syscall entry; vectors below 32 are CPU exceptions.
+
+`/proc/boot`: `Splash` (`active`, `finished` or `disabled`) and `Progress`
+(0 to 1000, per mille of the boot sequence).
 
 ## Kernel interface
 

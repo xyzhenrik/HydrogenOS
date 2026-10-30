@@ -546,6 +546,7 @@ int vfs_write_file(const char *path, const uint8_t *data, uint32_t size) {
     if (!m) return -1;
     if (m->fs == VFS_FS_RAMFS) return ramfs_write_file(sub, data, size);
     if (m->fs == VFS_FS_EXT2) return ext2_write_file(sub, data, size);
+    if (m->fs == VFS_FS_PROCFS) return procfs_write_file(sub, data, size);
     return -1;
 }
 

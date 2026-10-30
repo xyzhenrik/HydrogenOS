@@ -1,4 +1,5 @@
 #include "mini_libc.h"
+#include "syscall.h"
 
 typedef enum init_service_type {
     INIT_SERVICE_ONESHOT = 0,
@@ -38,6 +39,7 @@ enum {
     INIT_DEFAULT_RETRIES = 3,
     INIT_MAX_RETRIES = 16,
     INIT_BACKOFF_CAP_MS = 30000,
+    INIT_SPLASH_GRACE_SECONDS = 30,
 };
 
 typedef struct init_service_runtime {
@@ -78,6 +80,7 @@ typedef struct init_service {
     int stderr_channel_index;
     int syslog_source_index;
     unsigned char log_server;
+    unsigned char display_owner;
     char stdin_text[INIT_STDIO_TEXT_CAP];
     char stdout_text[INIT_STDIO_TEXT_CAP];
     char stderr_text[INIT_STDIO_TEXT_CAP];
@@ -225,6 +228,23 @@ static void write_str(const char *s) {
         return;
     }
     write(1, s, strlen(s));
+}
+
+/*
+ * Tells the kernel's boot splash how far startup has come. The report is
+ * advisory: without a splash the kernel ignores it, so a failed write must not
+ * affect boot.
+ */
+static void report_boot(const char *text) {
+    (void)sys_writef("/proc/boot", text, strlen(text));
+}
+
+static void report_boot_progress(unsigned long done, unsigned long total) {
+    char text[48];
+    int len = snprintf(text, sizeof(text), "services %lu %lu\n", done, total);
+    if (len > 0 && (unsigned long)len < sizeof(text)) {
+        report_boot(text);
+    }
 }
 
 static void runtime_reset(init_service_runtime_t *rt) {
@@ -1254,6 +1274,7 @@ static int parse_service_line(init_service_table_t *table, char *line) {
     int stderr_channel_index = -1;
     int syslog_source_index = -1;
     int is_log_server = 0;
+    int is_display_owner = 0;
     char stdin_text[INIT_STDIO_TEXT_CAP];
     char stdout_text[INIT_STDIO_TEXT_CAP];
     char stderr_text[INIT_STDIO_TEXT_CAP];
@@ -1486,6 +1507,10 @@ static int parse_service_line(init_service_table_t *table, char *line) {
             is_log_server = 1;
             continue;
         }
+        if (str_eq(dep, "display=owner")) {
+            is_display_owner = 1;
+            continue;
+        }
         if (str_eq(dep, "stdout=syslog") || str_eq(dep, "stderr=syslog") ||
             str_eq(dep, "log=syslog")) {
             if (!str_eq(dep, "stderr=syslog")) {
@@ -1639,6 +1664,7 @@ static int parse_service_line(init_service_table_t *table, char *line) {
     svc->stderr_channel_index = stderr_channel_index;
     svc->syslog_source_index = syslog_source_index;
     svc->log_server = (unsigned char)is_log_server;
+    svc->display_owner = (unsigned char)is_display_owner;
     if (str_copy(svc->stdin_text, sizeof(svc->stdin_text), stdin_text) != 0 ||
         str_copy(svc->stdout_text, sizeof(svc->stdout_text), stdout_text) != 0 ||
         str_copy(svc->stderr_text, sizeof(svc->stderr_text), stderr_text) != 0) {
@@ -2042,6 +2068,7 @@ int main(void) {
     unsigned long ready_mask = 0;
     unsigned long failed_count = 0;
     unsigned long daemon_count = 0;
+    unsigned long display_owner_count = 0;
 
     if (load_service_table(&table) != 0) {
         write(1, "init: failed to load service config\n", 36);
@@ -2051,7 +2078,9 @@ int main(void) {
     for (unsigned long i = 0; i < table.count; ++i) {
         const init_service_t *svc = &table.services[i];
         int spawned = 0;
-        int missing = first_unmet_dependency(&table, svc, ready_mask);
+        int missing;
+        report_boot_progress(i, table.count);
+        missing = first_unmet_dependency(&table, svc, ready_mask);
         if (missing >= 0) {
             char note[96];
             snprintf(note, sizeof(note), " skipped, dependency %s did not start\n",
@@ -2076,6 +2105,7 @@ int main(void) {
             write_service_prefix(svc, " started as daemon\n");
             close_syslog_source_write(&table, svc);
             daemon_count++;
+            display_owner_count += svc->display_owner;
             ready_mask |= svc->provides_mask;
             continue;
         }
@@ -2089,6 +2119,11 @@ int main(void) {
         }
         ready_mask |= svc->provides_mask;
     }
+    report_boot_progress(table.count, table.count);
+    if (display_owner_count == 0) {
+        /* Nothing is going to take over the screen, so show the console. */
+        report_boot("end\n");
+    }
     if (failed_count > 0) {
         char note[64];
         int len = snprintf(note, sizeof(note), "init: %lu service(s) failed or skipped\n",
@@ -2099,7 +2134,12 @@ int main(void) {
     }
     if (daemon_count > 0) {
         /* Keep the session alive; daemons own the console/framebuffer. */
-        for (;;) {
+        for (unsigned long seconds = 0;; ++seconds) {
+            if (seconds == INIT_SPLASH_GRACE_SECONDS) {
+                /* A display owner that never presented a frame must not leave
+                   the screen on the splash; once it has, this is a no-op. */
+                report_boot("end\n");
+            }
             sleep_ms(1000);
         }
     }

@@ -2,13 +2,16 @@
 
 #include <stddef.h>
 
+#include "core/cmdline.h"
 #include "core/perf.h"
 #include "core/process.h"
 #include "core/time.h"
+#include "errno.h"
 #include "fs/dcache.h"
 #include "kheap.h"
 #include "pmm.h"
 #include "version.h"
+#include "video/bootsplash.h"
 
 /* Large enough for the biggest file (/proc/interrupts with every vector). */
 #define PROCFS_RENDER_CAP 2048
@@ -23,6 +26,8 @@ typedef enum procfs_node_kind {
     PROCFS_NODE_DCACHE,
     PROCFS_NODE_STAT,
     PROCFS_NODE_INTERRUPTS,
+    PROCFS_NODE_BOOT,
+    PROCFS_NODE_CMDLINE,
     PROCFS_NODE_PID_DIR,
     PROCFS_NODE_PID_STATUS,
     PROCFS_NODE_PID_STAT,
@@ -50,6 +55,8 @@ static const procfs_static_file_t static_files[] = {
     { "dcache", PROCFS_NODE_DCACHE },
     { "stat", PROCFS_NODE_STAT },
     { "interrupts", PROCFS_NODE_INTERRUPTS },
+    { "boot", PROCFS_NODE_BOOT },
+    { "cmdline", PROCFS_NODE_CMDLINE },
 };
 
 #define PROCFS_STATIC_FILE_COUNT \
@@ -278,6 +285,27 @@ static void render_dcache(procfs_buffer_t *b) {
     buf_put_field_u64(b, "Invalidations", stats.invalidations, 0);
 }
 
+static void render_boot(procfs_buffer_t *b) {
+    const char *splash = "disabled";
+    switch (bootsplash_state()) {
+    case BOOTSPLASH_ACTIVE:
+        splash = "active";
+        break;
+    case BOOTSPLASH_FINISHED:
+        splash = "finished";
+        break;
+    case BOOTSPLASH_DISABLED:
+        break;
+    }
+    buf_put_field_str(b, "Splash", splash);
+    buf_put_field_u64(b, "Progress", bootsplash_progress(), 0);
+}
+
+static void render_cmdline(procfs_buffer_t *b) {
+    buf_put_str(b, cmdline_text());
+    buf_put_str(b, "\n");
+}
+
 static int render_status(procfs_buffer_t *b, uint32_t pid) {
     process_info_t info;
     if (process_get_info(pid, &info) != 0)
@@ -408,6 +436,12 @@ static int render(const procfs_node_t *node, procfs_buffer_t *b) {
     case PROCFS_NODE_INTERRUPTS:
         render_interrupts(b);
         return 0;
+    case PROCFS_NODE_BOOT:
+        render_boot(b);
+        return 0;
+    case PROCFS_NODE_CMDLINE:
+        render_cmdline(b);
+        return 0;
     case PROCFS_NODE_PID_STATUS:
         return render_status(b, node->pid);
     case PROCFS_NODE_PID_STAT:
@@ -490,4 +524,23 @@ int procfs_stat(const char *path, vfs_stat_t *out) {
     out->type = 1;
     out->size = b.len;
     return 0;
+}
+
+/* Only the first user process, init, reports boot progress. */
+static int caller_is_first_process(void) {
+    const process_t *caller = process_current();
+    process_info_t info;
+    return caller && process_get_info(caller->pid, &info) == 0 &&
+           info.parent_pid == 0;
+}
+
+int procfs_write_file(const char *path, const uint8_t *data, uint32_t size) {
+    procfs_node_t node;
+    if (resolve(path, &node) != 0)
+        return -ENOENT;
+    if (node_is_dir(&node))
+        return -EISDIR;
+    if (node.kind != PROCFS_NODE_BOOT)
+        return -EROFS;
+    return bootsplash_report(data, size, caller_is_first_process());
 }

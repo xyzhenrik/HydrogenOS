@@ -13,6 +13,7 @@ static uint32_t *backbuf = NULL;
 static uint32_t cursor_color = 0x00FFFFFF;
 static int mouse_overlay_enabled = 0;
 static int cursor_visible = 1;
+static int suspended = 0;
 static const uint32_t CHAR_W = 8;
 static const uint32_t CHAR_H = 16;
 static uint32_t cols = 0;
@@ -87,8 +88,29 @@ int fb_console_blit_strided(int x, int y, int w, int h,
     return 0;
 }
 
-void fb_console_present(void) {
+void fb_console_set_suspended(int value) {
+    suspended = value ? 1 : 0;
+}
+
+uint32_t *fb_console_surface(void) {
+    return backbuf;
+}
+
+void fb_console_present_rect(uint32_t x, uint32_t y, uint32_t w, uint32_t h) {
     if (!backbuf || !framebuffer.addr) return;
+    if (x >= framebuffer.width || y >= framebuffer.height) return;
+    if (w > framebuffer.width - x) w = framebuffer.width - x;
+    if (h > framebuffer.height - y) h = framebuffer.height - y;
+    uint32_t stride_words = framebuffer.pitch / 4;
+    for (uint32_t row = y; row < y + h; ++row) {
+        const uint32_t *src = backbuf + (size_t)row * stride_words;
+        uint32_t *dst = (uint32_t *)framebuffer.addr + (size_t)row * stride_words;
+        for (uint32_t col = x; col < x + w; ++col) dst[col] = src[col];
+    }
+}
+
+void fb_console_present(void) {
+    if (!backbuf || !framebuffer.addr || suspended) return;
     uint32_t fb_size = framebuffer.pitch * framebuffer.height;
     uint32_t *dst = (uint32_t *)framebuffer.addr;
     uint32_t words = fb_size / 4;
@@ -156,7 +178,7 @@ static void scroll_up(void) {
 }
 
 void fb_console_clear(void) {
-    if (!backbuf) return;
+    if (!backbuf || suspended) return;
     uint32_t fb_size = framebuffer.pitch * framebuffer.height;
     uint32_t words = fb_size / 4;
     for (uint32_t i = 0; i < words; ++i) backbuf[i] = bg;
@@ -166,7 +188,7 @@ void fb_console_clear(void) {
 }
 
 void fb_console_putc(char c) {
-    if (!backbuf) return;
+    if (!backbuf || suspended) return;
     switch (c) {
         case '\n':
             cursor_col = 0;
