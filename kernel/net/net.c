@@ -1,5 +1,6 @@
 #include "net.h"
 
+#include "core/perf.h"
 #include "drivers/virtio_net.h"
 #include "errno.h"
 #include "ethernet.h"
@@ -40,13 +41,16 @@ int net_ipv4_is_unicast_destination(uint32_t ipv4) {
 
 int net_link_transmit(const uint8_t *frame, size_t len) {
     int rc = virtio_net_transmit(frame, len);
-    if (rc == 0)
+    if (rc == 0) {
         net_iface.tx_frames++;
+        perf_count_net_tx((uint32_t)len);
+    }
     return rc;
 }
 
 static void net_deliver(const uint8_t *frame, size_t len) {
     net_iface.rx_frames++;
+    perf_count_net_rx((uint32_t)len);
     ethernet_input(frame, len);
 }
 

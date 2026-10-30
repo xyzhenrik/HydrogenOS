@@ -65,6 +65,7 @@
 #define SYS_SYMLINK 64
 #define SYS_READLINK 65
 #define SYS_TRUNCATE 80
+#define SYS_PERF_READ 81
 
 #define PRIO_IDLE   0
 #define PRIO_NORMAL 1

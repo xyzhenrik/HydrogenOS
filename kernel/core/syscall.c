@@ -9,6 +9,7 @@ int fb_console_blit(int x, int y, int w, int h, const unsigned int *src);
 int fb_console_blit_strided(int x, int y, int w, int h, const unsigned int *src, int src_stride_bytes);
 void fb_console_set_cursor_visible(int visible);
 void fb_console_clear(void);
+#include "core/perf.h"
 #include "core/time.h"
 #include "fs/vfs.h"
 #include "fs/ext2.h"
@@ -216,6 +217,8 @@ uint64_t syscall_handle(regs_t *r) {
             process_destroy(exiting);
         return 0;
     }
+    case SYS_PERF_READ:
+        return (uint64_t)perf_read_user((void *)(uintptr_t)r->rdi, (size_t)r->rsi);
     case SYS_SET_LAYOUT: {
         keyboard_set_layout((int)r->rdi);
         return (uint64_t)keyboard_get_layout();

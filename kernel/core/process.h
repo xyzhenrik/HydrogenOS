@@ -161,6 +161,9 @@ typedef struct process {
     uint32_t waiting_poll_pipe_count;
     VmmUserSpace vm;
     signal_state_t signals;
+    uint64_t user_cycles;   /* TSC ticks spent in user mode */
+    uint64_t kernel_cycles; /* TSC ticks spent in the kernel on its behalf */
+    uint8_t perf_was_blocked; /* blocked since it last ran; see perf_sched_dispatch() */
     process_kernel_wait_fn kernel_wait_fn;
     uintptr_t kernel_wait_arg;
     struct process *next;
@@ -176,6 +179,8 @@ typedef struct process_info {
     uint8_t is_current;
     uint32_t handle_count;
     uint32_t user_pages;
+    uint64_t user_cycles;
+    uint64_t kernel_cycles;
     char name[PROCESS_NAME_CAP];
     char cwd[PROCESS_CWD_CAP];
 } process_info_t;

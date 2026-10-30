@@ -269,7 +269,8 @@ static int check_listing(long pid) {
     char path[PROCTEST_PATH_CAP];
     snprintf(path, sizeof(path), "/proc/%s", own);
     if (readdir_pos(path, 0, &entry) != 1 || !str_eq(entry.d_name, "status") ||
-        readdir_pos(path, 1, &entry) != 0) {
+        readdir_pos(path, 1, &entry) != 1 || !str_eq(entry.d_name, "stat") ||
+        readdir_pos(path, 2, &entry) != 0) {
         fail("pid dir listing");
         return -1;
     }

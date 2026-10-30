@@ -2,6 +2,7 @@
 
 #include <stddef.h>
 
+#include "core/perf.h"
 #include "core/process.h"
 #include "core/time.h"
 #include "fs/dcache.h"
@@ -9,8 +10,8 @@
 #include "pmm.h"
 #include "version.h"
 
-/* Large enough for the biggest file (a status with a maximal cwd). */
-#define PROCFS_RENDER_CAP 1024
+/* Large enough for the biggest file (/proc/interrupts with every vector). */
+#define PROCFS_RENDER_CAP 2048
 #define PROCFS_LABEL_WIDTH 16
 #define PROCFS_PAGE_SIZE 4096u
 
@@ -20,8 +21,11 @@ typedef enum procfs_node_kind {
     PROCFS_NODE_UPTIME,
     PROCFS_NODE_VERSION,
     PROCFS_NODE_DCACHE,
+    PROCFS_NODE_STAT,
+    PROCFS_NODE_INTERRUPTS,
     PROCFS_NODE_PID_DIR,
     PROCFS_NODE_PID_STATUS,
+    PROCFS_NODE_PID_STAT,
 } procfs_node_kind_t;
 
 typedef struct procfs_node {
@@ -44,6 +48,8 @@ static const procfs_static_file_t static_files[] = {
     { "uptime", PROCFS_NODE_UPTIME },
     { "version", PROCFS_NODE_VERSION },
     { "dcache", PROCFS_NODE_DCACHE },
+    { "stat", PROCFS_NODE_STAT },
+    { "interrupts", PROCFS_NODE_INTERRUPTS },
 };
 
 #define PROCFS_STATIC_FILE_COUNT \
@@ -126,6 +132,10 @@ static int resolve(const char *path, procfs_node_t *out) {
         out->kind = PROCFS_NODE_PID_STATUS;
         return 0;
     }
+    if (component_eq(components[1], lengths[1], "stat")) {
+        out->kind = PROCFS_NODE_PID_STAT;
+        return 0;
+    }
     return -1;
 }
 
@@ -147,6 +157,16 @@ static void buf_put_u64(procfs_buffer_t *b, uint64_t value) {
     } while (value);
     while (n && b->len < PROCFS_RENDER_CAP)
         b->data[b->len++] = digits[--n];
+}
+
+static void buf_put_u64_padded(procfs_buffer_t *b, uint64_t value,
+                               uint32_t width) {
+    uint32_t digits = 1;
+    for (uint64_t rest = value; rest >= 10u; rest /= 10u)
+        ++digits;
+    for (; digits < width && b->len < PROCFS_RENDER_CAP; ++digits)
+        b->data[b->len++] = ' ';
+    buf_put_u64(b, value);
 }
 
 static void buf_put_label(procfs_buffer_t *b, const char *label) {
@@ -273,6 +293,100 @@ static int render_status(procfs_buffer_t *b, uint32_t pid) {
     return 0;
 }
 
+static int render_pid_stat(procfs_buffer_t *b, uint32_t pid) {
+    process_info_t info;
+    if (process_get_info(pid, &info) != 0)
+        return -1;
+    buf_put_field_str(b, "Name", info.name);
+    buf_put_field_u64(b, "Pid", info.pid, 0);
+    buf_put_field_str(b, "State", state_name(&info));
+    buf_put_field_u64(b, "Tsc", perf_rdtsc(), "cycles");
+    buf_put_field_u64(b, "UserCycles", info.user_cycles, "cycles");
+    buf_put_field_u64(b, "KernelCycles", info.kernel_cycles, "cycles");
+    return 0;
+}
+
+static void render_stat(procfs_buffer_t *b) {
+    hydrogen_perf_snapshot_t snapshot;
+    perf_snapshot(&snapshot);
+    const hydrogen_perf_counters_t *counters = &snapshot.counters;
+    uint64_t syscalls = 0;
+    uint64_t interrupts = 0;
+    for (uint32_t i = 0; i < HYDROGEN_PERF_SYSCALL_SLOTS; ++i)
+        syscalls += counters->syscall_calls[i];
+    for (uint32_t i = 0; i < HYDROGEN_PERF_IRQ_VECTORS; ++i)
+        interrupts += counters->irq_counts[i];
+
+    buf_put_field_u64(b, "Tsc", snapshot.tsc, "cycles");
+    buf_put_field_u64(b, "TscKHz", snapshot.tsc_khz, 0);
+    buf_put_field_u64(b, "CpuUser", counters->user_cycles, "cycles");
+    buf_put_field_u64(b, "CpuKernel", counters->kernel_cycles, "cycles");
+    buf_put_field_u64(b, "CpuIdle", counters->idle_cycles, "cycles");
+    buf_put_field_u64(b, "CtxSwitches", counters->context_switches, 0);
+    buf_put_field_u64(b, "Wakeups", counters->wakeups, 0);
+    buf_put_field_u64(b, "IdleEntries", counters->idle_entries, 0);
+    buf_put_field_u64(b, "Syscalls", syscalls, 0);
+    buf_put_field_u64(b, "Interrupts", interrupts, 0);
+    buf_put_field_u64(b, "PageFaults",
+                      counters->irq_counts[HYDROGEN_PERF_VECTOR_PAGE_FAULT], 0);
+    buf_put_field_u64(b, "PipeReadBytes", counters->pipe_bytes_read, "B");
+    buf_put_field_u64(b, "PipeWriteBytes", counters->pipe_bytes_written, "B");
+    buf_put_field_u64(b, "NetRxPackets", counters->net_rx_packets, 0);
+    buf_put_field_u64(b, "NetTxPackets", counters->net_tx_packets, 0);
+    buf_put_field_u64(b, "NetRxBytes", counters->net_rx_bytes, "B");
+    buf_put_field_u64(b, "NetTxBytes", counters->net_tx_bytes, "B");
+}
+
+static const char *const exception_names[] = {
+    "divide-error", "debug", "nmi", "breakpoint", "overflow", "bound-range",
+    "invalid-opcode", "no-coprocessor", "double-fault", "coprocessor-overrun",
+    "invalid-tss", "segment-not-present", "stack-fault", "general-protection",
+    "page-fault", "reserved", "fpu-error", "alignment-check", "machine-check",
+    "simd-error",
+};
+
+#define PROCFS_EXCEPTION_VECTORS 32u
+#define PROCFS_IRQ_BASE 32u
+#define PROCFS_IRQ_LAST 48u
+#define PROCFS_SYSCALL_VECTOR 128u
+
+static const char *interrupt_name(uint32_t vector) {
+    if (vector < PROCFS_EXCEPTION_VECTORS) {
+        if (vector < sizeof(exception_names) / sizeof(exception_names[0]))
+            return exception_names[vector];
+        return "exception";
+    }
+    switch (vector) {
+    case PROCFS_IRQ_BASE:
+        return "timer";
+    case PROCFS_IRQ_BASE + 1:
+        return "keyboard";
+    case PROCFS_IRQ_BASE + 12:
+        return "mouse";
+    case PROCFS_SYSCALL_VECTOR:
+        return "syscall";
+    default:
+        return vector <= PROCFS_IRQ_LAST ? "irq" : "unknown";
+    }
+}
+
+/* One line per vector that has fired: "<vector>: <count> <name>". */
+static void render_interrupts(procfs_buffer_t *b) {
+    hydrogen_perf_snapshot_t snapshot;
+    perf_snapshot(&snapshot);
+    for (uint32_t vector = 0; vector < HYDROGEN_PERF_IRQ_VECTORS; ++vector) {
+        uint64_t count = snapshot.counters.irq_counts[vector];
+        if (count == 0)
+            continue;
+        buf_put_u64_padded(b, vector, 3);
+        buf_put_str(b, ": ");
+        buf_put_u64_padded(b, count, 12);
+        buf_put_str(b, " ");
+        buf_put_str(b, interrupt_name(vector));
+        buf_put_str(b, "\n");
+    }
+}
+
 static int render(const procfs_node_t *node, procfs_buffer_t *b) {
     b->len = 0;
     switch (node->kind) {
@@ -288,8 +402,16 @@ static int render(const procfs_node_t *node, procfs_buffer_t *b) {
     case PROCFS_NODE_DCACHE:
         render_dcache(b);
         return 0;
+    case PROCFS_NODE_STAT:
+        render_stat(b);
+        return 0;
+    case PROCFS_NODE_INTERRUPTS:
+        render_interrupts(b);
+        return 0;
     case PROCFS_NODE_PID_STATUS:
         return render_status(b, node->pid);
+    case PROCFS_NODE_PID_STAT:
+        return render_pid_stat(b, node->pid);
     case PROCFS_NODE_ROOT:
     case PROCFS_NODE_PID_DIR:
         return -1;
@@ -316,6 +438,7 @@ int procfs_list_dir(const char *path, vfs_dir_cb cb, void *ctx) {
         return -1;
     if (node.kind == PROCFS_NODE_PID_DIR) {
         cb("status", 1, ctx);
+        cb("stat", 1, ctx);
         return 0;
     }
     for (uint32_t i = 0; i < PROCFS_STATIC_FILE_COUNT; ++i)
