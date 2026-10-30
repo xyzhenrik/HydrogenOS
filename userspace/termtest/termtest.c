@@ -115,6 +115,8 @@ static int test_commands(void) {
         return fail("variable");
     if (run("echo a~b{c}") != 0 || !has_line("a~b{c}"))
         return fail("special characters");
+    if (run("echo ~") != 0 || !has_line("/") || run("echo '~'") != 0 || !has_line("~"))
+        return fail("tilde");
     if (run("ps") != 0 || !has_text("PPID"))
         return fail("ps");
     if (run("uptime") != 0 || !has_text("up "))

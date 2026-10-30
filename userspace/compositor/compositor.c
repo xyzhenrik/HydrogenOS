@@ -682,6 +682,17 @@ int comp_render(void) {
         comp_last_damages[i] = comp_damages[i];
 
     comp_flip();
+
+    /* Only the damaged parts were composed, so the buffer that just left the
+       front is a frame behind. Bringing it level keeps both buffers whole,
+       which lets comp_present_damage() blit merged bounding rectangles. */
+    for (int d = 0; d < comp_damage_cnt; ++d) {
+        const CompRect *r = &comp_damages[d];
+        for (int y = r->y; y < r->y + r->h; ++y) {
+            size_t offset = (size_t)y * (size_t)comp_w + (size_t)r->x;
+            memcpy(comp_back + offset, comp_front + offset, (size_t)r->w * sizeof(uint32_t));
+        }
+    }
     comp_damage_cnt = 0;
     return 0;
 }

@@ -1066,7 +1066,6 @@ int main(void) {
         for (int guard = 0; guard < 64; ++guard) {
             long k = sys_kbd_read();
             if (k < 0) break;
-            char c = (char)k;
             if (g_focus >= 0 && g_apps[g_focus].used && !g_apps[g_focus].minimized) {
                 App *a = &g_apps[g_focus];
                 if (a->kind == APP_TERM) {
@@ -1074,8 +1073,8 @@ int main(void) {
                     draw_terminal(a);
                     comp_damage_rect(g_bg, a->win->x, a->win->y, a->win->w, a->win->h);
                     dirty = 1;
-                } else if (a->kind == APP_EDIT) {
-                    editor_key(a, c);
+                } else if (a->kind == APP_EDIT && k < 0x100) {
+                    editor_key(a, (char)k);
                     draw_editor(a);
                     comp_damage_rect(g_bg, a->win->x, a->win->y, a->win->w, a->win->h);
                     dirty = 1;

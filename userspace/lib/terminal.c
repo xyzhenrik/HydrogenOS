@@ -555,7 +555,7 @@ unsigned terminal_pump(Terminal *t) {
 
 int terminal_start(Terminal *t) {
     static const char *const argv[] = {"shell", "-i", 0};
-    static const char *const envp[] = {"PATH=/", 0};
+    static const char *const envp[] = {"PATH=/", "HOME=/", 0};
     char saved_directory[CWD_CAP];
     int input_pipe[2];
     int output_pipe[2];
@@ -898,6 +898,28 @@ static int word_break(char c) {
            c == '<' || c == '>' || c == '(' || c == ')';
 }
 
+/* True when the character at index is protected by a backslash. */
+static int escaped_at(const char *text, int index) {
+    int backslashes = 0;
+    while (index > 0 && text[index - 1] == '\\') {
+        backslashes++;
+        index--;
+    }
+    return backslashes % 2;
+}
+
+/* Removes the backslashes the shell would remove, giving the file name the
+ * typed text stands for. out holds at least length + 1 bytes. */
+static void unescape(const char *text, int length, char *out) {
+    int used = 0;
+    for (int i = 0; i < length; ++i) {
+        if (text[i] == '\\' && i + 1 < length)
+            i++;
+        out[used++] = text[i];
+    }
+    out[used] = 0;
+}
+
 static int needs_escape(char c) {
     return word_break(c) || c == '\\' || c == '\'' || c == '"' || c == '$' ||
            c == '#' || c == '*' || c == '?';
@@ -981,13 +1003,18 @@ static void replace_word_tail(Terminal *t, int from, const char *name,
                               const char *suffix) {
     char text[2 * 256 + 4];
     int length = 0;
+    int word_initial = from == 0 || (word_break(t->edit[from - 1]) && !escaped_at(t->edit, from - 1));
     for (const char *c = name; *c && length < (int)sizeof(text) - 4; ++c) {
-        if (needs_escape(*c))
+        if (needs_escape(*c) || (*c == '~' && c == name && word_initial))
             text[length++] = '\\';
         text[length++] = *c;
     }
     for (const char *c = suffix; *c; ++c)
         text[length++] = *c;
+    /* edit_insert refuses a line that is too long, which must not leave the
+     * typed word deleted and nothing in its place. */
+    if (t->edit_length - (t->edit_cursor - from) + length > INPUT_MAX)
+        return;
     edit_delete(t, from, t->edit_cursor);
     edit_insert(t, text, length);
 }
@@ -1026,40 +1053,48 @@ static void show_candidates(Terminal *t) {
 }
 
 static void complete(Terminal *t) {
-    char prefix[INPUT_MAX + 1];
+    char typed[INPUT_MAX + 1];
+    char plain[INPUT_MAX + 1];
     char directory[CWD_CAP + INPUT_MAX + 2];
     int word_start = t->edit_cursor;
-    int prefix_length;
+    int typed_length;
     int base_start;
     const char *base;
     int common;
 
-    while (word_start > 0 && !word_break(t->edit[word_start - 1]))
+    while (word_start > 0 &&
+           !(word_break(t->edit[word_start - 1]) && !escaped_at(t->edit, word_start - 1)))
         word_start--;
-    prefix_length = t->edit_cursor - word_start;
-    memcpy(prefix, t->edit + word_start, (size_t)prefix_length);
-    prefix[prefix_length] = 0;
+    typed_length = t->edit_cursor - word_start;
+    memcpy(typed, t->edit + word_start, (size_t)typed_length);
+    typed[typed_length] = 0;
 
     t->candidate_count = 0;
     t->candidate_names_used = 0;
     {
-        char *slash = strrchr(prefix, '/');
+        /* The last slash splits directory from name whether or not it was
+         * escaped, since an escaped slash is still a slash in the path. */
+        const char *slash = strrchr(typed, '/');
         if (!slash && command_position(t, word_start)) {
             /* Every command would be a flood, not a completion. */
-            if (prefix_length == 0)
+            if (typed_length == 0)
                 return;
-            base = prefix;
+            unescape(typed, typed_length, plain);
+            base = plain;
             base_start = word_start;
-            collect_commands(t, prefix);
+            collect_commands(t, plain);
         } else {
-            int dir_length = slash ? (int)(slash - prefix) + 1 : 0;
+            int dir_length = slash ? (int)(slash - typed) + 1 : 0;
+            char dir_plain[INPUT_MAX + 1];
+            unescape(typed, dir_length, dir_plain);
+            unescape(typed + dir_length, typed_length - dir_length, plain);
             if (dir_length == 0)
                 snprintf(directory, sizeof(directory), "%s", t->cwd);
-            else if (prefix[0] == '/')
-                snprintf(directory, sizeof(directory), "%.*s", dir_length, prefix);
+            else if (dir_plain[0] == '/')
+                snprintf(directory, sizeof(directory), "%s", dir_plain);
             else
-                snprintf(directory, sizeof(directory), "%s/%.*s", t->cwd, dir_length, prefix);
-            base = prefix + dir_length;
+                snprintf(directory, sizeof(directory), "%s/%s", t->cwd, dir_plain);
+            base = plain;
             base_start = word_start + dir_length;
             collect_directory(t, directory, base, 0);
         }

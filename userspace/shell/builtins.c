@@ -89,6 +89,10 @@ static int copy_fd_to_stdout(int fd) {
         if (n == 0)
             return 0;
         out_write(1, io_buffer, (size_t)n);
+        /* Stdin delivers data as it is produced; passing it on only at exit
+           would hide a live pipe or the terminal's echo of typed lines. */
+        if (fd == 0)
+            out_flush();
     }
 }
 
