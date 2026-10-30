@@ -8,7 +8,7 @@ import sys
 
 # Directories every installation has, whether or not anything is shipped in them.
 STANDARD_DIRS = [
-    "bin", "sbin", "lib/tests", "etc", "tmp", "var/log", "var/crash",
+    "bin", "sbin", "lib/tests", "etc", "tmp", "var/log", "var/crash", "var/lib/hpkg/db",
     "home/user", "root", "usr/share", "proc",
 ]
 DIRECTORY_MODES = {"tmp": 0o1777}
@@ -50,6 +50,7 @@ def main():
     parser.add_argument("--manifest", help="program placement list")
     parser.add_argument("--build-dir", help="directory holding user_<program>.elf")
     parser.add_argument("--init-rc", help="file installed as /etc/init.rc")
+    parser.add_argument("--repo", help="package repository copied to /var/lib/hpkg/repo")
     args = parser.parse_args()
 
     if args.manifest and not args.build_dir:
@@ -74,6 +75,9 @@ def main():
             os.makedirs(os.path.dirname(destination), exist_ok=True)
             shutil.copyfile(source, destination)
             os.chmod(destination, 0o755)
+
+    if args.repo:
+        shutil.copytree(args.repo, os.path.join(args.out, "var/lib/hpkg/repo"))
 
     if args.init_rc:
         shutil.copyfile(args.init_rc, os.path.join(args.out, "etc", "init.rc"))

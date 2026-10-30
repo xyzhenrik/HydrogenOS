@@ -6,14 +6,14 @@
 # See docs/FS_LAYOUT.md.
 
 bin        shell cat echo ps ping nslookup date time sleep hello logread poweroff reboot
-bin        nc top perfstat wc free crashinfo
+bin        nc top perfstat wc free crashinfo hpkg
 sbin       init syslogd login compositor desktopdemo crashcollect
 
 lib/tests  bootprobe cwdcheck desktoptest dirtest dupcheck dupfallbackcheck
 lib/tests  faulttest fileoffsetcheck fstest handlelimitcheck handoffcheck
 lib/tests  libctest linktest logcollector logproducer_a logproducer_b logtest
 lib/tests  logsink_writer_a logsink_writer_b mmaptest mprotecttest nettest
-lib/tests  pipeconsumer pipedelayread pipeproducer piperead pkgtest
+lib/tests  pipeconsumer pipedelayread pipeproducer piperead hpkgtest
 lib/tests  pollcheck pollmanycheck pollwaitcheck pollwakewriter powercheck
 lib/tests  editortest fuzzycheck proctest rtctest schedtest seekcheck shelltest sigtest termtest
 lib/tests  stdiobadbind stdiocheck stdionullcheck

@@ -44,8 +44,9 @@ never silently go missing from the image.
 
 `tools/stage_rootfs.py` assembles one staging tree in `build/<arch>/rootfs`:
 it copies `fsroot/`, creates the standard directories (including empty ones
-like `/root` and `/proc`), places the programs from the manifest and installs
-`init.rc` as `/etc/init.rc`. Both boot media pack that same tree:
+like `/root` and `/proc`), places the programs from the manifest, copies the
+built package repository to `/var/lib/hpkg/repo` and installs `init.rc` as
+`/etc/init.rc`. Both boot media pack that same tree:
 
 - **Disk image** (`build/<arch>/disk.img`): `mke2fs -d` turns the staging tree
   into the ext2 root. This is the normal root filesystem.

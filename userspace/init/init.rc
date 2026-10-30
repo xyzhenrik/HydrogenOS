@@ -12,7 +12,7 @@ service seekcheck oneshot /lib/tests/seekcheck 100 restart=on-failure stdout=cap
 service pollcheck oneshot /lib/tests/pollcheck 100 restart=on-failure stdout=capture "pollcheck: poll ok\n" bootprobe handoffcheck stdiocheck stdiobadbind seekcheck
 service fstest oneshot /lib/tests/fstest 100 restart=on-failure stdout=capture "FSTEST PASS\n" bootprobe handoffcheck stdiocheck stdiobadbind
 service login oneshot /sbin/login 100 restart=on-failure stdout=capture "LOGIN PASS\n" bootprobe 
-service pkgtest oneshot /lib/tests/pkgtest 100 restart=on-failure stdout=capture "PKG PASS\n" bootprobe fstest login
+service hpkgtest oneshot /lib/tests/hpkgtest 100 restart=on-failure stdout=capture "HPKG PASS\n" bootprobe fstest login
 service desktoptest oneshot /lib/tests/desktoptest 100 restart=on-failure stdout=capture "DESKTOPTEST PASS\n" bootprobe handoffcheck stdiocheck stdiobadbind fstest
 service logproducer_a oneshot /lib/tests/logproducer_a 100 restart=on-failure stdout=channel logbus bootprobe handoffcheck stdiocheck stdiobadbind
 service logproducer_b oneshot /lib/tests/logproducer_b 100 restart=on-failure stdout=channel logbus bootprobe handoffcheck stdiocheck stdiobadbind logproducer_a
@@ -61,4 +61,4 @@ service exectest oneshot /lib/tests/exectest 100 restart=on-failure stdout=captu
 service permtest oneshot /lib/tests/permtest 100 restart=on-failure stdout=capture "PERM PASS\n" bootprobe
 service crashtest oneshot /lib/tests/crashtest 100 restart=on-failure stdout=capture "CRASH PASS\n" bootprobe crashcollect
 service oomtest oneshot /lib/tests/oomtest 100 restart=never stdout=capture "OOM PASS\n" bootprobe crashtest
-service desktopdemo daemon /sbin/desktopdemo 100 restart=always display=owner stderr=syslog login pkgtest bootprobe handoffcheck stdiocheck stdiobadbind dupcheck handlelimitcheck fileoffsetcheck seekcheck pollcheck logcollector pipeconsumer stdionullcheck fstest desktoptest pollwaitcheck pollmanycheck dupfallbackcheck rtctest proctest dirtest mmaptest powercheck nettest shelltest cwdcheck libctest linktest logtest mprotecttest udptest faulttest schedtest sigtest wptest dcachetest iotest perftest splashtest waitqtest supervisetest exectest permtest tcptest editortest fuzzycheck termtest crashtest oomtest
+service desktopdemo daemon /sbin/desktopdemo 100 restart=always display=owner stderr=syslog login hpkgtest bootprobe handoffcheck stdiocheck stdiobadbind dupcheck handlelimitcheck fileoffsetcheck seekcheck pollcheck logcollector pipeconsumer stdionullcheck fstest desktoptest pollwaitcheck pollmanycheck dupfallbackcheck rtctest proctest dirtest mmaptest powercheck nettest shelltest cwdcheck libctest linktest logtest mprotecttest udptest faulttest schedtest sigtest wptest dcachetest iotest perftest splashtest waitqtest supervisetest exectest permtest tcptest editortest fuzzycheck termtest crashtest oomtest
