@@ -978,7 +978,7 @@ static void collect_directory(Terminal *t, const char *directory, const char *pr
 static void collect_commands(Terminal *t, const char *prefix) {
     static const char *const builtin_names[] = {
 #define BUILTIN_NAME(name) #name,
-        SHELL_BUILTIN_NAMES(BUILTIN_NAME)
+        SHELL_COMPLETION_NAMES(BUILTIN_NAME)
 #undef BUILTIN_NAME
     };
     size_t prefix_length = strlen(prefix);
@@ -986,7 +986,8 @@ static void collect_commands(Terminal *t, const char *prefix) {
         if (strncmp(builtin_names[i], prefix, prefix_length) == 0)
             add_candidate(t, builtin_names[i], 0);
     }
-    collect_directory(t, "/", prefix, 1);
+    collect_directory(t, "/bin", prefix, 1);
+    collect_directory(t, "/sbin", prefix, 1);
 }
 
 static int command_position(const Terminal *t, int word_start) {

@@ -3,7 +3,7 @@
 ```
 /
 ├── bin/          user commands: shell cat echo ps ping nslookup date time
-│                 sleep hello logread poweroff reboot
+│                 sleep hello logread poweroff reboot wc
 ├── sbin/         system programs: init syslogd login compositor desktopdemo
 ├── lib/
 │   └── tests/    boot self-tests (*test, *check) and the helper programs

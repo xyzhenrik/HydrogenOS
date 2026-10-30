@@ -1,5 +1,6 @@
 #include "exec.h"
 
+#include "brace.h"
 #include "builtins.h"
 #include "env.h"
 #include "expand.h"
@@ -68,19 +69,24 @@ void exec_set_interactive(int value) { interactive = value; }
 void exec_set_terminal_host(int value) { terminal_host = value; }
 int exec_terminal_host(void) { return terminal_host; }
 
-static int expand_token(const char *line, const ShellToken *token,
-                        PreparedCommand *cmd, char **out,
-                        ShellExpansion *result) {
+static int expand_raw(const char *raw, size_t raw_len, PreparedCommand *cmd,
+                      char **out, ShellExpansion *result) {
     const char *error = 0;
     char *dst = cmd->storage + cmd->used;
-    if (expand_word(line + token->start, token->length, last_status, dst,
-                    SHELL_EXPAND_CAP - cmd->used, result, &error) != 0) {
+    if (expand_word(raw, raw_len, last_status, dst, SHELL_EXPAND_CAP - cmd->used,
+                    result, &error) != 0) {
         out_error("shell", 0, error);
         return -1;
     }
     cmd->used += result->length + 1;
     *out = dst;
     return 0;
+}
+
+static int expand_token(const char *line, const ShellToken *token,
+                        PreparedCommand *cmd, char **out,
+                        ShellExpansion *result) {
+    return expand_raw(line + token->start, token->length, cmd, out, result);
 }
 
 static int raw_is_assignment(const char *line, const ShellToken *token) {
@@ -91,28 +97,53 @@ static int raw_is_assignment(const char *line, const ShellToken *token) {
     return name_len < token->length && env_name_valid(raw, name_len);
 }
 
+/* Collects the words one command word expands to. */
+typedef struct WordSink {
+    PreparedCommand *cmd;
+    int assignment;
+    int assignments;
+} WordSink;
+
+static int add_word(void *context, const char *raw, size_t raw_len) {
+    WordSink *sink = context;
+    PreparedCommand *cmd = sink->cmd;
+    ShellExpansion result;
+    char *word;
+    if (expand_raw(raw, raw_len, cmd, &word, &result) != 0)
+        return -1;
+    /* An unquoted word that expands to nothing is dropped, so that
+     * "echo $UNSET x" passes a single argument. */
+    if (result.length == 0 && !result.quoted)
+        return 0;
+    if (cmd->argc >= SHELL_MAX_ARGS) {
+        out_error("shell", 0, "too many arguments");
+        return -1;
+    }
+    sink->assignments += sink->assignment;
+    cmd->argv[cmd->argc++] = word;
+    return 0;
+}
+
 static int prepare_command(const char *line, const ShellCommand *src,
                            PreparedCommand *cmd) {
-    int assignments = 0;
+    WordSink sink = {cmd, 0, 0};
     cmd->argc = 0;
     cmd->redirect_count = 0;
     cmd->used = 0;
     for (int i = 0; i < src->word_count; ++i) {
         const ShellToken *token = &tokens.tokens[src->words[i]];
-        ShellExpansion result;
-        char *word;
-        if (expand_token(line, token, cmd, &word, &result) != 0)
+        const char *raw = line + token->start;
+        sink.assignment = raw_is_assignment(line, token);
+        /* "NAME={a,b}" assigns the text as written. */
+        if (sink.assignment) {
+            if (add_word(&sink, raw, token->length) != 0)
+                return -1;
+        } else if (brace_expand(raw, token->length, add_word, &sink) != 0) {
             return -1;
-        /* An unquoted word that expands to nothing is dropped, so that
-         * "echo $UNSET x" passes a single argument. */
-        if (result.length == 0 && !result.quoted)
-            continue;
-        if (raw_is_assignment(line, token))
-            assignments++;
-        cmd->argv[cmd->argc++] = word;
+        }
     }
     cmd->argv[cmd->argc] = 0;
-    cmd->assignment_only = cmd->argc > 0 && assignments == cmd->argc;
+    cmd->assignment_only = cmd->argc > 0 && sink.assignments == cmd->argc;
 
     for (int i = 0; i < src->redirect_count; ++i) {
         const ShellRedirect *redirect = &src->redirects[i];

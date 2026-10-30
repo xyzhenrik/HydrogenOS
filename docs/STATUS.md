@@ -339,5 +339,14 @@ Window-manager fixes (no stale shadow pixels, taskbar restore, themed chrome, ma
 Terminal hosting the real shell, redesigned Files app, Spotlight-style launcher, gap-buffer editor,
 new root layout (`/bin`, `/sbin`, `/lib/tests`, `/etc`, `/tmp`, `/home/user`; see `docs/FS_LAYOUT.md`).
 Older sections above still mention the pre-layout paths `/init` and `/init.rc`.
-Open: no top bar, no Escape key from the kernel keyboard driver, brace expansion and Ctrl+D EOF in the shell,
-`wc` missing, `ls` lists `./` and `../`.
+Open: no top bar.
+
+### Shell polish (2026-10-30)
+
+- Escape reaches the desktop through the shared PS/2 and virtio-input path (`KEY_ESCAPE`, `KBD_KEY_ESCAPE`); it now
+  also cancels the Files rename field and delete dialog, next to the launcher and the editor prompts that already used it.
+- Shell: `{a,b}` brace expansion (`userspace/shell/brace.c`, runs before quote removal; no `{1..3}` ranges, and
+  `NAME={a,b}` assigns the text as written), `ls -a` (without it `./` and `../` are hidden, `-l` and `-a` combine),
+  new `/bin/wc` (`-l -w -c`, stdin or files). Terminal completion now offers `chmod`, `chown`, `id`, `whoami` and the
+  programs in `/bin` and `/sbin` (it used to scan `/`).
+- Open: Ctrl+D cannot end the input of a running foreground command (see `docs/TERMINAL.md`).

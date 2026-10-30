@@ -839,6 +839,10 @@ static void edit_commit(FileManager *fm) {
 }
 
 static unsigned int edit_key(FileManager *fm, int key) {
+    if (key == FM_KEY_ESCAPE) {
+        end_edit(fm);
+        return FM_REDRAW;
+    }
     if (key == '\n' || key == '\r') {
         edit_commit(fm);
         return FM_REDRAW;
@@ -1949,6 +1953,10 @@ unsigned int fm_key(FileManager *fm, const Window *window, int key) {
     if (!fm || !window)
         return 0;
     if (fm->confirm_delete) {
+        if (key == FM_KEY_ESCAPE) {
+            fm->confirm_delete = 0;
+            return FM_REDRAW;
+        }
         if (key != '\n' && key != '\r')
             return 0;
         delete_selected(fm);

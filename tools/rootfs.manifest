@@ -6,7 +6,7 @@
 # See docs/FS_LAYOUT.md.
 
 bin        shell cat echo ps ping nslookup date time sleep hello logread poweroff reboot
-bin        nc top perfstat
+bin        nc top perfstat wc
 sbin       init syslogd login compositor desktopdemo
 
 lib/tests  bootprobe cwdcheck desktoptest dirtest dupcheck dupfallbackcheck

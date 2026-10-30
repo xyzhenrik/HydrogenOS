@@ -156,10 +156,22 @@ static void print_long_prefix(const char *path) {
     out_str(1, line);
 }
 
-static void list_directory(const char *path, int long_format) {
+enum {
+    LS_LONG = 1 << 0,
+    LS_ALL = 1 << 1,
+};
+
+static int is_dot_entry(const char *name) {
+    return str_eq(name, ".") || str_eq(name, "..");
+}
+
+static void list_directory(const char *path, int flags) {
     dirent_t entry;
     char full[COPY_PATH_MAX + DIRENT_NAME_MAX + 2];
+    int long_format = flags & LS_LONG;
     for (int pos = 0; readdir_pos(path, pos, &entry) == 1; ++pos) {
+        if (!(flags & LS_ALL) && is_dot_entry(entry.d_name))
+            continue;
         int has_path = snprintf(full, sizeof(full), "%s/%s", path, entry.d_name) <
                        (int)sizeof(full);
         if (long_format && has_path)
@@ -176,10 +188,22 @@ static void list_directory(const char *path, int long_format) {
 static int builtin_ls(int argc, char **argv) {
     int status = 0;
     int first = 1;
-    int long_format = first < argc && str_eq(argv[first], "-l");
-    first += long_format;
+    int flags = 0;
+    int long_format;
+    for (; first < argc && argv[first][0] == '-' && argv[first][1]; ++first) {
+        for (const char *option = argv[first] + 1; *option; ++option) {
+            if (*option == 'l') {
+                flags |= LS_LONG;
+            } else if (*option == 'a') {
+                flags |= LS_ALL;
+            } else {
+                return usage("ls", "usage: ls [-la] [path]...");
+            }
+        }
+    }
+    long_format = flags & LS_LONG;
     if (first >= argc) {
-        list_directory(".", long_format);
+        list_directory(".", flags);
         return 0;
     }
     for (int i = first; i < argc; ++i) {
@@ -201,7 +225,7 @@ static int builtin_ls(int argc, char **argv) {
             out_str(1, argv[i]);
             out_str(1, ":\n");
         }
-        list_directory(argv[i], long_format);
+        list_directory(argv[i], flags);
     }
     return status;
 }
