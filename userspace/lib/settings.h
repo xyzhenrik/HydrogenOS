@@ -48,7 +48,7 @@ typedef struct SettingsPalette {
     uint32_t chrome_text;
     uint32_t chrome_dim;
     uint32_t chrome_icon;   /* ink of the monochrome app icons on chrome */
-    uint32_t logo;          /* ink of the HydrogenOS drop */
+    int light;              /* the light theme: chrome ink and the logo gradient follow it */
 
     uint32_t accent;
     uint32_t on_accent;
