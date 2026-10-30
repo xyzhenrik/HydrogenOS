@@ -138,7 +138,7 @@ int main(int argc, char **argv, char **envp) {
     long fd;
     int status;
     env_import(envp);
-    if (!env_get("PATH", 4) && (env_set("PATH", 4, "/") != 0 ||
+    if (!env_get("PATH", 4) && (env_set("PATH", 4, "/bin:/sbin") != 0 ||
                                 env_export("PATH", 4) != 0)) {
         out_error("shell", 0, "cannot initialise PATH");
         return STATUS_USAGE;

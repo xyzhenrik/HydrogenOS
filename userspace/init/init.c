@@ -150,57 +150,57 @@ static int channel_remove_writer_ref(init_service_table_t *table, int channel_in
 
 static const char default_init_config[] =
     "logsink syslog \"sink-a\\nsink-b\\n\"\n"
-    "service bootprobe oneshot /bootprobe 100 restart=on-failure\n"
-    "service handoffcheck oneshot /handoffcheck 100 restart=on-failure "
+    "service bootprobe oneshot /lib/tests/bootprobe 100 restart=on-failure\n"
+    "service handoffcheck oneshot /lib/tests/handoffcheck 100 restart=on-failure "
     "stdin=pipe \"init handoff ok\\n\" bootprobe\n"
-    "service stdiocheck oneshot /stdiocheck 100 restart=on-failure "
+    "service stdiocheck oneshot /lib/tests/stdiocheck 100 restart=on-failure "
     "stdin=pipe \"init stdio ok\\n\" "
     "stdout=capture \"stdiocheck: stdout ok\\n\" "
     "stderr=capture \"stdiocheck: stderr ok\\n\" "
     "bootprobe handoffcheck\n"
-    "service stdiobadbind oneshot /stdiobadbind 100 restart=on-failure "
+    "service stdiobadbind oneshot /lib/tests/stdiobadbind 100 restart=on-failure "
     "bootprobe handoffcheck stdiocheck\n"
-    "service dupcheck oneshot /dupcheck 100 restart=on-failure "
+    "service dupcheck oneshot /lib/tests/dupcheck 100 restart=on-failure "
     "stdout=capture \"dupcheck: dup ok\\n\" "
     "bootprobe handoffcheck stdiocheck stdiobadbind\n"
-    "service logproducer_a oneshot /logproducer_a 100 restart=on-failure "
+    "service logproducer_a oneshot /lib/tests/logproducer_a 100 restart=on-failure "
     "stdout=channel logbus "
     "bootprobe handoffcheck stdiocheck stdiobadbind dupcheck\n"
-    "service logproducer_b oneshot /logproducer_b 100 restart=on-failure "
+    "service logproducer_b oneshot /lib/tests/logproducer_b 100 restart=on-failure "
     "stdout=channel logbus "
     "bootprobe handoffcheck stdiocheck stdiobadbind logproducer_a\n"
-    "service logcollector oneshot /logcollector 100 restart=on-failure "
+    "service logcollector oneshot /lib/tests/logcollector 100 restart=on-failure "
     "stdin=channel logbus "
     "stdout=capture \"logcollector: multiwriter ok\\n\" "
     "bootprobe handoffcheck stdiocheck stdiobadbind logproducer_b\n"
-    "service logsink_writer_a oneshot /logsink_writer_a 100 restart=on-failure "
+    "service logsink_writer_a oneshot /lib/tests/logsink_writer_a 100 restart=on-failure "
     "stdout=logsink syslog "
     "bootprobe handoffcheck stdiocheck stdiobadbind logcollector\n"
-    "service logsink_writer_b oneshot /logsink_writer_b 100 restart=on-failure "
+    "service logsink_writer_b oneshot /lib/tests/logsink_writer_b 100 restart=on-failure "
     "stdout=logsink syslog "
     "bootprobe handoffcheck stdiocheck stdiobadbind logcollector logsink_writer_a\n"
-    "service teewriter oneshot /teewriter 100 restart=on-failure "
+    "service teewriter oneshot /lib/tests/teewriter 100 restart=on-failure "
     "stdout=tee teebus "
     "bootprobe handoffcheck stdiocheck stdiobadbind logcollector logsink_writer_b\n"
-    "service teereader_a oneshot /teereader_a 100 restart=on-failure "
+    "service teereader_a oneshot /lib/tests/teereader_a 100 restart=on-failure "
     "stdin=tee teebus "
     "stdout=capture \"teereader_a: tee ok\\n\" "
     "bootprobe handoffcheck stdiocheck stdiobadbind logcollector teewriter\n"
-    "service teereader_b oneshot /teereader_b 100 restart=on-failure "
+    "service teereader_b oneshot /lib/tests/teereader_b 100 restart=on-failure "
     "stdin=tee teebus "
     "stdout=capture \"teereader_b: tee ok\\n\" "
     "bootprobe handoffcheck stdiocheck stdiobadbind logcollector teewriter\n"
-    "service pipeproducer oneshot /pipeproducer 100 restart=on-failure "
+    "service pipeproducer oneshot /lib/tests/pipeproducer 100 restart=on-failure "
     "stdout=channel bootseq "
     "bootprobe handoffcheck stdiocheck stdiobadbind logcollector teereader_b\n"
-    "service pipeconsumer oneshot /pipeconsumer 100 restart=on-failure "
+    "service pipeconsumer oneshot /lib/tests/pipeconsumer 100 restart=on-failure "
     "stdin=channel bootseq "
     "stdout=capture \"pipeconsumer: channel ok\\n\" "
     "bootprobe handoffcheck stdiocheck stdiobadbind logcollector pipeproducer\n"
-    "service stdionullcheck oneshot /stdionullcheck 100 restart=on-failure "
+    "service stdionullcheck oneshot /lib/tests/stdionullcheck 100 restart=on-failure "
     "stdin=null stdout=null stderr=null "
     "bootprobe handoffcheck stdiocheck stdiobadbind pipeconsumer\n"
-    "service shell supervised /shell 100 restart=always "
+    "service shell supervised /bin/shell 100 restart=always "
     "stdin=inherit stdout=inherit stderr=inherit "
     "bootprobe handoffcheck stdiocheck stdiobadbind dupcheck logcollector pipeconsumer stdionullcheck\n";
 
@@ -1741,22 +1741,22 @@ static int load_service_table(init_service_table_t *table) {
     if (!table) {
         return -1;
     }
-    fd = open("/init.rc", 0);
+    fd = open("/etc/init.rc", 0);
     if (fd >= 0) {
         got = read((int)fd, buf, sizeof(buf) - 1);
         close((int)fd);
         if (got > 0 && got < (long)(sizeof(buf) - 1)) {
             buf[got] = 0;
             if (parse_service_config(table, buf) == 0) {
-                write(1, "init: loaded /init.rc\n", 22);
+                write(1, "init: loaded /etc/init.rc\n", 26);
                 return 0;
             }
-            write(1, "init: invalid /init.rc, using built-in config\n", 46);
+            write(1, "init: invalid /etc/init.rc, using built-in config\n", 50);
         } else {
-            write(1, "init: unreadable /init.rc, using built-in config\n", 49);
+            write(1, "init: unreadable /etc/init.rc, using built-in config\n", 53);
         }
     } else {
-        write(1, "init: /init.rc missing, using built-in config\n", 46);
+        write(1, "init: /etc/init.rc missing, using built-in config\n", 50);
     }
     return load_service_table_from_text(table, default_init_config, "built-in init config");
 }

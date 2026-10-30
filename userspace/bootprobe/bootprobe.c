@@ -17,10 +17,10 @@ static void write_u64(unsigned long v) {
 }
 
 int main(void) {
-    static const char ok_prefix[] = "bootprobe: /shell ok at ";
-    long fd = open("/shell", 0);
+    static const char ok_prefix[] = "bootprobe: /bin/shell ok at ";
+    long fd = open("/bin/shell", 0);
     if (fd < 0) {
-        write(1, "bootprobe: open /shell failed\n", 30);
+        write(1, "bootprobe: open /bin/shell failed\n", 34);
         return 1;
     }
 

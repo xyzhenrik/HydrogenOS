@@ -2,6 +2,9 @@
 #include "syscall.h"
 
 #define PKG_MAGIC 0x48504B31u
+#define PKG_SCRATCH_DIR "/tmp/pkgtest"
+#define PKG_ARCHIVE PKG_SCRATCH_DIR "/demo.hpkg"
+#define PKG_INSTALL_DIR PKG_SCRATCH_DIR "/installed"
 
 static unsigned char pkg[4096];
 static int pkg_len = 0;
@@ -28,17 +31,18 @@ static unsigned int get_u32(const unsigned char *p) {
 }
 
 int main(void) {
-    sys_mkdir("/installed");
+    sys_mkdir(PKG_SCRATCH_DIR);
+    sys_mkdir(PKG_INSTALL_DIR);
     put_u32(PKG_MAGIC);
     put_u32(2);
     put_entry("hello.txt", "hello from a package\n");
     put_entry("notes.txt", "packaged notes\n");
-    if (sys_writef("/demo.hpkg", pkg, (unsigned long)pkg_len) != 0) {
+    if (sys_writef(PKG_ARCHIVE, pkg, (unsigned long)pkg_len) != 0) {
         write(1, "PKG FAIL write\n", 15);
         return 1;
     }
     unsigned char buf[4096];
-    int fd = (int)open("/demo.hpkg", 0);
+    int fd = (int)open(PKG_ARCHIVE, 0);
     if (fd < 0) { write(1, "PKG FAIL open\n", 14); return 1; }
     long n = read(fd, buf, sizeof(buf));
     close(fd);
@@ -57,7 +61,7 @@ int main(void) {
         off += (int)nl;
         unsigned int sz = get_u32(buf + off); off += 4;
         char path[96];
-        const char *pre = "/installed/";
+        const char *pre = PKG_INSTALL_DIR "/";
         int z = 0;
         while (pre[z]) { path[z] = pre[z]; ++z; }
         for (unsigned int i = 0; i < nl && z < 90; ++i) path[z++] = name[i];
@@ -68,7 +72,7 @@ int main(void) {
         }
         off += (int)sz;
     }
-    fd = (int)open("/installed/hello.txt", 0);
+    fd = (int)open(PKG_INSTALL_DIR "/hello.txt", 0);
     if (fd < 0) { write(1, "PKG FAIL verify open\n", 21); return 1; }
     char vbuf[64];
     long vn = read(fd, vbuf, sizeof(vbuf) - 1);
@@ -80,14 +84,20 @@ int main(void) {
         return 1;
     }
     /* package removal: unlink an installed entry and verify it is gone */
-    if (sys_unlink("/installed/hello.txt") != 0) {
+    if (sys_unlink(PKG_INSTALL_DIR "/hello.txt") != 0) {
         write(1, "PKG FAIL remove\n", 16);
         return 1;
     }
-    fd = (int)open("/installed/hello.txt", 0);
+    fd = (int)open(PKG_INSTALL_DIR "/hello.txt", 0);
     if (fd >= 0) {
         close(fd);
         write(1, "PKG FAIL remove check\n", 22);
+        return 1;
+    }
+    if (sys_unlink(PKG_INSTALL_DIR "/notes.txt") != 0 ||
+        sys_rmdir(PKG_INSTALL_DIR) != 0 || sys_unlink(PKG_ARCHIVE) != 0 ||
+        sys_rmdir(PKG_SCRATCH_DIR) != 0) {
+        write(1, "PKG FAIL cleanup\n", 17);
         return 1;
     }
     write(1, "PKG PASS\n", 9);

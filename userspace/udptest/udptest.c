@@ -261,7 +261,7 @@ static int check_argument_errors(void) {
     char buf[16];
     net_sockaddr_t from;
     long fd = udp_socket();
-    long file = open("/init.rc", OPEN_READ);
+    long file = open("/etc/init.rc", OPEN_READ);
 
     if (fd < 0 || file < 0)
         return fail("setup", fd < 0 ? fd : file);
@@ -314,7 +314,7 @@ static long spawn_sender(unsigned int port) {
     const char *argv[] = { "udptest", "send", text, 0 };
 
     snprintf(text, sizeof(text), "%u", port);
-    return spawn_args("/udptest", argv, 0, SPAWN_STDIO_NULL, SPAWN_STDIO_NULL,
+    return spawn_args("/lib/tests/udptest", argv, 0, SPAWN_STDIO_NULL, SPAWN_STDIO_NULL,
                       SPAWN_STDIO_NULL);
 }
 
@@ -538,7 +538,7 @@ static int check_wire_with_busy_sibling(void) {
     long pid;
 
     snprintf(text, sizeof(text), "%u", SPIN_MS);
-    pid = spawn_args("/udptest", argv, 0, SPAWN_STDIO_NULL, SPAWN_STDIO_NULL,
+    pid = spawn_args("/lib/tests/udptest", argv, 0, SPAWN_STDIO_NULL, SPAWN_STDIO_NULL,
                      SPAWN_STDIO_NULL);
     if (pid < 0)
         return fail("spawn spinner", pid);

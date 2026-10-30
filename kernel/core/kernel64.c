@@ -563,9 +563,9 @@ void kmain64(uint64_t magic, uint64_t multiboot_info_addr) {
   }
   tty_init();
   sti();
-  if (run_user_from_vfs("/init") != 0) {
+  if (run_user_from_vfs("/sbin/init") != 0) {
     kputs("userspace init missing, trying direct userspace shell fallback\n");
-    if (run_user_from_vfs("/shell") == 0) {
+    if (run_user_from_vfs("/bin/shell") == 0) {
       return;
     }
     kputs("userspace shell missing, falling back to kernel shell\n");

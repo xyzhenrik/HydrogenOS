@@ -174,7 +174,25 @@ static int cpio_find_entry(const char *name, cpio_entry_t *out) {
     return -1;
 }
 
-static int cpio_list_root(vfs_dir_cb cb, void *ctx) {
+/* Returns the part of name below dir if name is a direct child of dir
+   ("" is the root), or NULL. */
+static const char *direct_child(const char *name, const char *dir) {
+    if (!name || !dir) return 0;
+    const char *rest = name;
+    if (*dir) {
+        while (*dir) {
+            if (*rest++ != *dir++) return 0;
+        }
+        if (*rest++ != '/') return 0;
+    }
+    if (*rest == 0) return 0;
+    for (const char *c = rest; *c; ++c) {
+        if (*c == '/') return 0;
+    }
+    return rest;
+}
+
+static int cpio_list_dir(const char *dir, vfs_dir_cb cb, void *ctx) {
     if (!cpio_start || cpio_size == 0) return -1;
     const uint8_t *p = cpio_start;
     const uint8_t *end = cpio_start + cpio_size;
@@ -183,16 +201,10 @@ static int cpio_list_root(vfs_dir_cb cb, void *ctx) {
         const uint8_t *next = 0;
         if (cpio_next(p, end, &e, &next) != 0) return -1;
         if (str_eq(e.name, "TRAILER!!!")) return 0;
-        const char *name = e.name;
-        if (name[0] != 0) {
-            int has_slash = 0;
-            for (const char *c = name; *c; ++c) {
-                if (*c == '/') { has_slash = 1; break; }
-            }
-            if (!has_slash) {
-                uint8_t type = (e.mode & CPIO_MODE_MASK) == CPIO_MODE_DIR ? 2 : 1;
-                cb(name, type, ctx);
-            }
+        const char *child = direct_child(e.name, dir);
+        if (child) {
+            uint8_t type = (e.mode & CPIO_MODE_MASK) == CPIO_MODE_DIR ? 2 : 1;
+            cb(child, type, ctx);
         }
         if (!next || next <= p) return -1;
         p = next;
@@ -233,29 +245,41 @@ int ramfs_init(void) {
 
 int ramfs_is_ready(void) { return ready; }
 
+static void list_dyn_children(const char *dir, vfs_dir_cb cb, void *ctx) {
+    for (int i = 0; i < RAMFS_DYN_MAX; ++i) {
+        if (!dyn_entries[i].used) continue;
+        const char *child = direct_child(dyn_entries[i].name, dir);
+        if (child) cb(child, dyn_entries[i].type, ctx);
+    }
+}
+
 int ramfs_list_root(vfs_dir_cb cb, void *ctx) {
     if (!ready || !cb) return -1;
     if (use_cpio) {
-        int rc = cpio_list_root(cb, ctx);
-        /* Also emit dynamic entries */
-        for (int i = 0; i < RAMFS_DYN_MAX; ++i) {
-            if (dyn_entries[i].used) cb(dyn_entries[i].name, dyn_entries[i].type, ctx);
-        }
+        int rc = cpio_list_dir("", cb, ctx);
+        list_dyn_children("", cb, ctx);
         return rc;
     }
     for (uint32_t i = 0; i < builtin_count; ++i) {
         cb(builtin_entries[i].name, builtin_entries[i].type, ctx);
     }
-    for (int i = 0; i < RAMFS_DYN_MAX; ++i) {
-        if (dyn_entries[i].used) cb(dyn_entries[i].name, dyn_entries[i].type, ctx);
-    }
+    list_dyn_children("", cb, ctx);
     return 0;
 }
 
 int ramfs_list_dir(const char *path, vfs_dir_cb cb, void *ctx) {
-    if (!ready) return -1;
+    if (!ready || !cb) return -1;
     if (is_root_path(path)) return ramfs_list_root(cb, ctx);
-    return -1;
+    if (!use_cpio) return -1;
+    const char *name = strip_slash(path);
+    cpio_entry_t e;
+    ramfs_dyn_entry_t *created = dyn_find(name);
+    int in_image = cpio_find_entry(name, &e) == 0 &&
+                   (e.mode & CPIO_MODE_MASK) == CPIO_MODE_DIR;
+    if (!in_image && !(created && created->type == 2)) return -1;
+    int rc = in_image ? cpio_list_dir(name, cb, ctx) : 0;
+    list_dyn_children(name, cb, ctx);
+    return rc;
 }
 
 int ramfs_read_file_at(const char *path, uint32_t offset, uint8_t *out,

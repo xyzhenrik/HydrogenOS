@@ -65,7 +65,7 @@ int main(void) {
         return 4;
     }
 
-    pid = spawn_with_stdio("/pollwakewriter", SPAWN_STDIO_NULL, right[1],
+    pid = spawn_with_stdio("/lib/tests/pollwakewriter", SPAWN_STDIO_NULL, right[1],
                            SPAWN_STDIO_NULL);
     if (pid <= 0) {
         close(left[0]);

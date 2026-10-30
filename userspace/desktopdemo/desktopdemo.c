@@ -187,6 +187,24 @@ static void append_num(char *line, int *z, int v) {
     while (n > 0) line[(*z)++] = tmp[--n];
 }
 
+/* A bare command name is looked up in /bin, then /sbin; a name containing a
+ * slash is used as given. Returns 0 and fills out, or -1 if nothing matches. */
+static int resolve_command(const char *name, char *out, int cap) {
+    static const char *const dirs[] = { "/bin/", "/sbin/" };
+    stat_t st;
+    for (const char *c = name; *c; ++c) {
+        if (*c == '/') { str_copy_to(out, name, cap); return 0; }
+    }
+    for (unsigned i = 0; i < sizeof(dirs) / sizeof(dirs[0]); ++i) {
+        int n = 0;
+        str_copy_to(out, dirs[i], cap);
+        while (out[n]) ++n;
+        str_copy_to(out + n, name, cap - n);
+        if (stat(out, &st) == 0 && S_ISREG(st.st_mode)) return 0;
+    }
+    return -1;
+}
+
 /* ---------------- icons ---------------- */
 
 static void blit_icon(Window *win, int x, int y, const uint32_t *icon, int size) {
@@ -435,7 +453,7 @@ static void term_execute(App *a) {
     if (!cmd[0]) return;
     if (str_eq(cmd, "help")) {
         term_puts(a, "Commands: help version uptime time date ls [path] cat <path> pwd cd <path>");
-        term_puts(a, "  mkdir rm touch mv cp echo clear run <path> edit [path] files");
+        term_puts(a, "  mkdir rm touch mv cp echo clear run <command> edit [path] files");
     } else if (str_eq(cmd, "version")) {
         term_puts(a, "HydrogenOS desktop v0");
     } else if (str_eq(cmd, "uptime")) {
@@ -518,8 +536,13 @@ static void term_execute(App *a) {
     } else if (str_eq(cmd, "files")) {
         app_open_new(APP_FILES);
     } else if (str_eq(cmd, "run")) {
-        if (!*arg) { term_puts(a, "usage: run <path>"); return; }
-        long pid = spawn(arg);
+        if (!*arg) { term_puts(a, "usage: run <command>"); return; }
+        char program[128];
+        if (resolve_command(arg, program, sizeof(program)) != 0) {
+            term_puts(a, "run: command not found");
+            return;
+        }
+        long pid = spawn(program);
         if (pid < 0) { term_puts(a, "run: spawn failed"); return; }
         int st = 0;
         wait_pid((int)pid, &st);
@@ -600,7 +623,7 @@ static int term_key(App *a, char c) {
 
 static void editor_save(App *a) {
     a->text[a->text_len] = 0;
-    const char *path = a->path[0] ? a->path : "/notes.txt";
+    const char *path = a->path[0] ? a->path : "/home/user/notes.txt";
     if (sys_writef(path, a->text, (unsigned long)a->text_len) == 0) {
         /* status in the first terminal */
         for (int i = 0; i < MAX_APPS; ++i) {
@@ -631,7 +654,7 @@ static void editor_load_path(App *e, const char *path) {
 
 static void editor_key(App *a, char c) {
     if (c == 0x13) { editor_save(a); return; }
-    if (c == 0x0F) { editor_load_path(a, a->path[0] ? a->path : "/notes.txt"); return; }
+    if (c == 0x0F) { editor_load_path(a, a->path[0] ? a->path : "/home/user/notes.txt"); return; }
     if (c == 0x0E) { a->text_len = 0; a->cursor = 0; a->text[0] = 0; return; }
     if (c == '\r' || c == '\n') {
         if (a->text_len < (int)sizeof(a->text) - 2) {
