@@ -266,6 +266,7 @@ void settings_palette(const Settings *settings, SettingsPalette *palette) {
     }
     light = effective.theme == SETTINGS_THEME_LIGHT;
 
+    palette->light = light;
     palette->accent = settings_accent_color(effective.accent, effective.theme);
     palette->on_accent = on_accent_color(palette->accent);
 
@@ -279,8 +280,6 @@ void settings_palette(const Settings *settings, SettingsPalette *palette) {
     palette->glass_alpha = light ? 190u : 150u;
     palette->chrome_text = light ? 0x1C1C1Eu : 0xD0D8E0u;
     palette->chrome_dim = light ? 0x6E6E73u : 0x8090A0u;
-    palette->chrome_icon = light ? 0x3A3A3Eu : 0xFFFFFFu;
-    palette->light = light;
 
     palette->title = light ? 0xE2E2E7u : 0x304050u;
     palette->title_focus = light ? 0xF6F6F9u : 0x425870u;

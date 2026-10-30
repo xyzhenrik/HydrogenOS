@@ -1,4 +1,5 @@
 #include "filemanager.h"
+#include "iconset.h"
 #include "mini_libc.h"
 #include "syscall.h"
 
@@ -15,8 +16,7 @@
 #define ITEM_HEIGHT          32
 #define ITEM_GAP             2
 #define ITEM_RADIUS          6
-#define ITEM_ICON            20
-#define ITEM_ICON_RADIUS     5
+#define ITEM_ICON            ICON_SIZE_TILE
 #define ITEM_PAD             8
 #define PLACE_COUNT          4
 
@@ -42,9 +42,10 @@
 #define GRID_PAD     12
 #define CELL_WIDTH   104
 #define CELL_HEIGHT  92
-#define ICON_LARGE   48
+#define ICON_LARGE   ICON_SIZE_FILE
 #define ICON_TOP     8
 #define LABEL_CHARS  11
+#define EMPTY_ICON_OPACITY 110
 #define LABEL_HEIGHT 20
 #define LABEL_RADIUS 6
 #define EDIT_FIELD_WIDTH 132
@@ -55,7 +56,7 @@
 #define HEADER_HEIGHT 26
 #define LIST_PAD      8
 #define LIST_VPAD     4
-#define ICON_SMALL    20
+#define ICON_SMALL    ICON_SIZE_FILE_SMALL
 #define SIZE_COLUMN_WIDTH    72
 #define KIND_COLUMN_WIDTH    104
 #define COLUMN_GAP    16
@@ -73,7 +74,6 @@
 #define DIALOG_BUTTON_WIDTH 96
 #define DIALOG_RADIUS 12
 
-#define TRIANGLE_MAX_WIDTH 64
 #define TOOLTIP_PAD   8
 
 #define HOVER_OPACITY  24u
@@ -99,29 +99,17 @@
 #define COLOR_WHITE 0xFFFFFFu
 #define COLOR_BLACK 0x000000u
 
-/* File-type colours identify the kind, not the theme. */
-#define COLOR_FOLDER_BACK  0x3A8EE6u
-#define COLOR_FOLDER_FRONT 0x67BDFFu
-#define COLOR_APP_TILE     0x5E5CE6u
-#define COLOR_BOX_BODY     0xD7A468u
-#define COLOR_BOX_LID      0xB98450u
-#define COLOR_BOX_TAPE     0xF1DDB9u
-#define COLOR_SKY          0x74BFFFu
-#define COLOR_SUN          0xFFD60Au
-#define COLOR_HILL_BACK    0x2FAE55u
-#define COLOR_HILL_FRONT   0x58D77Au
-
 typedef struct Place {
     const char *name;
     const char *path;
-    uint32_t tint;
+    IconId icon;
 } Place;
 
 static const Place places[PLACE_COUNT] = {
-    { "Root",     "/",     0x8E8E93u },
-    { "Home",     "/home/user", 0x0A84FFu },
-    { "Temp",     "/tmp",  0xFF9F0Au },
-    { "Programs", "/bin",  0x5E5CE6u },
+    { "Root",     "/",          ICON_PLACE_ROOT },
+    { "Home",     "/home/user", ICON_PLACE_HOME },
+    { "Temp",     "/tmp",       ICON_PLACE_TEMP },
+    { "Programs", "/bin",       ICON_PLACE_PROGRAMS },
 };
 
 static const char *const kind_names[] = {
@@ -1050,225 +1038,30 @@ static void draw_text_right(const Painter *painter, int right, int y, const char
     draw_text(painter, right - text_width(text), y, text, color);
 }
 
-/* A line of the given thickness, stamped with round dots. */
-static void draw_stroke(const Painter *painter, int x0, int y0, int x1, int y1, int thickness,
-                        uint32_t color) {
-    int dx = x1 > x0 ? x1 - x0 : x0 - x1;
-    int dy = y1 > y0 ? y1 - y0 : y0 - y1;
-    int steps = max_int(dx, dy);
+/* ---------------- icons ---------------- */
 
-    if (steps == 0)
-        steps = 1;
-    for (int step = 0; step <= steps; ++step) {
-        int x = x0 + (x1 - x0) * step / steps;
-        int y = y0 + (y1 - y0) * step / steps;
-
-        fill_box(painter, x - thickness / 2, y - thickness / 2, thickness, thickness,
-                 thickness / 2, color);
-    }
+static void draw_icon(const Painter *painter, IconId id, int size, int x, int y,
+                      unsigned int opacity) {
+    icon_draw(&painter->canvas, id, size, x, y, painter->palette->light, opacity);
 }
 
-/* Anti-aliased triangle: four sample rows per pixel row, exact horizontal coverage. */
-static void fill_triangle(const Painter *painter, int x0, int y0, int x1, int y1, int x2, int y2,
-                          uint32_t color) {
-    int xs[3] = { x0, x1, x2 };
-    int ys[3] = { y0, y1, y2 };
-    int min_x = min_int(x0, min_int(x1, x2));
-    int max_x = max_int(x0, max_int(x1, x2));
-    int min_y = min_int(y0, min_int(y1, y2));
-    int max_y = max_int(y0, max_int(y1, y2));
-
-    if (max_x - min_x + 1 > TRIANGLE_MAX_WIDTH)
-        return;
-    for (int y = min_y; y < max_y; ++y) {
-        unsigned int cover[TRIANGLE_MAX_WIDTH] = { 0 };
-
-        for (int sample = 0; sample < 4; ++sample) {
-            long sample_y = (long)y * 256 + sample * 64 + 32;
-            long low = 0x7FFFFFFFL;
-            long high = -0x7FFFFFFFL;
-
-            for (int edge = 0; edge < 3; ++edge) {
-                int a = edge;
-                int b = (edge + 1) % 3;
-                long ya = (long)ys[a] * 256;
-                long yb = (long)ys[b] * 256;
-                long x;
-
-                if (ya == yb || sample_y < (ya < yb ? ya : yb) || sample_y >= (ya < yb ? yb : ya))
-                    continue;
-                x = (long)xs[a] * 256 + (long)(xs[b] - xs[a]) * 256 * (sample_y - ya) / (yb - ya);
-                if (x < low)
-                    low = x;
-                if (x > high)
-                    high = x;
-            }
-            if (low >= high)
-                continue;
-            for (long px = low >> 8; px <= (high - 1) >> 8; ++px) {
-                long left = low > px * 256 ? low : px * 256;
-                long right = high < px * 256 + 256 ? high : px * 256 + 256;
-
-                cover[px - min_x] += (unsigned int)(right - left);
-            }
-        }
-        for (int px = 0; px < max_x - min_x + 1; ++px) {
-            unsigned int alpha = cover[px] / 4;
-
-            gfx_blend_pixel(&painter->canvas, min_x + px, y, color, alpha > 255 ? 255 : alpha);
-        }
-    }
+static void draw_glyph(const Painter *painter, IconId id, int size, int x, int y,
+                       uint32_t color) {
+    icon_draw_glyph(&painter->canvas, id, size, x, y, color, 255);
 }
 
-/* ---------------- file-type icons ---------------- */
-
-/* Icons are designed on a 48 unit grid and scaled to the requested size. */
-#define U(v) (((v) * size + 24) / 48)
-
-static void icon_box(const Painter *painter, int x, int y, int size, int left, int top,
-                     int width, int height, int radius, uint32_t color, int grow) {
-    int w = max_int(U(width), 1) + 2 * grow;
-    int h = max_int(U(height), 1) + 2 * grow;
-
-    fill_box(painter, x + U(left) - grow, y + U(top) - grow, w, h, max_int(U(radius), 1), color);
-}
-
-static void draw_folder_icon(const Painter *painter, int x, int y, int size) {
-    icon_box(painter, x, y, size, 4, 7, 20, 14, 4, COLOR_FOLDER_BACK, 0);
-    icon_box(painter, x, y, size, 4, 12, 40, 28, 5, COLOR_FOLDER_BACK, 0);
-    icon_box(painter, x, y, size, 4, 18, 40, 22, 5, COLOR_FOLDER_FRONT, 0);
-}
-
-/* A page with a folded corner: two rounded boxes leave the corner open, the
-   fold fills half of it. grow outlines the shape by that many pixels. */
-static void draw_page_shape(const Painter *painter, int x, int y, int size, int grow,
-                            uint32_t color) {
-    icon_box(painter, x, y, size, 10, 4, 18, 40, 3, color, grow);
-    icon_box(painter, x, y, size, 10, 14, 28, 30, 3, color, grow);
-}
-
-static void draw_page_icon(const Painter *painter, int x, int y, int size) {
-    const SettingsPalette *palette = painter->palette;
-    uint32_t outline = gfx_mix(palette->card, palette->ink_dim, 150) & 0x00FFFFFFu;
-    uint32_t fold = gfx_mix(palette->card, palette->ink_dim, 90) & 0x00FFFFFFu;
-
-    draw_page_shape(painter, x, y, size, 1, outline);
-    draw_page_shape(painter, x, y, size, 0, palette->card);
-    fill_triangle(painter, x + U(28), y + U(4), x + U(28), y + U(14), x + U(38), y + U(14), fold);
-    draw_stroke(painter, x + U(28), y + U(4), x + U(38), y + U(14), 1, outline);
-}
-
-static void draw_text_icon(const Painter *painter, int x, int y, int size) {
-    uint32_t ink = painter->palette->ink_dim;
-
-    draw_page_icon(painter, x, y, size);
-    for (int line = 0; line < 4; ++line) {
-        int width = line == 3 ? 9 : 18;
-
-        icon_box(painter, x, y, size, 15, 22 + line * 5, width, 2, 1, ink, 0);
-    }
-}
-
-static void draw_executable_icon(const Painter *painter, int x, int y, int size) {
-    int thick = size >= 32 ? 3 : 2;
-
-    icon_box(painter, x, y, size, 5, 5, 38, 38, 10, COLOR_APP_TILE, 0);
-    draw_stroke(painter, x + U(15), y + U(17), x + U(23), y + U(25), thick, COLOR_WHITE);
-    draw_stroke(painter, x + U(23), y + U(25), x + U(15), y + U(33), thick, COLOR_WHITE);
-    icon_box(painter, x, y, size, 26, 32, 10, 3, 1, COLOR_WHITE, 0);
-}
-
-static void draw_archive_icon(const Painter *painter, int x, int y, int size) {
-    icon_box(painter, x, y, size, 7, 19, 34, 23, 3, COLOR_BOX_BODY, 0);
-    icon_box(painter, x, y, size, 4, 9, 40, 12, 3, COLOR_BOX_LID, 0);
-    icon_box(painter, x, y, size, 20, 9, 8, 33, 1, COLOR_BOX_TAPE, 0);
-    icon_box(painter, x, y, size, 11, 33, 8, 3, 1, COLOR_BOX_LID, 0);
-}
-
-static void draw_image_icon(const Painter *painter, int x, int y, int size) {
-    GfxRect frame = rect_make(x + U(5), y + U(8), U(38), U(32));
-
-    fill_round(painter, &frame, max_int(U(5), 1), COLOR_SKY, 255);
-    fill_box(painter, x + U(28), y + U(13), U(10), U(10), U(5), COLOR_SUN);
-    fill_triangle(painter, x + U(9), y + U(39), x + U(21), y + U(22), x + U(33), y + U(39),
-                  COLOR_HILL_BACK);
-    fill_triangle(painter, x + U(22), y + U(39), x + U(32), y + U(28), x + U(41), y + U(39),
-                  COLOR_HILL_FRONT);
-    gfx_stroke_round_rect(&painter->canvas, frame.x, frame.y, frame.w, frame.h,
-                          max_int(U(5), 1), COLOR_WHITE, 120);
-}
-
-static void draw_kind_icon(const Painter *painter, FmKind kind, int x, int y, int size) {
+static IconId kind_icon(FmKind kind) {
     switch (kind) {
-    case FM_KIND_FOLDER:     draw_folder_icon(painter, x, y, size); break;
-    case FM_KIND_TEXT:       draw_text_icon(painter, x, y, size); break;
-    case FM_KIND_EXECUTABLE: draw_executable_icon(painter, x, y, size); break;
-    case FM_KIND_ARCHIVE:    draw_archive_icon(painter, x, y, size); break;
-    case FM_KIND_IMAGE:      draw_image_icon(painter, x, y, size); break;
-    default:                 draw_page_icon(painter, x, y, size); break;
+    case FM_KIND_FOLDER:     return ICON_FOLDER;
+    case FM_KIND_TEXT:       return ICON_TEXT;
+    case FM_KIND_EXECUTABLE: return ICON_PROGRAM;
+    case FM_KIND_ARCHIVE:    return ICON_ARCHIVE;
+    case FM_KIND_IMAGE:      return ICON_IMAGE;
+    default:                 return ICON_PAGE;
     }
 }
 
-#undef U
-
-/* ---------------- toolbar glyphs ---------------- */
-
-static void glyph_back(const Painter *painter, int cx, int cy, uint32_t color) {
-    draw_stroke(painter, cx + 2, cy - 6, cx - 3, cy, 2, color);
-    draw_stroke(painter, cx - 3, cy, cx + 2, cy + 6, 2, color);
-}
-
-static void glyph_forward(const Painter *painter, int cx, int cy, uint32_t color) {
-    draw_stroke(painter, cx - 2, cy - 6, cx + 3, cy, 2, color);
-    draw_stroke(painter, cx + 3, cy, cx - 2, cy + 6, 2, color);
-}
-
-static void glyph_up(const Painter *painter, int cx, int cy, uint32_t color) {
-    draw_stroke(painter, cx, cy + 6, cx, cy - 6, 2, color);
-    draw_stroke(painter, cx - 5, cy - 1, cx, cy - 6, 2, color);
-    draw_stroke(painter, cx + 5, cy - 1, cx, cy - 6, 2, color);
-}
-
-static void glyph_icons(const Painter *painter, int cx, int cy, uint32_t color) {
-    for (int row = 0; row < 2; ++row) {
-        for (int column = 0; column < 2; ++column)
-            fill_box(painter, cx - 7 + column * 8, cy - 7 + row * 8, 6, 6, 1, color);
-    }
-}
-
-static void glyph_list(const Painter *painter, int cx, int cy, uint32_t color) {
-    for (int row = -1; row <= 1; ++row) {
-        fill_box(painter, cx - 7, cy + row * 5 - 1, 2, 2, 1, color);
-        fill_box(painter, cx - 3, cy + row * 5 - 1, 10, 2, 1, color);
-    }
-}
-
-static void glyph_new_folder(const Painter *painter, int cx, int cy, uint32_t color) {
-    GfxRect body = rect_make(cx - 8, cy - 4, 16, 12);
-
-    stroke_round(painter, &body, 2, color);
-    fill_box(painter, cx - 8, cy - 6, 6, 3, 1, color);
-    draw_stroke(painter, cx - 3, cy + 2, cx + 3, cy + 2, 2, color);
-    draw_stroke(painter, cx, cy - 1, cx, cy + 5, 2, color);
-}
-
-static void glyph_rename(const Painter *painter, int cx, int cy, uint32_t color) {
-    draw_stroke(painter, cx + 5, cy - 6, cx - 2, cy + 1, 3, color);
-    draw_stroke(painter, cx - 2, cy + 1, cx - 5, cy + 5, 2, color);
-    fill_box(painter, cx, cy + 6, 8, 2, 1, color);
-}
-
-static void glyph_delete(const Painter *painter, int cx, int cy, uint32_t color) {
-    GfxRect body = rect_make(cx - 6, cy - 3, 12, 11);
-
-    fill_box(painter, cx - 3, cy - 8, 6, 2, 1, color);
-    fill_box(painter, cx - 7, cy - 6, 14, 2, 1, color);
-    stroke_round(painter, &body, 2, color);
-    fill_box(painter, cx - 2, cy, 1, 5, 0, color);
-    fill_box(painter, cx + 1, cy, 1, 5, 0, color);
-}
-
-typedef void (*GlyphFn)(const Painter *, int, int, uint32_t);
+/* ---------------- toolbar ---------------- */
 
 static const GfxRect *button_rect(const FmLayout *layout, int hit) {
     switch (hit) {
@@ -1297,7 +1090,7 @@ static int button_enabled(const FileManager *fm, int hit) {
 }
 
 static void draw_button(const Painter *painter, const FileManager *fm, const FmLayout *layout,
-                        int hit, int active, GlyphFn glyph) {
+                        int hit, int active, IconId glyph) {
     const SettingsPalette *palette = painter->palette;
     const GfxRect *rect = button_rect(layout, hit);
     int enabled = button_enabled(fm, hit);
@@ -1309,40 +1102,11 @@ static void draw_button(const Painter *painter, const FileManager *fm, const FmL
     } else if (enabled && fm->hover == hit) {
         fill_round(painter, rect, BUTTON_RADIUS, palette->ink, HOVER_OPACITY);
     }
-    glyph(painter, rect->x + rect->w / 2, rect->y + rect->h / 2, color);
+    draw_glyph(painter, glyph, ICON_SIZE_TOOLBAR, rect->x + (rect->w - ICON_SIZE_TOOLBAR) / 2,
+               rect->y + (rect->h - ICON_SIZE_TOOLBAR) / 2, color);
 }
 
 /* ---------------- sidebar ---------------- */
-
-static void draw_place_glyph(const Painter *painter, int place, const GfxRect *tile) {
-    uint32_t tint = places[place].tint;
-    int x = tile->x;
-    int y = tile->y;
-
-    switch (place) {
-    case 0:
-        fill_box(painter, x + 3, y + 6, 14, 9, 2, COLOR_WHITE);
-        fill_box(painter, x + 13, y + 10, 2, 2, 1, tint);
-        fill_box(painter, x + 5, y + 10, 5, 1, 0, tint);
-        break;
-    case 1:
-        fill_triangle(painter, x + 10, y + 3, x + 3, y + 10, x + 17, y + 10, COLOR_WHITE);
-        fill_box(painter, x + 5, y + 10, 10, 7, 1, COLOR_WHITE);
-        fill_box(painter, x + 9, y + 12, 3, 5, 0, tint);
-        break;
-    case 2:
-        fill_box(painter, x + 4, y + 4, 12, 12, 6, COLOR_WHITE);
-        fill_box(painter, x + 9, y + 6, 2, 5, 0, tint);
-        fill_box(painter, x + 9, y + 9, 4, 2, 0, tint);
-        break;
-    default:
-        for (int row = 0; row < 2; ++row) {
-            for (int column = 0; column < 2; ++column)
-                fill_box(painter, x + 4 + column * 7, y + 4 + row * 7, 5, 5, 1, COLOR_WHITE);
-        }
-        break;
-    }
-}
 
 /* The place whose folder contains the current one; the deepest wins. */
 static int current_place(const FileManager *fm) {
@@ -1382,8 +1146,7 @@ static void draw_sidebar(const Painter *painter, const FileManager *fm, const Fm
             fill_round(painter, item, ITEM_RADIUS, palette->ink, 40);
         else if (fm->hover == HIT_PLACE + i)
             fill_round(painter, item, ITEM_RADIUS, palette->ink, HOVER_OPACITY);
-        fill_round(painter, &icon, ITEM_ICON_RADIUS, places[i].tint, 255);
-        draw_place_glyph(painter, i, &icon);
+        draw_icon(painter, places[i].icon, ITEM_ICON, icon.x, icon.y, 255);
         draw_text(painter, icon.x + ITEM_ICON + ITEM_PAD, item->y + (item->h - GLYPH_HEIGHT) / 2,
                   places[i].name, palette->ink);
     }
@@ -1392,8 +1155,8 @@ static void draw_sidebar(const Painter *painter, const FileManager *fm, const Fm
 /* ---------------- toolbar ---------------- */
 
 static void draw_crumb_separator(const Painter *painter, int x, int cy, uint32_t color) {
-    draw_stroke(painter, x - 1, cy - 4, x + 2, cy, 1, color);
-    draw_stroke(painter, x + 2, cy, x - 1, cy + 4, 1, color);
+    draw_glyph(painter, ICON_GLYPH_CHEVRON, ICON_SIZE_GLYPH, x - ICON_SIZE_GLYPH / 2,
+               cy - ICON_SIZE_GLYPH / 2, color);
 }
 
 static void draw_path_bar(const Painter *painter, const FileManager *fm, const FmLayout *layout) {
@@ -1428,19 +1191,19 @@ static void draw_toolbar(const Painter *painter, const FileManager *fm, const Fm
     fill_rect(painter, &layout->toolbar, palette->surface);
     fill_rect(painter, &line, palette->separator);
 
-    draw_button(painter, fm, layout, HIT_BACK, 0, glyph_back);
-    draw_button(painter, fm, layout, HIT_FORWARD, 0, glyph_forward);
-    draw_button(painter, fm, layout, HIT_UP, 0, glyph_up);
+    draw_button(painter, fm, layout, HIT_BACK, 0, ICON_GLYPH_BACK);
+    draw_button(painter, fm, layout, HIT_FORWARD, 0, ICON_GLYPH_FORWARD);
+    draw_button(painter, fm, layout, HIT_UP, 0, ICON_GLYPH_UP);
     draw_path_bar(painter, fm, layout);
 
     fill_round(painter, &layout->view_box, BUTTON_RADIUS + 1, palette->sidebar, 255);
     stroke_round(painter, &layout->view_box, BUTTON_RADIUS + 1, palette->separator);
-    draw_button(painter, fm, layout, HIT_ICONS, fm->view == FM_VIEW_ICONS, glyph_icons);
-    draw_button(painter, fm, layout, HIT_LIST, fm->view == FM_VIEW_LIST, glyph_list);
+    draw_button(painter, fm, layout, HIT_ICONS, fm->view == FM_VIEW_ICONS, ICON_GLYPH_VIEW_GRID);
+    draw_button(painter, fm, layout, HIT_LIST, fm->view == FM_VIEW_LIST, ICON_GLYPH_VIEW_LIST);
 
-    draw_button(painter, fm, layout, HIT_NEW_FOLDER, 0, glyph_new_folder);
-    draw_button(painter, fm, layout, HIT_RENAME, 0, glyph_rename);
-    draw_button(painter, fm, layout, HIT_DELETE, 0, glyph_delete);
+    draw_button(painter, fm, layout, HIT_NEW_FOLDER, 0, ICON_GLYPH_NEW_FOLDER);
+    draw_button(painter, fm, layout, HIT_RENAME, 0, ICON_GLYPH_RENAME);
+    draw_button(painter, fm, layout, HIT_DELETE, 0, ICON_GLYPH_DELETE);
 }
 
 static const char *tooltip_for(int hit) {
@@ -1522,8 +1285,8 @@ static void draw_icon_item(const Painter *painter, const FileManager *fm, const 
         fill_round(painter, &backdrop, BACKDROP_RADIUS, palette->accent, SELECT_OPACITY);
     else if (fm->hover == HIT_ITEM + index)
         fill_round(painter, &backdrop, BACKDROP_RADIUS, palette->ink, HOVER_OPACITY);
-    draw_kind_icon(painter, entry->kind, cell.x + (CELL_WIDTH - ICON_LARGE) / 2,
-                   cell.y + ICON_TOP, ICON_LARGE);
+    draw_icon(painter, kind_icon(entry->kind), ICON_LARGE, cell.x + (CELL_WIDTH - ICON_LARGE) / 2,
+              cell.y + ICON_TOP, 255);
 
     if (selected && fm->editing)
         return;
@@ -1558,7 +1321,8 @@ static void draw_row_item(const Painter *painter, const FileManager *fm, const F
         fill_round(painter, &row, ITEM_RADIUS, palette->accent, 255);
     else if (fm->hover == HIT_ITEM + index)
         fill_round(painter, &row, ITEM_RADIUS, palette->ink, HOVER_OPACITY);
-    draw_kind_icon(painter, entry->kind, row.x + 8, row.y + (row.h - ICON_SMALL) / 2, ICON_SMALL);
+    draw_icon(painter, kind_icon(entry->kind), ICON_SMALL, row.x + 8,
+              row.y + (row.h - ICON_SMALL) / 2, 255);
 
     if (!(selected && fm->editing)) {
         fit_text(name, sizeof(name), entry->name,
@@ -1593,8 +1357,7 @@ static void draw_empty_state(const Painter *painter, const FileManager *fm, cons
     int center_x = layout->viewport.x + layout->viewport.w / 2;
     int top = layout->viewport.y + layout->viewport.h / 2 - 52;
 
-    fill_box(painter, center_x - 28, top, 22, 14, 5, palette->control_off);
-    fill_box(painter, center_x - 28, top + 8, 56, 40, 6, palette->control_off);
+    draw_icon(painter, ICON_FOLDER, ICON_LARGE, center_x - ICON_LARGE / 2, top, EMPTY_ICON_OPACITY);
     draw_text_bold(painter, center_x - text_width(title) / 2, top + 64, title, palette->ink);
     draw_text(painter, center_x - text_width(hint) / 2, top + 86, hint, palette->ink_dim);
 }

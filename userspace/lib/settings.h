@@ -37,6 +37,7 @@ typedef struct Settings {
 /* Colour tokens of the desktop session, all 0x00RRGGBB. Everything follows
    the theme except the terminal, which keeps its own dark look. */
 typedef struct SettingsPalette {
+    int light;              /* the light theme: selects icon artwork and the logo gradient */
     uint32_t wallpaper_top;
     uint32_t wallpaper_bottom;
 
@@ -47,8 +48,6 @@ typedef struct SettingsPalette {
     unsigned int glass_alpha;
     uint32_t chrome_text;
     uint32_t chrome_dim;
-    uint32_t chrome_icon;   /* ink of the monochrome app icons on chrome */
-    int light;              /* the light theme: chrome ink and the logo gradient follow it */
 
     uint32_t accent;
     uint32_t on_accent;

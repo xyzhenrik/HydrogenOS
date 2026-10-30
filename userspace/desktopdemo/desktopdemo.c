@@ -4,7 +4,7 @@
 #include "compositor.h"
 #include "filemanager.h"
 #include "gfx_effects.h"
-#include "icons.h"
+#include "iconset.h"
 #include "kbd_keys.h"
 #include "logo_ui.h"
 #include "settings.h"
@@ -53,7 +53,6 @@ static int g_settings_save_failed;
 #define COL_TASKBAR   (g_th.taskbar)
 #define COL_CHROME_TEXT (g_th.chrome_text)
 #define COL_CHROME_DIM  (g_th.chrome_dim)
-#define COL_CHROME_ICON (g_th.chrome_icon)
 #define COL_TITLE_BORDER (g_th.title_border)
 
 enum { APP_TERM = 0, APP_EDIT, APP_FILES, APP_SETTINGS, APP_KIND_COUNT };
@@ -117,11 +116,16 @@ static void fill_rect(Window *win, int x, int y, int w, int h, uint32_t color) {
             ((uint32_t *)win->surface)[yy * win->w + xx] = color;
 }
 
+static GfxCanvas window_canvas(Window *win) {
+    GfxCanvas canvas = { (uint32_t *)win->surface, win->w, win->h, win->w,
+                         win->style.material == COMP_MATERIAL_GLASS };
+    return canvas;
+}
+
 /* Anti-aliased rounded rectangle; a square with radius = size / 2 is a disc. */
 static void rounded_rect(Window *win, int x, int y, int w, int h, int r, uint32_t color) {
     if (!win || !win->surface) return;
-    GfxCanvas canvas = { (uint32_t *)win->surface, win->w, win->h, win->w,
-                         win->style.material == COMP_MATERIAL_GLASS };
+    GfxCanvas canvas = window_canvas(win);
     gfx_fill_round_rect(&canvas, x, y, w, h, r, color & 0x00FFFFFFu, 255);
 }
 
@@ -181,9 +185,6 @@ static void str_copy_to(char *dst, const char *src, int cap) {
 
 /* ---------------- icons ---------------- */
 
-/* Icons are silhouettes in a single ink colour, given as ICON_INK(rgb). */
-#define ICON_INK(rgb) (0xFF000000u | ((rgb) & 0x00FFFFFFu))
-
 /* Bilinear sample of one 8-bit channel (at bit offset shift) of four pixels;
    wx and wy are 0..255 weights towards the right and lower neighbour. */
 static uint32_t icon_channel(uint32_t p00, uint32_t p10, uint32_t p01, uint32_t p11,
@@ -213,26 +214,6 @@ static void sample_axis(int index, int size, int source, int *base, uint32_t *we
     *weight = (uint32_t)(position & 0xFF);
     if (whole < 0) { whole = 0; *weight = 0; }
     *base = whole;
-}
-
-static void blit_icon(Window *win, int x, int y, const uint32_t *icon, int size, uint32_t ink) {
-    if (!win || !win->surface || !icon || size <= 0) return;
-    for (int py = 0; py < size; ++py) {
-        int sy0, sy1;
-        uint32_t wy;
-        sample_axis(py, size, ICON_SIZE, &sy0, &wy);
-        sy1 = sy0 + 1 < ICON_SIZE ? sy0 + 1 : ICON_SIZE - 1;
-        for (int px = 0; px < size; ++px) {
-            int sx0, sx1;
-            uint32_t wx;
-            sample_axis(px, size, ICON_SIZE, &sx0, &wx);
-            sx1 = sx0 + 1 < ICON_SIZE ? sx0 + 1 : ICON_SIZE - 1;
-            uint32_t alpha = icon_channel(icon[sy0 * ICON_SIZE + sx0], icon[sy0 * ICON_SIZE + sx1],
-                                          icon[sy1 * ICON_SIZE + sx0], icon[sy1 * ICON_SIZE + sx1],
-                                          wx, wy, 24);
-            paint_ink(win, x + px, y + py, ink, alpha);
-        }
-    }
 }
 
 /* The logo is the artwork's coverage bitmap, coloured with the artwork's
@@ -273,10 +254,6 @@ static void draw_icon_os(Window *win, int x, int y, int s) {
     int grown = s + s / 4;
     blit_logo(win, x - (grown - s) / 2, y - (grown - s) / 2, grown);
 }
-static void draw_icon_terminal(Window *win, int x, int y, int s) { blit_icon(win, x, y, icon_terminal, s, ICON_INK(COL_CHROME_ICON)); }
-static void draw_icon_editor(Window *win, int x, int y, int s) { blit_icon(win, x, y, icon_editor, s, ICON_INK(COL_CHROME_ICON)); }
-static void draw_icon_files(Window *win, int x, int y, int s) { blit_icon(win, x, y, icon_files, s, ICON_INK(COL_CHROME_ICON)); }
-static void draw_icon_settings(Window *win, int x, int y, int s) { blit_icon(win, x, y, icon_settings, s, ICON_INK(COL_CHROME_ICON)); }
 
 static void draw_clock(Window *win, int right_x, int y) {
     char buf[32];
@@ -295,15 +272,16 @@ static int tb_logo_x(void) { return 12; }
 static int tb_logo_y(void) { return SH - TASKBAR_H + 12; }
 static int tb_icon_x(int kind) { return 60 + kind * 44; }
 static int tb_y(void) { return SH - TASKBAR_H + 12; }
-static int tb_icon_s(void) { return 32; }
+static int tb_icon_s(void) { return ICON_SIZE_APP; }
+
+static const IconId g_app_icons[APP_KIND_COUNT] = {
+    [APP_TERM] = ICON_TERMINAL, [APP_EDIT] = ICON_EDITOR,
+    [APP_FILES] = ICON_FILES, [APP_SETTINGS] = ICON_SETTINGS,
+};
 
 static void draw_kind_icon(Window *win, int kind, int x, int y, int s) {
-    switch (kind) {
-    case APP_TERM: draw_icon_terminal(win, x, y, s); break;
-    case APP_EDIT: draw_icon_editor(win, x, y, s); break;
-    case APP_FILES: draw_icon_files(win, x, y, s); break;
-    default: draw_icon_settings(win, x, y, s); break;
-    }
+    GfxCanvas canvas = window_canvas(win);
+    icon_draw(&canvas, g_app_icons[kind], s, x, y, g_th.light, 255);
 }
 
 /* 0: no window of the app, 1: only minimized windows, 2: a window is open. */
