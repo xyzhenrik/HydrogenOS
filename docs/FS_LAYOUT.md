@@ -3,7 +3,7 @@
 ```
 /
 ├── bin/          user commands: shell cat echo ps ping nslookup date time
-│                 sleep hello logread poweroff reboot wc free crashinfo
+│                 sleep hello logread poweroff reboot wc free crashinfo hpkg
 ├── sbin/         system programs: init syslogd login compositor desktopdemo crashcollect
 ├── lib/
 │   └── tests/    boot self-tests (*test, *check) and the helper programs
@@ -15,6 +15,7 @@
 ├── usr/share/    architecture-independent data (packages, resources)
 ├── var/log/      system.log written by syslogd
 ├── var/crash/    crash-N.txt dumps collected at boot (CRASH_OOM.md)
+├── var/lib/hpkg/ package database (db/) and package repository (repo/), see HPKG.md
 └── proc/         procfs mount point (see PROCFS.md)
 ```
 
