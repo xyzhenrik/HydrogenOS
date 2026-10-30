@@ -168,7 +168,7 @@ USER_EDITORTEST_OBJ = $(BUILD_DIR)/user_editortest.o
 USER_EDITORTEST_ELF = $(BUILD_DIR)/user_editortest.elf
 USER_INIT_OBJ = $(BUILD_DIR)/user_init.o
 USER_INIT_ELF = $(BUILD_DIR)/user_init.elf
-USER_SHELL_MODULES = shell line_editor lexer parser expand env exec jobs builtins diag output
+USER_SHELL_MODULES = shell line_editor input interrupt lexer parser expand env exec jobs builtins diag output
 USER_SHELL_OBJS = $(foreach m,$(USER_SHELL_MODULES),$(BUILD_DIR)/user_shell_$(m).o)
 USER_SHELL_ELF = $(BUILD_DIR)/user_shell.elf
 USER_SHELLTEST_OBJ = $(BUILD_DIR)/user_shelltest.o
@@ -184,6 +184,10 @@ USER_FUZZY_OBJ = $(BUILD_DIR)/user_fuzzy.o
 USER_SPOTLIGHT_OBJ = $(BUILD_DIR)/user_spotlight.o
 USER_LAUNCHER_MODEL_OBJ = $(BUILD_DIR)/user_launcher_model.o
 USER_LAUNCHER_OBJS = $(USER_SPOTLIGHT_OBJ) $(USER_LAUNCHER_MODEL_OBJ) $(USER_FUZZY_OBJ)
+USER_TERMINAL_OBJ = $(BUILD_DIR)/user_terminal.o
+USER_APP_TERMINAL_OBJ = $(BUILD_DIR)/user_app_terminal.o
+USER_TERMTEST_OBJ = $(BUILD_DIR)/user_termtest.o
+USER_TERMTEST_ELF = $(BUILD_DIR)/user_termtest.elf
 USER_DATE_OBJ = $(BUILD_DIR)/user_date.o
 USER_DATE_ELF = $(BUILD_DIR)/user_date.elf
 USER_RTCTEST_OBJ = $(BUILD_DIR)/user_rtctest.o
@@ -894,7 +898,7 @@ $(USER_GFX_EFFECTS_OBJ): userspace/lib/gfx_effects.c userspace/lib/gfx_effects.h
 $(USER_COMPOSITOR_ELF): $(USER_COMPOSITOR_OBJ) $(BUILD_DIR)/input_router.o $(USER_GFX_EFFECTS_OBJ) $(USER_DESKTOPTEST_THEME_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
 	$(LD) $(USER_LDFLAGS) --defsym main=comp_event_loop -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_COMPOSITOR_OBJ) $(BUILD_DIR)/input_router.o $(USER_GFX_EFFECTS_OBJ) $(USER_DESKTOPTEST_THEME_OBJ)
 
-$(USER_DESKTOPDEMO_OBJ): userspace/desktopdemo/desktopdemo.c userspace/desktopdemo/spotlight.h userspace/compositor/compositor.h userspace/lib/mini_libc.h userspace/lib/syscall.h userspace/lib/wallclock.h userspace/lib/settings.h userspace/lib/settings_ui.h userspace/lib/window_geometry.h userspace/lib/filemanager.h
+$(USER_DESKTOPDEMO_OBJ): userspace/desktopdemo/desktopdemo.c userspace/desktopdemo/spotlight.h userspace/compositor/compositor.h userspace/lib/mini_libc.h userspace/lib/syscall.h userspace/lib/wallclock.h userspace/lib/settings.h userspace/lib/settings_ui.h userspace/lib/window_geometry.h userspace/lib/filemanager.h userspace/desktopdemo/app_terminal.h userspace/lib/terminal.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(USER_CFLAGS) -Iuserspace/compositor -Iuserspace/desktopdemo -c $< -o $@
 
@@ -910,8 +914,8 @@ $(USER_SPOTLIGHT_OBJ): userspace/desktopdemo/spotlight.c userspace/desktopdemo/s
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(USER_CFLAGS) -Iuserspace/compositor -Iuserspace/desktopdemo -c $< -o $@
 
-$(USER_DESKTOPDEMO_ELF): $(USER_DESKTOPDEMO_OBJ) $(USER_LAUNCHER_OBJS) $(USER_APP_EDITOR_OBJ) $(USER_EDITOR_LIB_OBJS) $(USER_COMPOSITOR_OBJ) $(USER_GFX_EFFECTS_OBJ) $(USER_DESKTOPTEST_THEME_OBJ) $(USER_DESKTOPTEST_FILEMANAGER_OBJ) $(USER_WALLCLOCK_OBJ) $(USER_SETTINGS_OBJS) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
-	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_DESKTOPDEMO_OBJ) $(USER_LAUNCHER_OBJS) $(USER_APP_EDITOR_OBJ) $(USER_EDITOR_LIB_OBJS) $(USER_COMPOSITOR_OBJ) $(USER_GFX_EFFECTS_OBJ) $(USER_DESKTOPTEST_THEME_OBJ) $(USER_DESKTOPTEST_FILEMANAGER_OBJ) $(USER_WALLCLOCK_OBJ) $(USER_SETTINGS_OBJS)
+$(USER_DESKTOPDEMO_ELF): $(USER_DESKTOPDEMO_OBJ) $(USER_LAUNCHER_OBJS) $(USER_APP_TERMINAL_OBJ) $(USER_TERMINAL_OBJ) $(USER_APP_EDITOR_OBJ) $(USER_EDITOR_LIB_OBJS) $(USER_COMPOSITOR_OBJ) $(USER_GFX_EFFECTS_OBJ) $(USER_DESKTOPTEST_THEME_OBJ) $(USER_DESKTOPTEST_FILEMANAGER_OBJ) $(USER_WALLCLOCK_OBJ) $(USER_SETTINGS_OBJS) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
+	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_DESKTOPDEMO_OBJ) $(USER_LAUNCHER_OBJS) $(USER_APP_TERMINAL_OBJ) $(USER_TERMINAL_OBJ) $(USER_APP_EDITOR_OBJ) $(USER_EDITOR_LIB_OBJS) $(USER_COMPOSITOR_OBJ) $(USER_GFX_EFFECTS_OBJ) $(USER_DESKTOPTEST_THEME_OBJ) $(USER_DESKTOPTEST_FILEMANAGER_OBJ) $(USER_WALLCLOCK_OBJ) $(USER_SETTINGS_OBJS)
 
 $(USER_APP_EDITOR_OBJ): userspace/desktopdemo/app_editor.c
 	mkdir -p $(BUILD_DIR)
@@ -920,6 +924,22 @@ $(USER_APP_EDITOR_OBJ): userspace/desktopdemo/app_editor.c
 $(USER_EDITOR_LIB_OBJS): $(BUILD_DIR)/user_%.o: userspace/lib/%.c
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+# The terminal completes command names from the shell's builtin list.
+$(USER_TERMINAL_OBJ): userspace/lib/terminal.c userspace/lib/terminal.h userspace/shell/builtin_names.h userspace/lib/mini_libc.h userspace/lib/signal.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -Iuserspace/shell -c $< -o $@
+
+$(USER_APP_TERMINAL_OBJ): userspace/desktopdemo/app_terminal.c userspace/desktopdemo/app_terminal.h userspace/lib/terminal.h userspace/lib/settings.h userspace/compositor/compositor.h userspace/lib/mini_libc.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -Iuserspace/compositor -c $< -o $@
+
+$(USER_TERMTEST_OBJ): userspace/termtest/termtest.c userspace/lib/terminal.h userspace/lib/mini_libc.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(USER_TERMTEST_ELF): $(USER_TERMTEST_OBJ) $(USER_TERMINAL_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
+	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_TERMTEST_OBJ) $(USER_TERMINAL_OBJ)
 
 $(USER_EDITORTEST_OBJ): userspace/editortest/editortest.c
 	mkdir -p $(BUILD_DIR)

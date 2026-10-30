@@ -14,6 +14,6 @@ lib/tests  libctest linktest logcollector logproducer_a logproducer_b logtest
 lib/tests  logsink_writer_a logsink_writer_b mmaptest mprotecttest nettest
 lib/tests  pipeconsumer pipedelayread pipeproducer piperead pkgtest
 lib/tests  pollcheck pollmanycheck pollwaitcheck pollwakewriter powercheck
-lib/tests  editortest fuzzycheck proctest rtctest schedtest seekcheck shelltest sigtest
+lib/tests  editortest fuzzycheck proctest rtctest schedtest seekcheck shelltest sigtest termtest
 lib/tests  stdiobadbind stdiocheck stdionullcheck
 lib/tests  teereader_a teereader_b teewriter udptest
