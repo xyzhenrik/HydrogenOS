@@ -18,6 +18,8 @@ enum {
   KEY_INSERT,
   KEY_ESCAPE,
   KEY_ALT_TAB,
+  /* Request to open the launcher: the Super key, or Ctrl+Space. */
+  KEY_LAUNCHER,
 };
 
 /* Navigation keys carry the modifiers held when they were pressed. */

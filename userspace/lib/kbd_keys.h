@@ -19,7 +19,8 @@ enum {
     KBD_KEY_PAGE_DOWN,
     KBD_KEY_INSERT,
     KBD_KEY_ESCAPE,
-    KBD_KEY_ALT_TAB
+    KBD_KEY_ALT_TAB,
+    KBD_KEY_LAUNCHER  /* Super key or Ctrl+Space */
 };
 
 #define KBD_MOD_SHIFT 0x1000

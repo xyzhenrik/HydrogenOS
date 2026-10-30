@@ -7,6 +7,7 @@
 #include "kbd_keys.h"
 #include "settings.h"
 #include "settings_ui.h"
+#include "spotlight.h"
 #include "syscall.h"
 #include "wallclock.h"
 #include "window_geometry.h"
@@ -88,8 +89,7 @@ static int g_focus = -1;
 static int SW, SH;
 static Window *g_bg;
 static Window *g_taskbar;
-static Window *g_menu;
-static int g_menu_open = 0;
+static Window *g_launcher;
 static int g_mx = -1, g_my = -1, g_btn = 0;
 static int g_prev_mx = -1, g_prev_my = -1;
 static unsigned long g_last_sec = 0;
@@ -335,12 +335,12 @@ static void draw_taskbar(void) {
     draw_clock(g_taskbar, SW - 16, 20);
 }
 
-static void style_chrome_window(Window *win, uint32_t tint, int radius, int shadow) {
+static void style_chrome_window(Window *win, uint32_t tint, unsigned int tint_alpha, int radius, int shadow) {
     CompWindowStyle style;
     if (g_settings.glass) {
         comp_style_glass(&style);
         style.glass_tint = tint;
-        style.glass_tint_alpha = g_th.glass_alpha;
+        style.glass_tint_alpha = tint_alpha;
     } else {
         comp_style_plain(&style);
     }
@@ -349,9 +349,16 @@ static void style_chrome_window(Window *win, uint32_t tint, int radius, int shad
     comp_set_window_style(win, &style);
 }
 
+/* The launcher is read over whatever windows lie beneath it, so its glass is
+   denser than the taskbar's. */
+#define LAUNCHER_EXTRA_OPACITY 70
+#define LAUNCHER_MAX_OPACITY   240
+
 static void style_chrome(void) {
-    style_chrome_window(g_taskbar, COL_TASKBAR, 0, 0);
-    style_chrome_window(g_menu, COL_MENU, 12, 1);
+    unsigned int launcher_alpha = g_th.glass_alpha + LAUNCHER_EXTRA_OPACITY;
+    if (launcher_alpha > LAUNCHER_MAX_OPACITY) launcher_alpha = LAUNCHER_MAX_OPACITY;
+    style_chrome_window(g_taskbar, COL_TASKBAR, g_th.glass_alpha, 0, 0);
+    style_chrome_window(g_launcher, COL_MENU, launcher_alpha, 16, 1);
 }
 
 static void draw_background(void) {
@@ -373,52 +380,14 @@ static void draw_background(void) {
     draw_taskbar();
 }
 
-/* ---------------- start menu ---------------- */
+/* ---------------- launcher ---------------- */
 
-#define MENU_W 300
-#define MENU_H 300
-#define MENU_ROW 44
+static int launcher_x(void) { return (SW - SPOTLIGHT_WIDTH) / 2; }
 
-static int menu_x(void) { return 12; }
-static int menu_y(void) { return SH - TASKBAR_H - MENU_H - 8; }
-
-static const char *menu_label(int i) {
-    switch (i) {
-    case 0: return "Terminal";
-    case 1: return "Editor";
-    case 2: return "Files";
-    case 3: return "Settings";
-    default: return "About HydrogenOS";
-    }
-}
-
-static void draw_menu(void) {
-    Window *w = g_menu;
-    fill_rect(w, 0, 0, MENU_W, MENU_H, chrome_clear(COL_MENU));
-    comp_text_render(w, 16, 10, "Applications", COL_CHROME_DIM);
-    for (int i = 0; i < 5; ++i) {
-        int y = 34 + i * MENU_ROW;
-        if (i < 4)
-            draw_kind_icon(w, i, 16, y + 4, 32);
-        else
-            draw_icon_os(w, 16, y + 4, 32);
-        comp_text_render(w, 60, y + 12, menu_label(i), COL_CHROME_TEXT);
-    }
-}
-
-static void open_menu(void) {
-    g_menu_open = 1;
-    g_menu->visible = 1;
-    comp_raise(g_menu);
-    draw_menu();
-    comp_damage_rect(g_bg, g_menu->x, g_menu->y, g_menu->w, g_menu->h);
-}
-
-static void close_menu(void) {
-    if (!g_menu_open) return;
-    g_menu_open = 0;
-    g_menu->visible = 0;
-    comp_damage_rect(g_bg, g_menu->x, g_menu->y, g_menu->w, g_menu->h);
+/* A sixth of the way down, but never into the taskbar. */
+static int launcher_y(void) {
+    int y = SH - TASKBAR_H - SPOTLIGHT_HEIGHT - 8;
+    return SH / 6 < y ? SH / 6 : (y > 8 ? y : 8);
 }
 
 /* ---------------- terminal app ---------------- */
@@ -971,7 +940,7 @@ static int app_open_new(int kind) {
 
 static void redraw_session(void) {
     draw_background();
-    draw_menu();
+    spotlight_redraw();
     for (int i = 0; i < MAX_APPS; ++i) {
         App *a = &g_apps[i];
         if (!a->used || !a->win) continue;
@@ -1054,38 +1023,45 @@ static void files_apply(App *a, unsigned int result) {
 
 /* ---------------- hit testing ---------------- */
 
-static void handle_menu_click(int mx, int my) {
-    (void)mx;
-    int rel = my - menu_y() - 34;
-    int idx = rel / MENU_ROW;
-    if (idx >= 0 && idx < 4) {
-        close_menu();
-        app_open_new(idx);
-    } else if (idx == 4) {
-        close_menu();
-        int opened = app_open_new(APP_SETTINGS);
-        if (opened >= 0) {
-            settings_ui_select(&g_apps[opened].settings_ui, SETTINGS_SECTION_ABOUT);
-            draw_app_content(&g_apps[opened]);
-        }
-    } else {
-        close_menu();
+enum { LAUNCH_ABOUT = APP_KIND_COUNT };
+
+static const SpotlightApp g_launcher_apps[] = {
+    { APP_TERM, "Terminal", "shell console command prompt" },
+    { APP_EDIT, "Editor", "text notes write" },
+    { APP_FILES, "Files", "file manager folder browser" },
+    { APP_SETTINGS, "Settings", "preferences appearance theme keyboard layout" },
+    { LAUNCH_ABOUT, "About HydrogenOS", "version system information" },
+};
+
+static void launcher_draw_icon(Window *win, int id, int x, int y, int size) {
+    if (id == LAUNCH_ABOUT) draw_icon_os(win, x, y, size);
+    else draw_kind_icon(win, id, x, y, size);
+}
+
+static void launcher_launch(int id) {
+    int opened = app_open_new(id == LAUNCH_ABOUT ? APP_SETTINGS : id);
+    if (id == LAUNCH_ABOUT && opened >= 0) {
+        settings_ui_select(&g_apps[opened].settings_ui, SETTINGS_SECTION_ABOUT);
+        draw_app_content(&g_apps[opened]);
     }
 }
 
+static const SpotlightHost g_launcher_host = {
+    g_launcher_apps, (int)(sizeof(g_launcher_apps) / sizeof(g_launcher_apps[0])),
+    launcher_draw_icon, launcher_launch,
+};
+
 static void handle_press(int mx, int my) {
-    if (g_menu_open) {
-        if (point_in_rect(mx, my, menu_x(), menu_y(), MENU_W, MENU_H))
-            handle_menu_click(mx, my);
-        else
-            close_menu();
-        return;
+    if (spotlight_is_open()) {
+        if (spotlight_press(mx, my)) return;
+        spotlight_close();
+        if (point_in_rect(mx, my, tb_logo_x(), tb_logo_y(), 32, 32)) return;
     }
 
     int ty = SH - TASKBAR_H;
     if (my >= ty) {
         if (point_in_rect(mx, my, tb_logo_x(), tb_logo_y(), 32, 32)) {
-            if (g_menu_open) close_menu(); else open_menu();
+            spotlight_open();
             return;
         }
         for (int k = 0; k < APP_KIND_COUNT; ++k) {
@@ -1199,7 +1175,8 @@ static void settings_track_pointer(int mx, int my) {
     App *top = app_at(mx, my);
     int under = top ? app_index_of(top) : -1;
 
-    if (g_menu_open && point_in_rect(mx, my, menu_x(), menu_y(), MENU_W, MENU_H)) under = -1;
+    if (spotlight_is_open() && point_in_rect(mx, my, g_launcher->x, g_launcher->y, g_launcher->w, g_launcher->h))
+        under = -1;
 
     for (int i = 0; i < MAX_APPS; ++i) {
         App *a = &g_apps[i];
@@ -1277,11 +1254,10 @@ int main(void) {
     g_taskbar = comp_create_window(0, SH - TASKBAR_H, SW, TASKBAR_H);
     if (!g_taskbar || !g_taskbar->surface) return 1;
 
-    g_menu = comp_create_window(menu_x(), menu_y(), MENU_W, MENU_H);
-    if (!g_menu || !g_menu->surface) return 1;
-    g_menu->visible = 0;
+    g_launcher = comp_create_window(launcher_x(), launcher_y(), SPOTLIGHT_WIDTH, SPOTLIGHT_HEIGHT);
+    if (!g_launcher || !g_launcher->surface) return 1;
     style_chrome();
-    draw_menu();
+    spotlight_init(g_launcher, &g_launcher_host, &g_th, &g_settings);
 
     draw_background();
     app_open_new(APP_TERM);
@@ -1299,10 +1275,12 @@ int main(void) {
 
     for (;;) {
         int dirty = settings_service_all();
+        spotlight_service();
 
         for (int guard = 0; guard < 64; ++guard) {
             long k = sys_kbd_read();
             if (k < 0) break;
+            if (spotlight_key(k)) { dirty = 1; continue; }
             if (k == KBD_KEY_ALT_TAB) {
                 cycle_focus();
                 dirty = 1;
@@ -1344,6 +1322,7 @@ int main(void) {
                 g_my = nmy;
                 dirty = 1;
                 settings_track_pointer(g_mx, g_my);
+                spotlight_hover(g_mx, g_my);
             }
             int wheel = m[3];
             int press = (nbtn & 1) && !(g_btn & 1);

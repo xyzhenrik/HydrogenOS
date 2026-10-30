@@ -146,6 +146,8 @@ USER_REBOOT_OBJ = $(BUILD_DIR)/user_reboot.o
 USER_REBOOT_ELF = $(BUILD_DIR)/user_reboot.elf
 USER_POWERCHECK_OBJ = $(BUILD_DIR)/user_powercheck.o
 USER_POWERCHECK_ELF = $(BUILD_DIR)/user_powercheck.elf
+USER_FUZZYCHECK_OBJ = $(BUILD_DIR)/user_fuzzycheck.o
+USER_FUZZYCHECK_ELF = $(BUILD_DIR)/user_fuzzycheck.elf
 INIT_CONFIG = userspace/init/init.rc
 USER_COMPOSITOR_OBJ = $(BUILD_DIR)/user_compositor.o
 USER_COMPOSITOR_ELF = $(BUILD_DIR)/user_compositor.elf
@@ -178,6 +180,10 @@ USER_SETTINGS_OBJ = $(BUILD_DIR)/user_settings.o
 USER_SETTINGS_INFO_OBJ = $(BUILD_DIR)/user_settings_info.o
 USER_SETTINGS_UI_OBJ = $(BUILD_DIR)/user_settings_ui.o
 USER_SETTINGS_OBJS = $(USER_SETTINGS_OBJ) $(USER_SETTINGS_INFO_OBJ) $(USER_SETTINGS_UI_OBJ)
+USER_FUZZY_OBJ = $(BUILD_DIR)/user_fuzzy.o
+USER_SPOTLIGHT_OBJ = $(BUILD_DIR)/user_spotlight.o
+USER_LAUNCHER_MODEL_OBJ = $(BUILD_DIR)/user_launcher_model.o
+USER_LAUNCHER_OBJS = $(USER_SPOTLIGHT_OBJ) $(USER_LAUNCHER_MODEL_OBJ) $(USER_FUZZY_OBJ)
 USER_DATE_OBJ = $(BUILD_DIR)/user_date.o
 USER_DATE_ELF = $(BUILD_DIR)/user_date.elf
 USER_RTCTEST_OBJ = $(BUILD_DIR)/user_rtctest.o
@@ -810,6 +816,13 @@ $(USER_POWERCHECK_OBJ): userspace/powercheck/powercheck.c userspace/lib/syscall.
 $(USER_POWERCHECK_ELF): $(USER_POWERCHECK_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
 	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_POWERCHECK_OBJ)
 
+$(USER_FUZZYCHECK_OBJ): userspace/fuzzycheck/fuzzycheck.c userspace/lib/fuzzy.h userspace/lib/launcher_model.h userspace/lib/mini_libc.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(USER_FUZZYCHECK_ELF): $(USER_FUZZYCHECK_OBJ) $(USER_LAUNCHER_MODEL_OBJ) $(USER_FUZZY_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
+	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_FUZZYCHECK_OBJ) $(USER_LAUNCHER_MODEL_OBJ) $(USER_FUZZY_OBJ)
+
 $(USER_PIPEPRODUCER_OBJ): userspace/pipeproducer/pipeproducer.c userspace/lib/syscall.h userspace/lib/mini_libc.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(USER_CFLAGS) -c $< -o $@
@@ -881,12 +894,24 @@ $(USER_GFX_EFFECTS_OBJ): userspace/lib/gfx_effects.c userspace/lib/gfx_effects.h
 $(USER_COMPOSITOR_ELF): $(USER_COMPOSITOR_OBJ) $(BUILD_DIR)/input_router.o $(USER_GFX_EFFECTS_OBJ) $(USER_DESKTOPTEST_THEME_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
 	$(LD) $(USER_LDFLAGS) --defsym main=comp_event_loop -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_COMPOSITOR_OBJ) $(BUILD_DIR)/input_router.o $(USER_GFX_EFFECTS_OBJ) $(USER_DESKTOPTEST_THEME_OBJ)
 
-$(USER_DESKTOPDEMO_OBJ): userspace/desktopdemo/desktopdemo.c userspace/compositor/compositor.h userspace/lib/mini_libc.h userspace/lib/syscall.h userspace/lib/wallclock.h userspace/lib/settings.h userspace/lib/settings_ui.h userspace/lib/window_geometry.h userspace/lib/filemanager.h
+$(USER_DESKTOPDEMO_OBJ): userspace/desktopdemo/desktopdemo.c userspace/desktopdemo/spotlight.h userspace/compositor/compositor.h userspace/lib/mini_libc.h userspace/lib/syscall.h userspace/lib/wallclock.h userspace/lib/settings.h userspace/lib/settings_ui.h userspace/lib/window_geometry.h userspace/lib/filemanager.h
 	mkdir -p $(BUILD_DIR)
-	$(CC) $(USER_CFLAGS) -Iuserspace/compositor -c $< -o $@
+	$(CC) $(USER_CFLAGS) -Iuserspace/compositor -Iuserspace/desktopdemo -c $< -o $@
 
-$(USER_DESKTOPDEMO_ELF): $(USER_DESKTOPDEMO_OBJ) $(USER_APP_EDITOR_OBJ) $(USER_EDITOR_LIB_OBJS) $(USER_COMPOSITOR_OBJ) $(USER_GFX_EFFECTS_OBJ) $(USER_DESKTOPTEST_THEME_OBJ) $(USER_DESKTOPTEST_FILEMANAGER_OBJ) $(USER_WALLCLOCK_OBJ) $(USER_SETTINGS_OBJS) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
-	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_DESKTOPDEMO_OBJ) $(USER_APP_EDITOR_OBJ) $(USER_EDITOR_LIB_OBJS) $(USER_COMPOSITOR_OBJ) $(USER_GFX_EFFECTS_OBJ) $(USER_DESKTOPTEST_THEME_OBJ) $(USER_DESKTOPTEST_FILEMANAGER_OBJ) $(USER_WALLCLOCK_OBJ) $(USER_SETTINGS_OBJS)
+$(USER_FUZZY_OBJ): userspace/lib/fuzzy.c userspace/lib/fuzzy.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(USER_LAUNCHER_MODEL_OBJ): userspace/lib/launcher_model.c userspace/lib/launcher_model.h userspace/lib/fuzzy.h userspace/lib/mini_libc.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(USER_SPOTLIGHT_OBJ): userspace/desktopdemo/spotlight.c userspace/desktopdemo/spotlight.h userspace/compositor/compositor.h userspace/lib/launcher_model.h userspace/lib/gfx_effects.h userspace/lib/mini_libc.h userspace/lib/settings.h userspace/lib/syscall.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -Iuserspace/compositor -Iuserspace/desktopdemo -c $< -o $@
+
+$(USER_DESKTOPDEMO_ELF): $(USER_DESKTOPDEMO_OBJ) $(USER_LAUNCHER_OBJS) $(USER_APP_EDITOR_OBJ) $(USER_EDITOR_LIB_OBJS) $(USER_COMPOSITOR_OBJ) $(USER_GFX_EFFECTS_OBJ) $(USER_DESKTOPTEST_THEME_OBJ) $(USER_DESKTOPTEST_FILEMANAGER_OBJ) $(USER_WALLCLOCK_OBJ) $(USER_SETTINGS_OBJS) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
+	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_DESKTOPDEMO_OBJ) $(USER_LAUNCHER_OBJS) $(USER_APP_EDITOR_OBJ) $(USER_EDITOR_LIB_OBJS) $(USER_COMPOSITOR_OBJ) $(USER_GFX_EFFECTS_OBJ) $(USER_DESKTOPTEST_THEME_OBJ) $(USER_DESKTOPTEST_FILEMANAGER_OBJ) $(USER_WALLCLOCK_OBJ) $(USER_SETTINGS_OBJS)
 
 $(USER_APP_EDITOR_OBJ): userspace/desktopdemo/app_editor.c
 	mkdir -p $(BUILD_DIR)

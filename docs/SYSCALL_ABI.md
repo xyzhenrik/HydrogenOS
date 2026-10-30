@@ -167,7 +167,7 @@ Beispiel: `-2` entspricht `ENOENT`.
 ## Tastatur (sys_kbd_read, 39)
 - Nicht blockierend: liefert das naechste Ereignis oder `-1`, wenn keines ansteht.
 - Druckbare Tasten und Steuerzeichen kommen als ASCII-Wert (Ctrl+Buchstabe = 1..26, Enter `\n`, Backspace `\b`, Tab `\t`).
-- Tasten ohne Zeichen liegen ab `0x100`: Left, Right, Up, Down, Home, End, Delete, PageUp, PageDown, Insert, Escape (in dieser Reihenfolge; siehe `userspace/lib/kbd_keys.h`).
+- Tasten ohne Zeichen liegen ab `0x100`: Left, Right, Up, Down, Home, End, Delete, PageUp, PageDown, Insert, Escape, Alt+Tab, Launcher (in dieser Reihenfolge; siehe `userspace/lib/kbd_keys.h`). `KBD_KEY_LAUNCHER` kommt beim Druecken der Super-Taste (links oder rechts) und bei Strg+Leertaste, `KBD_KEY_ALT_TAB` bei Alt+Tab. Die Konsole (stdin) sieht keinen dieser beiden Codes und verwirft Escape.
 - Navigationstasten (Pfeile, Home, End, Delete, PageUp/Down, Insert) tragen die gehaltenen Modifier als Flag-Bits: `0x1000` Shift, `0x2000` Ctrl; Maske fuer den Tastencode `0x0FFF`. Die Konsole (`read` auf stdin) sieht diese Flags nie.
 
 ## Error Codes (Subset)

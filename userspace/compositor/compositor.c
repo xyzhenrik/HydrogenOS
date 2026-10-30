@@ -116,6 +116,13 @@ static void damage_add_rect(int x, int y, int w, int h) {
     if (x + w > comp_w) w = comp_w - x;
     if (y + h > comp_h) h = comp_h - y;
     if (w <= 0 || h <= 0) return;
+    /* Drawing text damages its whole window per string, so repeats are common. */
+    for (int i = 0; i < comp_damage_cnt; ++i) {
+        const CompRect *known = &comp_damages[i];
+        if (x >= known->x && y >= known->y &&
+            x + w <= known->x + known->w && y + h <= known->y + known->h)
+            return;
+    }
     CompRect r = { x, y, w, h };
     if (comp_damage_cnt >= COMP_MAX_DAMAGES) {
         /* Never drop damage: widen the last slot to cover the new rect. */
@@ -728,9 +735,25 @@ int comp_present(void) {
     return 0;
 }
 
+/* True when the bounding box of a and b covers nothing but a and b. Presenting
+   a box that covers more would blit pixels this frame did not compose: the
+   front buffer holds an older frame there. */
+static int rects_tile(const DamageRect *a, const DamageRect *b) {
+    int x0 = a->x < b->x ? a->x : b->x;
+    int y0 = a->y < b->y ? a->y : b->y;
+    int x1 = a->x + a->w > b->x + b->w ? a->x + a->w : b->x + b->w;
+    int y1 = a->y + a->h > b->y + b->h ? a->y + a->h : b->y + b->h;
+    int ix0 = a->x > b->x ? a->x : b->x;
+    int iy0 = a->y > b->y ? a->y : b->y;
+    int ix1 = a->x + a->w < b->x + b->w ? a->x + a->w : b->x + b->w;
+    int iy1 = a->y + a->h < b->y + b->h ? a->y + a->h : b->y + b->h;
+    long overlap = ix1 > ix0 && iy1 > iy0 ? (long)(ix1 - ix0) * (iy1 - iy0) : 0;
+    return (long)(x1 - x0) * (y1 - y0) <= (long)a->w * a->h + (long)b->w * b->h - overlap;
+}
+
 int comp_present_damage(void) {
     if (!comp_front) return -1;
-    /* Merge overlapping/adjacent damage rects to reduce blit count. */
+    /* Merge damage rects that tile exactly to reduce the blit count. */
     for (int i = 0; i < comp_last_damage_cnt; ++i) {
         DamageRect *a = &comp_last_damages[i];
         if (a->w <= 0 || a->h <= 0) continue;
@@ -739,8 +762,7 @@ int comp_present_damage(void) {
             DamageRect *b = &comp_last_damages[j];
             if (b->w <= 0 || b->h <= 0) continue;
             int bx1 = b->x + b->w, by1 = b->y + b->h;
-            if (b->x <= ax1 + 1 && bx1 + 1 >= a->x &&
-                b->y <= ay1 + 1 && by1 + 1 >= a->y) {
+            if (rects_tile(a, b)) {
                 int nx = a->x < b->x ? a->x : b->x;
                 int ny = a->y < b->y ? a->y : b->y;
                 int nx1 = ax1 > bx1 ? ax1 : bx1;
