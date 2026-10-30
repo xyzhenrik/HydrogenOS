@@ -9,6 +9,7 @@
 #include "errno.h"
 #include "fs/dcache.h"
 #include "kheap.h"
+#include "oom.h"
 #include "pmm.h"
 #include "version.h"
 #include "video/bootsplash.h"
@@ -257,6 +258,7 @@ static void render_meminfo(procfs_buffer_t *b) {
     buf_put_field_u64(b, "HeapUsed", heap.used_bytes, "B");
     buf_put_field_u64(b, "HeapFree", heap.free_bytes, "B");
     buf_put_field_u64(b, "HeapLargestFree", heap.largest_free_bytes, "B");
+    buf_put_field_u64(b, "OomKills", oom_kill_count(), 0);
 }
 
 static void render_uptime(procfs_buffer_t *b) {

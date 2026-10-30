@@ -1,6 +1,7 @@
 #include "panic.h"
 
 #include "console.h"
+#include "core/crash.h"
 #include "io.h"
 #include <stdint.h>
 
@@ -51,6 +52,8 @@ void panic(const char *msg, const char *file, int line) {
     console_write("R12: "); console_write_hex64(regs[12]); console_write(" R13: "); console_write_hex64(regs[13]); console_write("\n");
     console_write("R14: "); console_write_hex64(regs[14]); console_write(" R15: "); console_write_hex64(regs[15]); console_write("\n");
     console_write("RIP: "); console_write_hex64(rip); console_write("\n");
+
+    crash_record(CRASH_KIND_PANIC, msg, 0);
 
     console_write("Halte an.\n");
     for (;;) {

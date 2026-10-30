@@ -204,6 +204,9 @@ typedef struct process_info {
 void process_init(uint64_t *kernel_pml4);
 process_t *process_create(uint64_t *pml4, uint32_t parent_pid);
 process_t *process_find_by_pid(uint32_t pid);
+/* Walks the process table: pass NULL for the first entry, then each result.
+ * Returns NULL at the end. The table must not change during the walk. */
+process_t *process_table_next(const process_t *after);
 void process_set_name(process_t *p, const char *path);
 int process_get_info(uint32_t pid, process_info_t *out);
 int process_next_info(uint32_t after_pid, process_info_t *out);

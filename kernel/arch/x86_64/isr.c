@@ -1,6 +1,7 @@
 #include "isr.h"
 #include "apic.h"
 #include "console.h"
+#include "core/crash.h"
 #include "core/perf.h"
 #include "core/time.h"
 #include "keyboard.h"
@@ -121,6 +122,7 @@ static regs_t *isr_dispatch(regs_t *r) {
         console_write("  RSP: ");
         console_write_hex64(r->rsp);
         console_write("\n");
+        crash_note_trap_frame(r);
         PANIC("CPU EXCEPTION");
     }
 

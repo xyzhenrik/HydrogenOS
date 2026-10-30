@@ -53,7 +53,8 @@ not by line number; new fields may be appended.
 `/proc/meminfo`: `MemTotal`, `MemFree`, `MemUsed` (kB), `PageSize` (B),
 `PagesTotal`, `PagesFree`, and kernel heap `HeapTotal`, `HeapUsed`,
 `HeapFree`, `HeapLargestFree` (B; block headers excluded, so
-`HeapUsed + HeapFree == HeapTotal`).
+`HeapUsed + HeapFree == HeapTotal`), and `OomKills` (processes killed by the
+OOM policy since boot, `docs/CRASH_OOM.md`).
 
 `/proc/<pid>/stat` (changes on every read, hence separate from `status`):
 

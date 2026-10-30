@@ -10,6 +10,7 @@
 #include "fs/vfs.h"
 #include "fs/vfs_access.h"
 #include "kheap.h"
+#include "oom.h"
 #include "paging.h"
 #include "net/netif.h"
 #include "net/socket.h"
@@ -755,6 +756,14 @@ static process_t *process_find_child(uint32_t parent_pid, uint32_t pid) {
     return 0;
 }
 
+process_t *process_table_next(const process_t *after) {
+    if (!process_list)
+        return 0;
+    if (!after)
+        return process_list;
+    return after->next != process_list ? after->next : 0;
+}
+
 process_t *process_find_by_pid(uint32_t pid) {
     if (!process_list || pid == 0) return 0;
     process_t *it = process_list;
@@ -1103,7 +1112,7 @@ void process_init(uint64_t *kernel_pml4) {
 
 process_t *process_create(uint64_t *pml4, uint32_t parent_pid) {
     if (!pml4) return 0;
-    process_t *p = (process_t *)kalloc(sizeof(process_t));
+    process_t *p = (process_t *)oom_kalloc(sizeof(process_t));
     if (!p) return 0;
     p->own_exit_record = exit_record_create();
     if (!p->own_exit_record) {

@@ -2,6 +2,7 @@
 
 #include "console.h"
 #include "core/cmdline.h"
+#include "core/crash.h"
 #include "core/perf.h"
 #include "core/time.h"
 #include "drivers/ata.h"
@@ -627,6 +628,7 @@ void kmain64(uint64_t magic, uint64_t multiboot_info_addr) {
   net_init();
   initrd_setup((uintptr_t)multiboot_info_addr);
   vfs_init();
+  crash_init();
   serial_write("[VFS] root: ");
   serial_write(vfs_root_name());
   serial_write("\n");

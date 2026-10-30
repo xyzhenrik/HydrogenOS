@@ -8,7 +8,7 @@ import sys
 
 # Directories every installation has, whether or not anything is shipped in them.
 STANDARD_DIRS = [
-    "bin", "sbin", "lib/tests", "etc", "tmp", "var/log",
+    "bin", "sbin", "lib/tests", "etc", "tmp", "var/log", "var/crash",
     "home/user", "root", "usr/share", "proc",
 ]
 DIRECTORY_MODES = {"tmp": 0o1777}

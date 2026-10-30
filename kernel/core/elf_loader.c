@@ -1,5 +1,6 @@
 #include "elf64.h"
 #include "console.h"
+#include "oom.h"
 #include "paging.h"
 #include "pmm.h"
 #include "vmm_user.h"
@@ -102,7 +103,7 @@ int elf64_load_image(const void *image, size_t size) {
             uintptr_t page_virt = seg_base + p * 0x1000;
             if (paging_is_mapped(page_virt))
                 continue;
-            uintptr_t phys = pmm_alloc_page();
+            uintptr_t phys = oom_alloc_page();
             if (!phys)
                 return -2;
             paging_map_region(phys, page_virt, 0x1000, PAGE_RW | PAGE_USER);

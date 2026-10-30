@@ -3,8 +3,8 @@
 ```
 /
 ├── bin/          user commands: shell cat echo ps ping nslookup date time
-│                 sleep hello logread poweroff reboot wc
-├── sbin/         system programs: init syslogd login compositor desktopdemo
+│                 sleep hello logread poweroff reboot wc free crashinfo
+├── sbin/         system programs: init syslogd login compositor desktopdemo crashcollect
 ├── lib/
 │   └── tests/    boot self-tests (*test, *check) and the helper programs
 │                 they spawn (piperead, pollwakewriter, logproducer_a, ...)
@@ -14,6 +14,7 @@
 ├── tmp/          scratch space, also used by the self-tests (mode 1777)
 ├── usr/share/    architecture-independent data (packages, resources)
 ├── var/log/      system.log written by syslogd
+├── var/crash/    crash-N.txt dumps collected at boot (CRASH_OOM.md)
 └── proc/         procfs mount point (see PROCFS.md)
 ```
 
@@ -31,6 +32,7 @@ themselves next to each other in the root; a new binary needs a line in
 | Kernel entry point | `/sbin/init`; if it is missing the kernel tries `/bin/shell` |
 | Shell command lookup | `$PATH`, default `/bin:/sbin` |
 | Syslog | `/var/log/system.log` and `/var/log/system.log.1` |
+| Crash dumps | `/var/crash/crash-N.txt` |
 
 The manifest format is one `<directory> <program> [<program> ...]` line per
 group. A program `name` is the binary built as `build/<arch>/user_name.elf`

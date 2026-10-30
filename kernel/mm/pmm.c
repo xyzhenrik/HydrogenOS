@@ -16,6 +16,9 @@ extern uint32_t _kernel_end;
 #define PMM_MAX_PAGES 32768 // bis 128 MiB; reicht für frühe Phasen
 
 static uint8_t page_bitmap[PMM_MAX_PAGES];
+/* Invariant: no page below this index is free, so allocation scans start here
+   instead of at page 0 once the low memory fills up. */
+static size_t first_free_hint;
 
 static inline void set_bit(size_t idx) {
   page_bitmap[idx / 8] |= (1u << (idx % 8));
@@ -87,12 +90,14 @@ void pmm_init(uintptr_t multiboot_info_addr) {
 }
 
 uintptr_t pmm_alloc_page(void) {
-  for (size_t i = 0; i < PMM_MAX_PAGES; ++i) {
+  for (size_t i = first_free_hint; i < PMM_MAX_PAGES; ++i) {
     if (!test_bit(i)) {
       set_bit(i);
+      first_free_hint = i + 1;
       return (uintptr_t)(i * PMM_PAGE_SIZE);
     }
   }
+  first_free_hint = PMM_MAX_PAGES;
   return 0; // out of memory
 }
 
@@ -125,11 +130,13 @@ void pmm_free_page(uintptr_t addr) {
   size_t index = (size_t)(addr / PMM_PAGE_SIZE);
   if (index < PMM_MAX_PAGES) {
     clear_bit(index);
+    if (index < first_free_hint)
+      first_free_hint = index;
   }
 }
 
 uintptr_t pmm_first_free_frame(void) {
-  for (size_t i = 0; i < PMM_MAX_PAGES; ++i) {
+  for (size_t i = first_free_hint; i < PMM_MAX_PAGES; ++i) {
     if (!test_bit(i)) {
       return (uintptr_t)i;
     }

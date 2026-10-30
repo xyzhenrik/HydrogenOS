@@ -22,7 +22,8 @@ DEPFLAGS = -MMD -MP
 CFLAGS_BASE = -std=gnu99 -ffreestanding -O2 -Wall -Wextra -fno-pic -fno-stack-protector $(DEPFLAGS) -Ikernel -Ikernel/include -Ikernel/arch/$(ARCH) -Ikernel/mm
 
 ifeq ($(ARCH),x86_64)
-CFLAGS = $(CFLAGS_BASE) -m64 -mno-red-zone -mcmodel=large
+# Frame pointers keep the crash dump backtrace walkable.
+CFLAGS = $(CFLAGS_BASE) -m64 -mno-red-zone -mcmodel=large -fno-omit-frame-pointer
 USER_CFLAGS = -m64 -mcmodel=large -ffreestanding -nostdlib -fno-pic -fno-stack-protector -O2 -Wall -Wextra $(DEPFLAGS) -Iuserspace/lib
 USER_ASFLAGS = -m64 -mcmodel=large -ffreestanding -nostdlib -fno-pic -fno-stack-protector -O2 -Wall -Wextra
 USER_LDFLAGS = -T userspace/hello/linker.ld -nostdlib -m elf_x86_64 --gc-sections
@@ -117,6 +118,16 @@ USER_TOP_OBJ = $(BUILD_DIR)/user_top.o
 USER_TOP_ELF = $(BUILD_DIR)/user_top.elf
 USER_PERFSTAT_OBJ = $(BUILD_DIR)/user_perfstat.o
 USER_PERFSTAT_ELF = $(BUILD_DIR)/user_perfstat.elf
+USER_CRASHINFO_OBJ = $(BUILD_DIR)/user_crashinfo.o
+USER_CRASHINFO_ELF = $(BUILD_DIR)/user_crashinfo.elf
+USER_CRASHCOLLECT_OBJ = $(BUILD_DIR)/user_crashcollect.o
+USER_CRASHCOLLECT_ELF = $(BUILD_DIR)/user_crashcollect.elf
+USER_CRASHTEST_OBJ = $(BUILD_DIR)/user_crashtest.o
+USER_CRASHTEST_ELF = $(BUILD_DIR)/user_crashtest.elf
+USER_FREE_OBJ = $(BUILD_DIR)/user_free.o
+USER_FREE_ELF = $(BUILD_DIR)/user_free.elf
+USER_OOMTEST_OBJ = $(BUILD_DIR)/user_oomtest.o
+USER_OOMTEST_ELF = $(BUILD_DIR)/user_oomtest.elf
 USER_SPLASHTEST_OBJ = $(BUILD_DIR)/user_splashtest.o
 USER_SPLASHTEST_ELF = $(BUILD_DIR)/user_splashtest.elf
 USER_WAITQTEST_OBJ = $(BUILD_DIR)/user_waitqtest.o
@@ -228,7 +239,7 @@ USER_RTCTEST_OBJ = $(BUILD_DIR)/user_rtctest.o
 USER_RTCTEST_ELF = $(BUILD_DIR)/user_rtctest.elf
 USER_LIBC_CORE_OBJ = $(BUILD_DIR)/user_libc_core.o
 USER_MALLOC_OBJ = $(BUILD_DIR)/user_malloc.o
-USER_LIBC_MODULES = string stdlib sort stdio format clock environ errno signal passwd
+USER_LIBC_MODULES = string stdlib sort stdio format clock environ errno signal passwd crash
 USER_LIBC_MODULE_OBJS = $(foreach m,$(USER_LIBC_MODULES),$(BUILD_DIR)/user_libc_$(m).o)
 USER_LIBCTEST_OBJ = $(BUILD_DIR)/user_libctest.o
 USER_LIBCTEST_ELF = $(BUILD_DIR)/user_libctest.elf
@@ -248,6 +259,7 @@ OBJS = $(BUILD_DIR)/boot.o $(BUILD_DIR)/kernel.o $(BUILD_DIR)/console.o $(BUILD_
        $(BUILD_DIR)/pic.o $(BUILD_DIR)/pit.o $(BUILD_DIR)/cpu.o $(BUILD_DIR)/apic.o $(BUILD_DIR)/rtc.o \
        $(BUILD_DIR)/acpi.o $(BUILD_DIR)/power.o
 OBJS += $(BUILD_DIR)/perf.o
+OBJS += $(BUILD_DIR)/kmsg.o $(BUILD_DIR)/crash.o $(BUILD_DIR)/oom.o $(BUILD_DIR)/meminfo.o
 OBJS += $(USER_HELLO_BINOBJ) $(USER_ECHO_BINOBJ) $(USER_CAT_BINOBJ) $(USER_TIME_BINOBJ) $(USER_SLEEP_BINOBJ)
 RUN_DEPS = $(ISO)
 BUILD_DEPS = $(KERNEL_BIN) $(INITRD) $(DISK_IMG)
@@ -281,6 +293,9 @@ ISO = $(BUILD_DIR)/hydrogen.iso
 # 32-bit ELF view of the kernel: QEMU's built-in multiboot loader rejects ELF64.
 KERNEL32 = $(BUILD_DIR)/kernel32.elf
 DISK_IMG = $(BUILD_DIR)/disk.img
+# The filesystem is 16M; the megabyte behind it holds the crash dump region
+# (docs/CRASH_OOM.md), which the kernel only uses beyond the filesystem's end.
+DISK_SIZE_WITH_CRASH_REGION = 17M
 FS_DIR = fsroot
 FS_FILES = $(shell find $(FS_DIR) -type f 2>/dev/null)
 USER_ELFS = $(foreach v,$(filter USER_%_ELF,$(.VARIABLES)),$($(v)))
@@ -803,6 +818,41 @@ $(USER_PERFSTAT_OBJ): userspace/perfstat/perfstat.c userspace/lib/perf.h userspa
 
 $(USER_PERFSTAT_ELF): $(USER_PERFSTAT_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
 	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_PERFSTAT_OBJ)
+$(USER_CRASHINFO_OBJ): userspace/crashinfo/crashinfo.c userspace/lib/crash.h userspace/lib/syscall.h userspace/lib/mini_libc.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(USER_CRASHINFO_ELF): $(USER_CRASHINFO_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
+	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_CRASHINFO_OBJ)
+
+$(USER_CRASHCOLLECT_OBJ): userspace/crashcollect/crashcollect.c userspace/lib/crash.h userspace/lib/syscall.h userspace/lib/mini_libc.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(USER_CRASHCOLLECT_ELF): $(USER_CRASHCOLLECT_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
+	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_CRASHCOLLECT_OBJ)
+
+$(USER_CRASHTEST_OBJ): userspace/crashtest/crashtest.c userspace/lib/crash.h userspace/lib/syscall.h userspace/lib/mini_libc.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(USER_CRASHTEST_ELF): $(USER_CRASHTEST_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
+	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_CRASHTEST_OBJ)
+
+$(USER_FREE_OBJ): userspace/free/free.c userspace/lib/meminfo.h userspace/lib/syscall.h userspace/lib/mini_libc.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(USER_FREE_ELF): $(USER_FREE_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
+	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_FREE_OBJ)
+
+$(USER_OOMTEST_OBJ): userspace/oomtest/oomtest.c userspace/lib/meminfo.h userspace/lib/syscall.h userspace/lib/mini_libc.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(USER_OOMTEST_ELF): $(USER_OOMTEST_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
+	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_OOMTEST_OBJ)
+
 $(USER_SUPERVISETEST_OBJ): userspace/supervisetest/supervisetest.c userspace/lib/signal.h userspace/lib/syscall.h userspace/lib/mini_libc.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(USER_CFLAGS) -c $< -o $@
@@ -1262,6 +1312,22 @@ $(BUILD_DIR)/perf.o: kernel/core/perf.c kernel/core/perf.h kernel/include/perf_a
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
+$(BUILD_DIR)/kmsg.o: kernel/core/kmsg.c kernel/core/kmsg.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/crash.o: kernel/core/crash.c kernel/core/crash.h kernel/include/crash_abi.h kernel/core/kmsg.h kernel/core/process.h kernel/core/usercopy.h kernel/drivers/block.h kernel/fs/ext2.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/oom.o: kernel/mm/oom.c kernel/mm/oom.h kernel/core/process.h kernel/core/signal.h kernel/mm/paging.h kernel/mm/pmm.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/meminfo.o: kernel/mm/meminfo.c kernel/mm/meminfo.h kernel/include/meminfo_abi.h kernel/mm/oom.h kernel/core/usercopy.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
 $(BUILD_DIR)/spawn_args.o: kernel/core/spawn_args.c kernel/core/spawn_args.h kernel/core/process.h kernel/mm/paging.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
@@ -1375,6 +1441,7 @@ $(DISK_IMG): $(ROOTFS_STAMP)
 		{ find $(ROOTFS_STAGE) -mindepth 1 -printf 'sif /%P uid 0\nsif /%P gid 0\n'; \
 		  printf 'sif /home/user uid 1000\nsif /home/user gid 1000\n'; \
 		  find $(ROOTFS_STAGE)/home/user -mindepth 1 -printf 'sif /home/user/%P uid 1000\nsif /home/user/%P gid 1000\n'; } | debugfs -w -f - $(DISK_IMG) >/dev/null; \
+		truncate -s $(DISK_SIZE_WITH_CRASH_REGION) $(DISK_IMG); \
 	else \
 		dd if=/dev/zero of=$(DISK_IMG) bs=1M count=16; \
 	fi
