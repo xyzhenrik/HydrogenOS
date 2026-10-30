@@ -53,5 +53,16 @@ int vfs_readlink(const char *path, char *buf, uint32_t cap);
    expansions). */
 int vfs_resolve(const char *path, int follow_final, char *out, uint32_t out_sz);
 int vfs_write_file(const char *path, const uint8_t *data, uint32_t size);
+/* Writes into the file in place, extending it if needed; a gap between the old
+   end of file and offset reads back as zero. Returns 0 or a negative errno
+   value. A failed write may have stored part of the data. */
 int vfs_write_file_at(const char *path, uint32_t offset, const uint8_t *data,
                       uint32_t size);
+/* Shrinks or grows a regular file; the new range reads as zero. Returns 0 or
+   a negative errno value (-EFBIG if size exceeds what the filesystem holds). */
+int vfs_truncate(const char *path, uint32_t size);
+/* Makes all completed writes durable. Returns 0 or a negative errno value. */
+int vfs_sync(void);
+/* Periodic write-back of dirty cache data; cheap when nothing is pending. Call
+   only where no filesystem operation can be half done. */
+void vfs_writeback_tick(void);

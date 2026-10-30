@@ -152,6 +152,7 @@ static uint64_t fs_status(int rc) {
     case -EISDIR:
     case -ENOTEMPTY:
     case -ENOSPC:
+    case -EFBIG:
     case -EINVAL:
     case -EBUSY:
     case -EROFS:
@@ -932,6 +933,22 @@ uint64_t syscall_handle(regs_t *r) {
         if (copy_to_user(buf, ktarget, copied) != 0)
             return (uint64_t)-EFAULT;
         return copied;
+    }
+    case SYS_TRUNCATE: {
+        const char *path = (const char *)(uintptr_t)r->rdi;
+        uint64_t length = r->rsi;
+        process_t *proc = process_current();
+        if (!path)
+            return (uint64_t)-EFAULT;
+        char kpath[PROCESS_CWD_CAP];
+        int path_rc = copy_followed_user_path(proc, path, kpath, sizeof(kpath), 1);
+        if (path_rc != 0)
+            return (uint64_t)(int64_t)path_rc;
+        if (!vfs_is_ready())
+            return (uint64_t)-EIO;
+        if (length > UINT32_MAX)
+            return (uint64_t)-EFBIG;
+        return fs_status(vfs_truncate(kpath, (uint32_t)length));
     }
     case SYS_WRITEF: {
         const char *path = (const char *)(uintptr_t)r->rdi;

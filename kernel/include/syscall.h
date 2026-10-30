@@ -66,6 +66,7 @@
 #define SYS_LINK 63
 #define SYS_SYMLINK 64
 #define SYS_READLINK 65
+#define SYS_TRUNCATE 80
 #define SYS_PUTCHAR 255
 
 uint64_t syscall_handle(regs_t *r);

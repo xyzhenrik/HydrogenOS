@@ -4,7 +4,7 @@
 #include "procfs.h"
 #include "dcache.h"
 #include "errno.h"
-#include "kheap.h"
+#include "drivers/block_cache.h"
 
 typedef enum vfs_fs_type {
     VFS_FS_NONE = 0,
@@ -160,7 +160,10 @@ int vfs_umount(const char *path) {
     if (path_copy_mount(norm, path, sizeof(norm)) != 0) return -1;
     for (int i = 0; i < VFS_MAX_MOUNTS; ++i) {
         if (mounts[i].fs != VFS_FS_NONE && path_eq(mounts[i].path, norm)) {
-            if (mounts[i].fs == VFS_FS_EXT2) dcache_invalidate_fs(DCACHE_FS_EXT2);
+            if (mounts[i].fs == VFS_FS_EXT2) {
+                if (ext2_sync() != 0) return -EIO;
+                dcache_invalidate_fs(DCACHE_FS_EXT2);
+            }
             mounts[i].fs = VFS_FS_NONE;
             mounts[i].path[0] = 0;
             mounts[i].fs_name = 0;
@@ -546,33 +549,32 @@ int vfs_write_file(const char *path, const uint8_t *data, uint32_t size) {
     return -1;
 }
 
-/* The backends only replace whole files, so a positioned write is a
- * read-modify-write of the complete file. Bytes between the old end of file
- * and offset read back as zero. */
 int vfs_write_file_at(const char *path, uint32_t offset, const uint8_t *data,
                       uint32_t size) {
-    if (!ready || !path || (size > 0 && !data)) return -1;
-    if (size > UINT32_MAX - offset) return -1;
-    vfs_stat_t st;
-    if (vfs_stat(path, &st) != 0 || st.type != 1) return -1;
-    if (size == 0) return 0;
-    uint32_t end = offset + size;
-    uint32_t new_size = end > st.size ? end : st.size;
-    uint8_t *buf = (uint8_t *)kalloc(new_size);
-    if (!buf) return -1;
-    uint32_t have = 0;
-    while (have < st.size) {
-        uint32_t got = 0;
-        if (vfs_read_file_at(path, have, buf + have, st.size - have, &got) != 0 ||
-            got == 0) {
-            kfree(buf);
-            return -1;
-        }
-        have += got;
-    }
-    for (uint32_t i = st.size; i < offset; ++i) buf[i] = 0;
-    for (uint32_t i = 0; i < size; ++i) buf[offset + i] = data[i];
-    int rc = vfs_write_file(path, buf, new_size);
-    kfree(buf);
-    return rc;
+    if (!ready || !path || (size > 0 && !data)) return -EINVAL;
+    const char *sub = 0;
+    const vfs_mount_t *m = mount_for_path(path, &sub);
+    if (!m) return -ENOENT;
+    if (m->fs == VFS_FS_RAMFS) return ramfs_write_at(sub, offset, data, size);
+    if (m->fs == VFS_FS_EXT2) return ext2_write_at(sub, offset, data, size);
+    return -EROFS;
+}
+
+int vfs_truncate(const char *path, uint32_t size) {
+    if (!ready || !path) return -EINVAL;
+    const char *sub = 0;
+    const vfs_mount_t *m = mount_for_path(path, &sub);
+    if (!m) return -ENOENT;
+    if (m->fs == VFS_FS_RAMFS) return ramfs_truncate(sub, size);
+    if (m->fs == VFS_FS_EXT2) return ext2_truncate(sub, size);
+    return -EROFS;
+}
+
+int vfs_sync(void) {
+    if (!ready) return -EINVAL;
+    return ext2_is_mounted() ? ext2_sync() : 0;
+}
+
+void vfs_writeback_tick(void) {
+    block_cache_tick();
 }
