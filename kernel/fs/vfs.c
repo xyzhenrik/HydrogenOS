@@ -2,6 +2,7 @@
 #include "ext2.h"
 #include "ramfs.h"
 #include "procfs.h"
+#include "dcache.h"
 #include "errno.h"
 #include "kheap.h"
 
@@ -159,6 +160,7 @@ int vfs_umount(const char *path) {
     if (path_copy_mount(norm, path, sizeof(norm)) != 0) return -1;
     for (int i = 0; i < VFS_MAX_MOUNTS; ++i) {
         if (mounts[i].fs != VFS_FS_NONE && path_eq(mounts[i].path, norm)) {
+            if (mounts[i].fs == VFS_FS_EXT2) dcache_invalidate_fs(DCACHE_FS_EXT2);
             mounts[i].fs = VFS_FS_NONE;
             mounts[i].path[0] = 0;
             mounts[i].fs_name = 0;
