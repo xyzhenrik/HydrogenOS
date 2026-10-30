@@ -67,6 +67,10 @@ long dup3(int src_fd, int dst_fd, unsigned int flags) {
     return sys_dup3(src_fd, dst_fd, flags);
 }
 
+long dup_cloexec(int fd) {
+    return sys_dup3(fd, DUP3_ANY_SLOT, DUP3_CLOEXEC);
+}
+
 long set_fd_inherit(int fd, int inherit) {
     return sys_handle_set_inherit(fd, inherit);
 }
@@ -96,6 +100,14 @@ long spawn_args(const char *path, const char *const *argv,
                 const char *const *envp, int stdin_fd, int stdout_fd,
                 int stderr_fd) {
     return sys_spawn_args(path, argv, envp, stdin_fd, stdout_fd, stderr_fd);
+}
+
+long execve(const char *path, const char *const *argv, const char *const *envp) {
+    return sys_execve(path, argv, envp);
+}
+
+long execv(const char *path, const char *const *argv) {
+    return sys_execve(path, argv, (const char *const *)environ);
 }
 
 long try_wait_pid(int pid, int *status) {

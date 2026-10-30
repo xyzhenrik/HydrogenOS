@@ -67,6 +67,7 @@
 #define SYS_SYMLINK 64
 #define SYS_READLINK 65
 #define SYS_SIGPROCMASK 68
+#define SYS_EXECVE 73
 #define SYS_TRUNCATE 80
 #define SYS_PERF_READ 81
 #define SYS_PUTCHAR 255

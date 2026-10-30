@@ -65,6 +65,7 @@
 #define SYS_SYMLINK 64
 #define SYS_READLINK 65
 #define SYS_SIGPROCMASK 68
+#define SYS_EXECVE 73
 #define SYS_TRUNCATE 80
 #define SYS_PERF_READ 81
 
@@ -79,6 +80,8 @@
 
 #define DUP3_INHERIT        (1u << 0)
 #define DUP3_CLOSE_ON_SPAWN (1u << 1)
+#define DUP3_CLOEXEC        (1u << 2)
+#define DUP3_ANY_SLOT       (-1)
 
 #define SEEK_SET 0
 #define SEEK_CUR 1
@@ -464,6 +467,11 @@ static inline long sys_spawn_args(const char *path, const char *const *argv,
                                   int stdout_fd, int stderr_fd) {
     return syscall6(SYS_SPAWN_ARGS, (long)path, (long)argv, (long)envp,
                     (long)stdin_fd, (long)stdout_fd, (long)stderr_fd);
+}
+
+static inline long sys_execve(const char *path, const char *const *argv,
+                              const char *const *envp) {
+    return syscall3(SYS_EXECVE, (long)path, (long)argv, (long)envp);
 }
 
 static inline long sys_try_wait(int pid, int *status) {

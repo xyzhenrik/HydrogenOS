@@ -6,6 +6,7 @@
 #define EINTR      4
 #define EIO        5
 #define E2BIG      7
+#define ENOEXEC    8
 #define EBADF      9
 #define ECHILD     10
 #define EAGAIN     11

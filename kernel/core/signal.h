@@ -29,6 +29,11 @@ enum {
 
 void signal_state_init(signal_state_t *state);
 
+/* Prepares state for a new program image: caught signals fall back to their
+ * default action, ignored ones stay ignored. The pending and blocked masks are
+ * kept. */
+void signal_reset_for_exec(signal_state_t *state);
+
 /* True if p has a signal that would act on it now (a handler or termination). */
 int signal_deliverable(const struct process *p);
 

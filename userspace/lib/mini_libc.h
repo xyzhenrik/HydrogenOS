@@ -14,6 +14,8 @@
 
 #define DUP3_INHERIT        (1u << 0)
 #define DUP3_CLOSE_ON_SPAWN (1u << 1)
+#define DUP3_CLOEXEC        (1u << 2)
+#define DUP3_ANY_SLOT       (-1)
 
 #define SEEK_SET 0
 #define SEEK_CUR 1
@@ -77,6 +79,8 @@ long poll_many_wait(poll_fd_t *fds, unsigned int count, long timeout_ms);
 long dup(int fd);
 long dup2(int src_fd, int dst_fd);
 long dup3(int src_fd, int dst_fd, unsigned int flags);
+/* dup() whose copy is closed by execve. */
+long dup_cloexec(int fd);
 long set_fd_inherit(int fd, int inherit);
 long set_handle_inherit(int fd, int inherit);
 long spawn(const char *path);
@@ -84,6 +88,12 @@ long spawn_with_stdio(const char *path, int stdin_fd, int stdout_fd, int stderr_
 long spawn_args(const char *path, const char *const *argv,
                 const char *const *envp, int stdin_fd, int stdout_fd,
                 int stderr_fd);
+/* Replace the calling process image. They only return on failure, with the
+ * negative errno; the process then continues unchanged. Handles stay open
+ * except those duplicated with DUP3_CLOEXEC; caught signals are reset to
+ * their default action. execv passes the current environ. */
+long execve(const char *path, const char *const *argv, const char *const *envp);
+long execv(const char *path, const char *const *argv);
 long wait_pid(int pid, int *status);
 long try_wait_pid(int pid, int *status);
 void yield_cpu(void);

@@ -167,6 +167,18 @@ void signal_state_init(signal_state_t *state) {
     state->fatal_signal = 0;
 }
 
+void signal_reset_for_exec(signal_state_t *state) {
+    for (int sig = 0; sig < SIGNAL_COUNT; ++sig) {
+        if (state->actions[sig].handler == SIG_IGN)
+            continue;
+        state->actions[sig].handler = SIG_DFL;
+        state->actions[sig].restorer = 0;
+        state->actions[sig].mask = 0;
+        state->actions[sig].flags = 0;
+    }
+    state->fault_signal = 0;
+}
+
 int signal_deliverable(const process_t *p) {
     return p != 0 && signal_next_ready(&p->signals) != 0;
 }

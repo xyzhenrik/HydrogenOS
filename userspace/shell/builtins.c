@@ -49,7 +49,7 @@ static int builtin_help(int argc, char **argv) {
     (void)argc;
     (void)argv;
     out_str(1,
-            "Builtins: cat cd cp echo env exit export false help jobs kill ln ls\n"
+            "Builtins: cat cd cp echo env exec exit export false help jobs kill ln ls\n"
             "          mkdir mv pwd readlink rm sleep time touch true unset wait\n"
             "Diagnostics: pipe piperun pipenoinherit pipeblock pipefull\n"
             "          pipebroken pipeeof pollpipe pollwaitpipe pollmanypipe\n"
@@ -553,6 +553,12 @@ static int builtin_false(int argc, char **argv) {
     return STATUS_FAILURE;
 }
 
+static int builtin_exec(int argc, char **argv) {
+    if (argc < 2)
+        return usage("exec", "usage: exec command [argument]...");
+    return exec_replace(argv + 1);
+}
+
 static int builtin_exit(int argc, char **argv) {
     long status = exec_last_status();
     if (argc > 2)
@@ -577,6 +583,7 @@ static const BuiltinEntry builtins[] = {
     {"cp", builtin_cp},
     {"echo", builtin_echo},
     {"env", builtin_env},
+    {"exec", builtin_exec},
     {"exit", builtin_exit},
     {"export", builtin_export},
     {"false", builtin_false},

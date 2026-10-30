@@ -20,6 +20,7 @@ enum {
     PROCESS_HANDLE_FLAG_INHERIT = 1u << 0,
     PROCESS_HANDLE_FLAG_READ = 1u << 1,
     PROCESS_HANDLE_FLAG_WRITE = 1u << 2,
+    PROCESS_HANDLE_FLAG_CLOEXEC = 1u << 3,
 };
 
 /* Mirrors the OPEN_* flags of the sys_open ABI. */
@@ -37,6 +38,12 @@ enum {
 enum {
     PROCESS_DUP3_INHERIT = 1u << 0,
     PROCESS_DUP3_CLOSE_ON_SPAWN = 1u << 1,
+    PROCESS_DUP3_CLOEXEC = 1u << 2,
+};
+
+/* dst_fd value for process_dup3_fd(): the lowest free non-stdio fd. */
+enum {
+    PROCESS_DUP3_ANY_SLOT = -1,
 };
 
 typedef enum process_state {
@@ -208,6 +215,13 @@ int process_bind_stdio_from_fd(process_t *dst, int stdio_fd,
 int process_wait(process_t *waiter, uint32_t pid, int *out_status);
 int process_begin_wait(process_t *waiter, uint32_t pid, uintptr_t status_ptr);
 void process_set_frame(process_t *p, const regs_t *frame);
+/* Makes new_pml4 (already holding the new image) the address space of p, which
+ * is the running process, and frees the old one including its mmap regions.
+ * Then closes the close-on-exec handles, resets caught signals to their
+ * default action and renames p after path. Everything else, namely pid,
+ * parent, cwd, priority, remaining handles, blocked and pending signals, is
+ * kept. */
+void process_exec_commit(process_t *p, uint64_t *new_pml4, const char *path);
 int process_resolve_path(const process_t *p, const char *path, char *out,
                          uint32_t out_sz);
 int process_handle_open_file(process_t *p, const char *path, uint32_t flags);
@@ -215,6 +229,8 @@ int process_handle_create_pipe(process_t *p, int *out_read_handle,
                                int *out_write_handle);
 int process_dup_fd(process_t *p, int src_fd);
 int process_dup2_fd(process_t *p, int src_fd, int dst_fd);
+/* Returns dst_fd, -1 (bad fd), -2 (bad flags or src_fd == dst_fd) or -3 (no
+ * free slot for PROCESS_DUP3_ANY_SLOT). */
 int process_dup3_fd(process_t *p, int src_fd, int dst_fd, uint32_t flags);
 int process_fd_set_inherit(process_t *p, int fd, int inherit);
 int process_begin_pipe_read_wait(process_t *p, int handle);
