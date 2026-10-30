@@ -40,3 +40,7 @@ int cmdline_has_flag(const char *name) {
   }
   return 0;
 }
+
+const char *cmdline_text(void) {
+  return cmdline;
+}

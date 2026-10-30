@@ -2,6 +2,7 @@
 
 #include <stddef.h>
 
+#include "core/cmdline.h"
 #include "core/process.h"
 #include "core/time.h"
 #include "errno.h"
@@ -21,6 +22,7 @@ typedef enum procfs_node_kind {
     PROCFS_NODE_UPTIME,
     PROCFS_NODE_VERSION,
     PROCFS_NODE_BOOT,
+    PROCFS_NODE_CMDLINE,
     PROCFS_NODE_PID_DIR,
     PROCFS_NODE_PID_STATUS,
 } procfs_node_kind_t;
@@ -45,6 +47,7 @@ static const procfs_static_file_t static_files[] = {
     { "uptime", PROCFS_NODE_UPTIME },
     { "version", PROCFS_NODE_VERSION },
     { "boot", PROCFS_NODE_BOOT },
+    { "cmdline", PROCFS_NODE_CMDLINE },
 };
 
 #define PROCFS_STATIC_FILE_COUNT \
@@ -262,6 +265,11 @@ static void render_boot(procfs_buffer_t *b) {
     buf_put_field_u64(b, "Progress", bootsplash_progress(), 0);
 }
 
+static void render_cmdline(procfs_buffer_t *b) {
+    buf_put_str(b, cmdline_text());
+    buf_put_str(b, "\n");
+}
+
 static int render_status(procfs_buffer_t *b, uint32_t pid) {
     process_info_t info;
     if (process_get_info(pid, &info) != 0)
@@ -291,6 +299,9 @@ static int render(const procfs_node_t *node, procfs_buffer_t *b) {
         return 0;
     case PROCFS_NODE_BOOT:
         render_boot(b);
+        return 0;
+    case PROCFS_NODE_CMDLINE:
+        render_cmdline(b);
         return 0;
     case PROCFS_NODE_PID_STATUS:
         return render_status(b, node->pid);
@@ -373,6 +384,14 @@ int procfs_stat(const char *path, vfs_stat_t *out) {
     return 0;
 }
 
+/* Only the first user process, init, reports boot progress. */
+static int caller_is_first_process(void) {
+    const process_t *caller = process_current();
+    process_info_t info;
+    return caller && process_get_info(caller->pid, &info) == 0 &&
+           info.parent_pid == 0;
+}
+
 int procfs_write_file(const char *path, const uint8_t *data, uint32_t size) {
     procfs_node_t node;
     if (resolve(path, &node) != 0)
@@ -381,5 +400,5 @@ int procfs_write_file(const char *path, const uint8_t *data, uint32_t size) {
         return -EISDIR;
     if (node.kind != PROCFS_NODE_BOOT)
         return -EROFS;
-    return bootsplash_report(data, size);
+    return bootsplash_report(data, size, caller_is_first_process());
 }

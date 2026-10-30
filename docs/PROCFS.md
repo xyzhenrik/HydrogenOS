@@ -8,9 +8,9 @@ that needs a consistent snapshot should fetch the file with one large read
 (all files fit in 1 KiB).
 
 `/proc/boot` accepts progress reports for the boot splash through
-`SYS_WRITEF` (see `docs/BOOT_SPLASH.md`). Every other write, and `mkdir`,
-`unlink` and `rename` below `/proc`, fail (`-EROFS` for files, `-ENOENT` for
-unknown paths).
+`SYS_WRITEF` from init only (see `docs/BOOT_SPLASH.md`). Every other write,
+and `mkdir`, `unlink` and `rename` below `/proc`, fail (`-EROFS` for files,
+`-ENOENT` for unknown paths).
 
 ## Layout
 
@@ -20,6 +20,7 @@ unknown paths).
 | `/proc/uptime`       | file | seconds since boot, `"<s>.<cc>\n"`         |
 | `/proc/version`      | file | `"HydrogenOS <version> <arch>\n"`          |
 | `/proc/boot`         | file | boot splash state and progress             |
+| `/proc/cmdline`      | file | kernel command line, one line              |
 | `/proc/<pid>/`       | dir  | one per live process, listed in pid order  |
 | `/proc/<pid>/status` | file | per-process status                         |
 

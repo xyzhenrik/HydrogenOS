@@ -2,15 +2,17 @@
 #include "syscall.h"
 
 #define BOOT_PATH "/proc/boot"
+#define CMDLINE_PATH "/proc/cmdline"
 #define BOOT_BUF_CAP 128
+#define CMDLINE_BUF_CAP 300
 #define PROGRESS_MAX 1000ul
 #define SERVICES_BASE 300ul
-#define RC_EINVAL (-22l)
 #define RC_ENOENT (-2l)
+#define RC_EINVAL (-22l)
 #define RC_EROFS (-30l)
 
 static void fail(const char *reason) {
-    dprintf(1, "SPLASH FAIL: %s\n", reason);
+    dprintf(2, "SPLASH FAIL: %s\n", reason);
 }
 
 static int str_eq(const char *a, const char *b) {
@@ -73,31 +75,71 @@ static int read_boot(char *splash, unsigned long splash_cap,
     return seen == 3 ? 0 : -1;
 }
 
+/* Returns 1 if /proc/cmdline contains "verbose" as a whole word, 0 if not, -1
+   if it cannot be read. */
+static int cmdline_is_verbose(void) {
+    static const char flag[] = "verbose";
+    char text[CMDLINE_BUF_CAP];
+    long fd = open(CMDLINE_PATH, 0);
+    if (fd < 0)
+        return -1;
+    long len = read((int)fd, text, sizeof(text) - 1);
+    close((int)fd);
+    if (len < 0)
+        return -1;
+    text[len] = '\0';
+
+    const char *cursor = text;
+    while (*cursor) {
+        while (*cursor == ' ' || *cursor == '\n')
+            ++cursor;
+        const char *start = cursor;
+        while (*cursor && *cursor != ' ' && *cursor != '\n')
+            ++cursor;
+        if ((unsigned long)(cursor - start) == sizeof(flag) - 1 &&
+            strncmp(start, flag, sizeof(flag) - 1) == 0)
+            return 1;
+    }
+    return 0;
+}
+
 static long report(const char *text) {
     return sys_writef(BOOT_PATH, text, strlen(text));
 }
 
-static int check_state(void) {
+/* The boot runs without a kernel command line unless `verbose` is passed, and
+   the desktop, which ends the splash, starts only after this test. So the
+   splash must be up, with the bar where init's service reports put it, unless
+   `verbose` turned it off. */
+static int check_state(int *active) {
     char splash[16];
     unsigned long progress = 0;
+    int verbose = cmdline_is_verbose();
+    if (verbose < 0) {
+        fail("read /proc/cmdline");
+        return -1;
+    }
     if (read_boot(splash, sizeof(splash), &progress) != 0) {
         fail("read /proc/boot");
         return -1;
     }
-    if (!str_eq(splash, "active") && !str_eq(splash, "finished") &&
-        !str_eq(splash, "disabled")) {
-        fail("unknown splash state");
+    if (verbose) {
+        if (!str_eq(splash, "disabled") || progress != 0) {
+            fail("verbose did not disable the splash");
+            return -1;
+        }
+        *active = 0;
+        return 0;
+    }
+    if (!str_eq(splash, "active")) {
+        fail("splash is not active during boot");
         return -1;
     }
-    if (progress > PROGRESS_MAX) {
-        fail("progress out of range");
+    if (progress <= SERVICES_BASE || progress >= PROGRESS_MAX) {
+        fail("init's service progress did not reach the bar");
         return -1;
     }
-    /* Init has been reporting service progress since it started. */
-    if (str_eq(splash, "active") && progress < SERVICES_BASE) {
-        fail("init progress missing");
-        return -1;
-    }
+    *active = 1;
     return 0;
 }
 
@@ -118,7 +160,7 @@ static int check_rejections(void) {
     };
     for (unsigned long i = 0; i < sizeof(malformed) / sizeof(malformed[0]); ++i) {
         if (report(malformed[i]) != RC_EINVAL) {
-            dprintf(1, "SPLASH FAIL: accepted report %lu\n", i);
+            dprintf(2, "SPLASH FAIL: accepted report %lu\n", i);
             return -1;
         }
     }
@@ -133,28 +175,45 @@ static int check_rejections(void) {
     return 0;
 }
 
-static int check_monotonic(void) {
+/* Only init may report. A well-formed report from this process must be
+   refused without effect, and a partial blit must neither draw nor end the
+   splash. */
+static int check_unprivileged(int active) {
+    static const char *const reports[] = { "services 1 2\n", "end\n" };
+    static const unsigned int pixel = 0;
     char splash[16];
     unsigned long before = 0;
     unsigned long after = 0;
+
     if (read_boot(splash, sizeof(splash), &before) != 0) {
-        fail("read before report");
+        fail("read before reports");
         return -1;
     }
-    /* A report that lags behind the current progress must not move it back. */
-    if (report("services 0 1000\n") != 0) {
-        fail("valid report rejected");
+    for (unsigned long i = 0; i < sizeof(reports) / sizeof(reports[0]); ++i) {
+        if (report(reports[i]) != RC_EROFS) {
+            dprintf(2, "SPLASH FAIL: unprivileged report %lu accepted\n", i);
+            return -1;
+        }
+    }
+    if (active && sys_fb_blit(0, 0, 1, 1, &pixel) != 0) {
+        fail("partial blit failed during splash");
         return -1;
     }
-    if (read_boot(splash, sizeof(splash), &after) != 0 || after < before) {
-        fail("progress moved backwards");
+    if (read_boot(splash, sizeof(splash), &after) != 0) {
+        fail("read after reports");
+        return -1;
+    }
+    if (after != before || str_eq(splash, "active") != active) {
+        fail("unprivileged writes changed the splash");
         return -1;
     }
     return 0;
 }
 
 int main(void) {
-    if (check_state() != 0 || check_rejections() != 0 || check_monotonic() != 0)
+    int active = 0;
+    if (check_state(&active) != 0 || check_rejections() != 0 ||
+        check_unprivileged(active) != 0)
         return 1;
     write(1, "SPLASH PASS\n", 12);
     return 0;

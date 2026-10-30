@@ -90,6 +90,16 @@ while [ "$i" -lt "${SMOKE_TICKS:-1500}" ]; do
   i=$((i + 1))
 done
 
+# The frame checksum is logged before the compositor's first full-screen blit
+# ends the boot splash, so give that hand-off a moment to reach the log.
+if [ "$FOUND" -eq 1 ]; then
+  i=0
+  while [ "$i" -lt 300 ] && ! grep -q "\[SPLASH\] handoff to desktop" "$LOG_FILE" 2>/dev/null; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+fi
+
 kill "$QEMU_PID" >/dev/null 2>&1 || true
 sleep 0.1
 kill -9 "$QEMU_PID" >/dev/null 2>&1 || true
@@ -120,7 +130,7 @@ if [ "$FOUND" -eq 1 ]; then
   grep -q "FAULT PASS" "$LOG_FILE" || MISSING="$MISSING FAULT_PASS"
   grep -q "SCHED PASS" "$LOG_FILE" || MISSING="$MISSING SCHED_PASS"
   grep -q "SIG PASS" "$LOG_FILE" || MISSING="$MISSING SIG_PASS"
-  grep -q "SPLASH PASS" "$LOG_FILE" || MISSING="$MISSING SPLASH_PASS"
+  { grep -q "SPLASH PASS" "$LOG_FILE" && grep -q "\[SPLASH\] handoff to desktop" "$LOG_FILE"; } || MISSING="$MISSING SPLASH_PASS"
   if [ "$REQUIRE_DESKTOP" = "1" ]; then
     grep -qE "compositor: ready|COMP READY" "$LOG_FILE" || MISSING="$MISSING COMPOSITOR_READY"
     grep -q "FRAME CHECKSUM:" "$LOG_FILE" || MISSING="$MISSING FRAME_CHECKSUM"

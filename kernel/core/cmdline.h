@@ -10,3 +10,6 @@ void cmdline_init(uintptr_t multiboot_info_addr);
 /* Returns 1 if the command line contains `name` as a whole space-separated
    word, else 0. */
 int cmdline_has_flag(const char *name);
+
+/* The copied command line, never NULL; empty when the bootloader passed none. */
+const char *cmdline_text(void);

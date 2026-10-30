@@ -22,6 +22,7 @@
 #define DROP_BOTTOM 0x002E8CE0u
 #define BAR_FILL 0x00F0F7FFu
 #define BAR_TRACK_WEIGHT 36u
+#define SUFFIX_WEIGHT 150u
 
 /* Cap-height relative sizes in per mille. */
 #define STROKE 150
@@ -39,16 +40,30 @@ typedef enum glyph {
     GLYPH_G,
     GLYPH_E,
     GLYPH_N,
+    GLYPH_O,
+    GLYPH_S,
 } glyph_t;
 
+/* weight is 0..256: how strongly the letter is drawn over the background.
+   The "OS" suffix is dimmer than the name so that the drop stays the O of
+   "Hydrogen". */
 typedef struct wordmark_letter {
     glyph_t glyph;
     int32_t width;
+    uint32_t weight;
 } wordmark_letter_t;
 
 static const wordmark_letter_t wordmark[] = {
-    { GLYPH_H, 720 }, { GLYPH_Y, 780 },    { GLYPH_D, 740 }, { GLYPH_R, 700 },
-    { GLYPH_DROP, 940 }, { GLYPH_G, 1000 }, { GLYPH_E, 560 }, { GLYPH_N, 740 },
+    { GLYPH_H, 720, 256 },
+    { GLYPH_Y, 780, 256 },
+    { GLYPH_D, 740, 256 },
+    { GLYPH_R, 700, 256 },
+    { GLYPH_DROP, 940, 256 },
+    { GLYPH_G, 1000, 256 },
+    { GLYPH_E, 560, 256 },
+    { GLYPH_N, 740, 256 },
+    { GLYPH_O, 1000, SUFFIX_WEIGHT },
+    { GLYPH_S, 575, SUFFIX_WEIGHT },
 };
 
 #define WORDMARK_LETTERS (sizeof(wordmark) / sizeof(wordmark[0]))
@@ -267,13 +282,35 @@ static int32_t glyph_distance(glyph_t glyph, int32_t x, int32_t y, int32_t w) {
                          box_distance(x, y, w - t, 0, w, c)),
                     band_distance(x, y, inset, 0, w - inset, c, t / 2, 0, 0, w, c));
     }
+    case GLYPH_O: {
+        int32_t radius = c / 2;
+        int32_t r = length(x - radius, y - radius);
+        return imax(r - radius, radius - t - r);
+    }
+    case GLYPH_S: {
+        /* Two rings that overlap by one stroke, each missing the sector
+           (35 degrees above the horizontal down to the vertical) that faces
+           away from the other ring; (37, 52) / 64 is (sin, cos) of 35 degrees. */
+        int32_t radius = (c + t) / 4;
+        int32_t cx = x - w / 2;
+        int32_t upper_dy = y - radius;
+        int32_t lower_dy = y - (c - radius);
+        int32_t upper_r = length(cx, upper_dy);
+        int32_t lower_r = length(cx, lower_dy);
+        int32_t upper = imax(imax(upper_r - radius, radius - t - upper_r),
+                             imin(cx, (cx * 37 + upper_dy * 52) / 64));
+        int32_t lower = imax(imax(lower_r - radius, radius - t - lower_r),
+                             imin(-cx, (-cx * 37 - lower_dy * 52) / 64));
+        return imin(upper, lower);
+    }
     case GLYPH_DROP:
         break;
     }
     return FAR;
 }
 
-static void draw_glyph(glyph_t glyph, int32_t gx, int32_t gy, int32_t w) {
+static void draw_glyph(glyph_t glyph, int32_t gx, int32_t gy, int32_t w,
+                       uint32_t weight) {
     for (int32_t py = gy / SUB - 1; py <= (gy + layout.cap) / SUB + 1; ++py) {
         for (int32_t px = gx / SUB - 1; px <= (gx + w) / SUB + 1; ++px) {
             uint32_t *pixel = surface_pixel(px, py);
@@ -283,7 +320,7 @@ static void draw_glyph(glyph_t glyph, int32_t gx, int32_t gy, int32_t w) {
                                        py * SUB + SUB / 2 - gy, w);
             int32_t cov = coverage(d);
             if (cov)
-                *pixel = blend(*pixel, LETTER_COLOR, (uint32_t)cov * 16u);
+                *pixel = blend(*pixel, LETTER_COLOR, (uint32_t)cov * weight / SUB);
         }
     }
 }
@@ -397,7 +434,7 @@ static void compute_layout(void) {
     layout.width = framebuffer.width;
     layout.height = framebuffer.height;
     int32_t cap = (int32_t)imin((int32_t)(layout.height * 85 / 1000),
-                                (int32_t)(layout.width * 10 / 100));
+                                (int32_t)(layout.width * 8 / 100));
     if (cap < 8)
         cap = 8;
     layout.cap = cap * SUB;
@@ -429,7 +466,7 @@ static void paint(void) {
         if (wordmark[i].glyph == GLYPH_DROP)
             draw_drop(x, y, w);
         else
-            draw_glyph(wordmark[i].glyph, x, y, w);
+            draw_glyph(wordmark[i].glyph, x, y, w, wordmark[i].weight);
         x += w + layout.cap * LETTER_GAP / 1000;
     }
     draw_bar();
@@ -484,7 +521,7 @@ static int has_prefix(const char *s, const char *prefix, const char **rest) {
     return 1;
 }
 
-int bootsplash_report(const uint8_t *data, uint32_t size) {
+int bootsplash_report(const uint8_t *data, uint32_t size, int from_init) {
     char line[REPORT_CAP];
     uint32_t len = 0;
     if (!data)
@@ -499,6 +536,8 @@ int bootsplash_report(const uint8_t *data, uint32_t size) {
 
     const char *rest;
     if (has_prefix(line, "end", &rest) && *rest == '\0') {
+        if (!from_init)
+            return -EROFS;
         bootsplash_abort();
         return 0;
     }
@@ -508,6 +547,8 @@ int bootsplash_report(const uint8_t *data, uint32_t size) {
         *rest++ != ' ' || parse_number(&rest, &total) != 0 || *rest != '\0' ||
         total == 0 || done > total)
         return -EINVAL;
+    if (!from_init)
+        return -EROFS;
     set_progress(SERVICES_BASE +
                  (uint32_t)((uint64_t)(PROGRESS_MAX - SERVICES_BASE) * done / total));
     return 0;

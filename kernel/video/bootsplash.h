@@ -30,9 +30,10 @@ void bootsplash_start(bootsplash_stage_t stage, int enabled);
 /* Advances the progress bar to `stage`; progress never moves backwards. */
 void bootsplash_stage(bootsplash_stage_t stage);
 
-/* Applies one progress report from init (see docs/BOOT_SPLASH.md). Returns 0
-   or a negative errno for a malformed report. */
-int bootsplash_report(const uint8_t *data, uint32_t size);
+/* Applies one progress report (see docs/BOOT_SPLASH.md). Returns 0, -EINVAL
+   for a malformed report, or -EROFS for a well-formed one from a sender that
+   is not init (`from_init` clear). */
+int bootsplash_report(const uint8_t *data, uint32_t size, int from_init);
 
 /* Removes the splash and gives the screen back to the kernel console. */
 void bootsplash_abort(void);
