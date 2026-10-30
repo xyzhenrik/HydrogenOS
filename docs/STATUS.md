@@ -332,3 +332,12 @@ Integrated on branch `milestone-0.5` (smoke passes, ext2 `e2fsck` clean).
 
 Open follow-ups: no sync/fsync syscall, no ftruncate, no TCP congestion control/reassembly,
 orphans are not reparented, init polls children every 10 ms (no SIGCHLD), ext2 mtime not from RTC.
+
+### Desktop polish (merged into 0.5, 2026-10-30)
+
+Window-manager fixes (no stale shadow pixels, taskbar restore, themed chrome, maximize to work area, Alt+Tab),
+Terminal hosting the real shell, redesigned Files app, Spotlight-style launcher, gap-buffer editor,
+new root layout (`/bin`, `/sbin`, `/lib/tests`, `/etc`, `/tmp`, `/home/user`; see `docs/FS_LAYOUT.md`).
+Older sections above still mention the pre-layout paths `/init` and `/init.rc`.
+Open: no top bar, no Escape key from the kernel keyboard driver, brace expansion and Ctrl+D EOF in the shell,
+`wc` missing, `ls` lists `./` and `../`.
