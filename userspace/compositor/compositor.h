@@ -89,6 +89,11 @@ void comp_style_glass(CompWindowStyle *style);
 int comp_set_window_style(Window *win, const CompWindowStyle *style);
 
 /* Damage tracking */
+/* Screen area the window paints: its rectangle plus the shadow it casts, as
+   set by its style and the theme's shadow tokens. Anything that moves, resizes,
+   hides or destroys a window must repaint this, not just the rectangle. */
+CompRect comp_window_extent(const Window *win);
+/* Damages the whole extent of the window, shadow included. */
 int comp_damage_window(Window *win);
 int comp_damage_rectp(Window *win, const CompRect *rect);
 int comp_damage_rect(Window *win, int x, int y, int w, int h);

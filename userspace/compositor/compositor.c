@@ -162,8 +162,7 @@ static const GfxShadow *window_shadow(const Window *win) {
     return gfx_shadow_get(radius, fx->shadow_blur_radius);
 }
 
-/* Screen area a window paints: its rectangle plus its shadow. */
-static CompRect window_extent(const Window *win) {
+CompRect comp_window_extent(const Window *win) {
     CompRect extent = { win->x, win->y, win->w, win->h };
     const GfxShadow *shadow = window_shadow(win);
     if (shadow) {
@@ -301,7 +300,7 @@ int comp_destroy_window(Window *win) {
         }
     }
     if (comp_focused_id == win->id) comp_focused_id = 0;
-    CompRect extent = window_extent(win);
+    CompRect extent = comp_window_extent(win);
     damage_add(&extent);
     struct CompWindowState *st = win->state;
     if (st->presented && st->last_visible) damage_add(&st->last_extent);
@@ -332,11 +331,13 @@ int comp_resize_window(Window *win, int w, int h) {
         win->surface = buf;
         st->surface_capacity = capacity;
     }
-    damage_add_rect(win->x, win->y, win->w, win->h);
+    CompRect before = comp_window_extent(win);
     win->w = w;
     win->h = h;
     win->damaged = 1;
-    damage_add_rect(win->x, win->y, win->w, win->h);
+    CompRect after = comp_window_extent(win);
+    damage_add(&before);
+    damage_add(&after);
     return 0;
 }
 
@@ -385,7 +386,7 @@ int comp_raise(Window *win) {
         }
     }
     /* The shadow now falls over windows it used to be beneath. */
-    CompRect extent = window_extent(win);
+    CompRect extent = comp_window_extent(win);
     damage_add(&extent);
     return 0;
 }
@@ -404,7 +405,8 @@ int comp_focus(Window *win) {
 int comp_damage_window(Window *win) {
     if (!win) return -1;
     win->damaged = 1;
-    damage_add_rect(win->x, win->y, win->w, win->h);
+    CompRect extent = comp_window_extent(win);
+    damage_add(&extent);
     return 0;
 }
 
@@ -543,7 +545,7 @@ static void reconcile_windows(void) {
         if (!win) continue;
         struct CompWindowState *st = win->state;
         CompRect rect = { win->x, win->y, win->w, win->h };
-        CompRect extent = window_extent(win);
+        CompRect extent = comp_window_extent(win);
         int visible = win->visible != 0;
         int restyled = !style_equal(&win->style, &st->last_style);
         /* The extent also depends on live theme shadow tokens, so compare it
@@ -651,6 +653,21 @@ static void glass_refresh(Window *win, int z_index) {
     if (rect_clip(&spread, &view, &repaint)) damage_add(&repaint);
 }
 
+/* Each frame is composed into the back buffer over the damaged areas only,
+   so after the flip the new back buffer is a frame behind. Copying the
+   damage over keeps both buffers equal to the complete current frame, which
+   is what lets presenting a merged bounding box of several damage rects show
+   no stale pixels in the gaps between them. */
+static void sync_back_buffer(void) {
+    for (int d = 0; d < comp_damage_cnt; ++d) {
+        const CompRect *r = &comp_damages[d];
+        for (int y = r->y; y < r->y + r->h; ++y) {
+            size_t offset = (size_t)y * (size_t)comp_w + (size_t)r->x;
+            memcpy(comp_back + offset, comp_front + offset, (size_t)r->w * sizeof(uint32_t));
+        }
+    }
+}
+
 int comp_render(void) {
     if (!comp_initialized) return -1;
     reconcile_windows();
@@ -682,6 +699,7 @@ int comp_render(void) {
         comp_last_damages[i] = comp_damages[i];
 
     comp_flip();
+    sync_back_buffer();
     comp_damage_cnt = 0;
     return 0;
 }
