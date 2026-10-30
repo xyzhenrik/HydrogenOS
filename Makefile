@@ -214,17 +214,14 @@ USER_LIBCTEST_OBJ = $(BUILD_DIR)/user_libctest.o
 USER_LIBCTEST_ELF = $(BUILD_DIR)/user_libctest.elf
 OBJS = $(BUILD_DIR)/boot.o $(BUILD_DIR)/kernel.o $(BUILD_DIR)/console.o $(BUILD_DIR)/serial.o $(BUILD_DIR)/panic.o \
        $(BUILD_DIR)/paging.o $(BUILD_DIR)/time.o $(BUILD_DIR)/pmm.o $(BUILD_DIR)/kheap.o $(BUILD_DIR)/string.o \
-       $(BUILD_DIR)/vmm_user.o $(BUILD_DIR)/syscall.o $(BUILD_DIR)/process.o $(BUILD_DIR)/signal.o $(BUILD_DIR)/pipe.o $(BUILD_DIR)/waitq.o $(BUILD_DIR)/spawn_args.o $(BUILD_DIR)/usercopy.o \
-       $(BUILD_DIR)/vmm_user.o $(BUILD_DIR)/syscall.o $(BUILD_DIR)/process.o $(BUILD_DIR)/credentials.o $(BUILD_DIR)/signal.o $(BUILD_DIR)/pipe.o $(BUILD_DIR)/spawn_args.o $(BUILD_DIR)/usercopy.o \
+       $(BUILD_DIR)/vmm_user.o $(BUILD_DIR)/syscall.o $(BUILD_DIR)/process.o $(BUILD_DIR)/credentials.o $(BUILD_DIR)/signal.o $(BUILD_DIR)/pipe.o $(BUILD_DIR)/waitq.o $(BUILD_DIR)/spawn_args.o $(BUILD_DIR)/usercopy.o \
        $(BUILD_DIR)/keyboard.o $(BUILD_DIR)/mouse.o $(BUILD_DIR)/elf_loader.o \
        $(BUILD_DIR)/exit_record.o \
        $(BUILD_DIR)/ata.o $(BUILD_DIR)/pci.o $(BUILD_DIR)/virtio.o $(BUILD_DIR)/virtio_blk.o $(BUILD_DIR)/virtio_gpu.o $(BUILD_DIR)/bochs_display.o $(BUILD_DIR)/virtio_input.o $(BUILD_DIR)/virtio_net.o $(BUILD_DIR)/msi.o $(BUILD_DIR)/block.o $(BUILD_DIR)/block_cache.o $(BUILD_DIR)/mbr.o \
        $(BUILD_DIR)/net.o $(BUILD_DIR)/ethernet.o $(BUILD_DIR)/arp.o $(BUILD_DIR)/ipv4.o $(BUILD_DIR)/icmp.o \
        $(BUILD_DIR)/udp.o $(BUILD_DIR)/socket.o \
-       $(BUILD_DIR)/ext2.o $(BUILD_DIR)/dcache.o $(BUILD_DIR)/vfs.o $(BUILD_DIR)/ramfs.o $(BUILD_DIR)/procfs.o \
+       $(BUILD_DIR)/ext2.o $(BUILD_DIR)/dcache.o $(BUILD_DIR)/vfs.o $(BUILD_DIR)/vfs_access.o $(BUILD_DIR)/ramfs.o $(BUILD_DIR)/procfs.o \
        $(BUILD_DIR)/framebuffer.o $(BUILD_DIR)/fb_console.o $(BUILD_DIR)/bootsplash.o $(BUILD_DIR)/cmdline.o $(BUILD_DIR)/font8x16.o $(BUILD_DIR)/renderer2d.o $(BUILD_DIR)/psf2.o $(BUILD_DIR)/ttf.o $(BUILD_DIR)/tty.o \
-       $(BUILD_DIR)/ext2.o $(BUILD_DIR)/vfs.o $(BUILD_DIR)/vfs_access.o $(BUILD_DIR)/ramfs.o $(BUILD_DIR)/procfs.o \
-       $(BUILD_DIR)/framebuffer.o $(BUILD_DIR)/fb_console.o $(BUILD_DIR)/font8x16.o $(BUILD_DIR)/renderer2d.o $(BUILD_DIR)/psf2.o $(BUILD_DIR)/ttf.o $(BUILD_DIR)/tty.o \
        $(BUILD_DIR)/gdt.o $(BUILD_DIR)/gdt_asm.o \
        $(BUILD_DIR)/idt.o $(BUILD_DIR)/isr.o $(BUILD_DIR)/isr_c.o $(BUILD_DIR)/isr_stubs.o \
        $(BUILD_DIR)/syscall_arch.o $(BUILD_DIR)/syscall_entry.o \

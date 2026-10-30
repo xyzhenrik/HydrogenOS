@@ -317,6 +317,8 @@ static inline long sys_readlink(const char *path, char *buf, unsigned long cap) 
    reads as zero. Returns 0 or -errno (-27 EFBIG beyond 2 GiB - 1). */
 static inline long sys_truncate(const char *path, unsigned long length) {
     return syscall2(SYS_TRUNCATE, (long)path, (long)length);
+}
+
 static inline long sys_getuid(void) {
     return syscall1(SYS_GETUID, 0);
 }

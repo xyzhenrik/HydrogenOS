@@ -8,6 +8,8 @@
 #define TRUNCATED_BYTES 120
 #define EMPTY_PATH "/exectest.empty"
 #define BROKEN_PATH "/exectest.broken"
+#define TEXT_PATH "/exectest.text"
+#define EXECUTABLE_MODE 0755
 #define CHAIN_LENGTH 10
 #define HUGE_ARG_BYTES 4000
 #define PATTERN_BYTES 4096
@@ -62,6 +64,16 @@ static unsigned long load_u64(const char *image, unsigned long offset) {
     return value;
 }
 
+/* New files are created without execute bits, which execve refuses before it
+ * looks at the contents. */
+static long write_executable(const char *path, const void *data,
+                             unsigned long size) {
+    long rc = sys_writef(path, data, size);
+    if (rc != 0)
+        return rc;
+    return sys_chmod(path, EXECUTABLE_MODE);
+}
+
 /* A header plus a single PT_LOAD entry that claims `vaddr`/`memsz` and no
  * file bytes: complete enough to pass validation, wrong enough that the
  * loader has to refuse it. */
@@ -79,7 +91,7 @@ static long exec_broken_segment(unsigned long vaddr, unsigned long memsz) {
     store_u64(file_image, phoff + PHDR_VADDR_OFFSET, vaddr);
     store_u64(file_image, phoff + PHDR_FILESZ_OFFSET, 0);
     store_u64(file_image, phoff + PHDR_MEMSZ_OFFSET, memsz);
-    if (sys_writef(BROKEN_PATH, file_image, sizeof(file_image)) != 0)
+    if (write_executable(BROKEN_PATH, file_image, sizeof(file_image)) != 0)
         return fail("write broken image", 0);
     rc = execve(BROKEN_PATH, argv, 0);
     sys_unlink(BROKEN_PATH);
@@ -96,7 +108,7 @@ static int check_failures(void) {
     long got;
 
     if (check_fails("missing file", execve("/exectest.missing", argv, 0), -ENOENT) ||
-        check_fails("not an ELF", execve("/init.rc", argv, 0), -ENOEXEC) ||
+        check_fails("not executable", execve("/init.rc", argv, 0), -EACCES) ||
         check_fails("null path", execve(0, argv, 0), -EFAULT) ||
         check_fails("bad argv entry", execve(HELPER_PATH, bad_argv, 0), -EFAULT) ||
         check_fails("bad argv vector",
@@ -115,16 +127,23 @@ static int check_failures(void) {
     close((int)fd);
     if (got != (long)sizeof(file_image))
         return fail("read helper", got);
-    if (sys_writef(TRUNCATED_PATH, file_image, sizeof(file_image)) != 0)
+    if (write_executable(TRUNCATED_PATH, file_image, sizeof(file_image)) != 0)
         return fail("write truncated image", 0);
     got = execve(TRUNCATED_PATH, argv, 0);
     sys_unlink(TRUNCATED_PATH);
     if (check_fails("truncated ELF", got, -ENOEXEC))
         return 1;
 
+    if (write_executable(TEXT_PATH, "not an image\n", 13) != 0)
+        return fail("write text file", 0);
+    got = execve(TEXT_PATH, argv, 0);
+    sys_unlink(TEXT_PATH);
+    if (check_fails("not an ELF", got, -ENOEXEC))
+        return 1;
+
     if (check_fails("directory", execve("/", argv, 0), -EACCES))
         return 1;
-    if (sys_writef(EMPTY_PATH, "", 0) != 0)
+    if (write_executable(EMPTY_PATH, "", 0) != 0)
         return fail("write empty file", 0);
     got = execve(EMPTY_PATH, argv, 0);
     sys_unlink(EMPTY_PATH);
