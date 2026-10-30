@@ -318,3 +318,17 @@
 - init daemons are never restarted, and there is no per-service start timeout.
 - Ctrl+C only via virtio-input, not serial; there is no syscall to block signals (sigprocmask).
 - Positioned file writes are still whole-file read-modify-write.
+
+## Milestone 0.5 "Hardening & Throughput" (2026-10-30)
+
+Integrated on branch `milestone-0.5` (smoke passes, ext2 `e2fsck` clean).
+
+- Write protection (CR0.WP asserted), NX user stack/data, exit records published before status copy.
+- Generic wait queues; init supervises daemons (restart policies, timeouts); `SYS_SIGPROCMASK`.
+- ext2 positioned writes, `SYS_TRUNCATE`, write-back block cache (flush after ~1 s, on unmount, power-off).
+- Minimal TCP (stream sockets, loopback, retransmission); `execve`; users/groups/file permissions.
+- Directory entry cache, performance counters (`top`), boot splash.
+- Keyboard: DE/US tables fixed (AltGr, `< > |`, Caps Lock), virtio-input shares the PS/2 path; font glyph fixes; `tools/uitest`.
+
+Open follow-ups: no sync/fsync syscall, no ftruncate, no TCP congestion control/reassembly,
+orphans are not reparented, init polls children every 10 ms (no SIGCHLD), ext2 mtime not from RTC.
