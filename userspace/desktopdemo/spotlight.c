@@ -1,7 +1,7 @@
 #include "spotlight.h"
 
-#include "fuzzy.h"
 #include "gfx_effects.h"
+#include "launcher_model.h"
 #include "mini_libc.h"
 #include "syscall.h"
 
@@ -36,17 +36,9 @@
 
 /* ---- model limits ---- */
 
-#define MAX_ITEMS       8
-#define MAX_PROGRAMS    96
-#define MAX_RECENT      3
-/* Shorter queries must occur literally: two letters are a subsequence of
-   nearly every name. */
-#define LOOSE_QUERY_MIN 3
+/* Programs beyond this are not searchable; the panel says so. */
+#define MAX_PROGRAMS    256
 #define MAX_CHILDREN    16
-#define NAME_CAP        48
-#define PATH_CAP        96
-
-#define ENTRY_PROGRAM   (-1)
 
 #define ERROR_NOT_SUPPORTED 38
 
@@ -56,22 +48,6 @@
 #define OPACITY_BUTTON     22
 #define OPACITY_SEPARATOR  30
 #define OPACITY_BADGE      40
-
-typedef struct Entry {
-    int app_id;             /* host app id, or ENTRY_PROGRAM */
-    char name[NAME_CAP];
-    char path[PATH_CAP];    /* programs only */
-} Entry;
-
-typedef struct Item {
-    Entry entry;
-    int section;
-    int y;
-} Item;
-
-/* While searching the groups are applications and programs; otherwise the
-   pinned applications come first and the recent entries after them. */
-enum { SECTION_APPS = 0, SECTION_PROGRAMS = 1, SECTION_COUNT };
 
 enum { POWER_NONE = 0, POWER_SHUTDOWN, POWER_RESTART };
 
@@ -86,19 +62,19 @@ static struct {
     char query[QUERY_MAX + 1];
     int query_length;
 
-    Item items[MAX_ITEMS];
-    int item_count;
-    int header_y[SECTION_COUNT];    /* -1: section has no header */
+    LauncherResults results;
+    int row_y[LAUNCHER_MAX_ITEMS];
+    int header_y[LAUNCHER_SECTION_COUNT];   /* -1: section has no header */
     int selected;                   /* items, then the two power buttons */
 
     int confirm;                    /* POWER_*: confirmation is showing */
     int confirm_accept;             /* focus is on the confirming button */
     char notice[64];
 
-    Entry programs[MAX_PROGRAMS];
+    LauncherEntry programs[MAX_PROGRAMS];
     int program_count;
-    Entry recent[MAX_RECENT];
-    int recent_count;
+    int programs_truncated;
+    LauncherRecents recents;
     long children[MAX_CHILDREN];
     int child_count;
 } g;
@@ -113,12 +89,14 @@ static void copy_text(char *dst, size_t cap, const char *src) {
 
 static int has_text(const char *s) { return s && s[0]; }
 
-static int button_y(void) {
-    return g.height - POWER_H + (POWER_H - BUTTON_H) / 2;
+/* A failure to report wins over the standing hint about the program list. */
+static const char *panel_notice(void) {
+    if (has_text(g.notice)) return g.notice;
+    return g.programs_truncated ? "Some programs are not listed." : "";
 }
 
-static int entry_same(const Entry *a, const Entry *b) {
-    return a->app_id == b->app_id && strcmp(a->path, b->path) == 0;
+static int button_y(void) {
+    return g.height - POWER_H + (POWER_H - BUTTON_H) / 2;
 }
 
 /* ---- programs on disk ---- */
@@ -149,19 +127,26 @@ static int program_known(const char *name) {
     return 0;
 }
 
+/* Stops at the first program that does not fit and records that the list is
+   incomplete. */
 static void scan_directory(const char *dir) {
     dirent_t entry;
-    for (int pos = 0; g.program_count < MAX_PROGRAMS && readdir_pos(dir, pos, &entry) == 1; ++pos) {
-        if (entry.d_type == 4 || strlen(entry.d_name) >= NAME_CAP) continue;
+    for (int pos = 0; readdir_pos(dir, pos, &entry) == 1; ++pos) {
+        if (entry.d_type == 4 || strlen(entry.d_name) >= LAUNCHER_NAME_CAP) continue;
         if (is_system_program(entry.d_name) || program_known(entry.d_name)) continue;
 
-        Entry *program = &g.programs[g.program_count];
-        program->app_id = ENTRY_PROGRAM;
-        copy_text(program->name, sizeof(program->name), entry.d_name);
-        if (snprintf(program->path, sizeof(program->path), "%s%s%s", dir,
-                     strcmp(dir, "/") == 0 ? "" : "/", entry.d_name) >= (int)sizeof(program->path))
+        LauncherEntry program;
+        program.app_id = LAUNCHER_ENTRY_PROGRAM;
+        copy_text(program.name, sizeof(program.name), entry.d_name);
+        if (snprintf(program.path, sizeof(program.path), "%s%s%s", dir,
+                     strcmp(dir, "/") == 0 ? "" : "/", entry.d_name) >= (int)sizeof(program.path))
             continue;
-        if (is_executable(program->path)) ++g.program_count;
+        if (!is_executable(program.path)) continue;
+        if (g.program_count == MAX_PROGRAMS) {
+            g.programs_truncated = 1;
+            return;
+        }
+        g.programs[g.program_count++] = program;
     }
 }
 
@@ -169,12 +154,13 @@ static void scan_directory(const char *dir) {
    shell's default PATH, where the system image keeps its programs. */
 static void scan_programs(void) {
     g.program_count = 0;
+    g.programs_truncated = 0;
     scan_directory("/bin");
-    scan_directory("/usr/bin");
-    scan_directory("/");
+    if (!g.programs_truncated) scan_directory("/usr/bin");
+    if (!g.programs_truncated) scan_directory("/");
 }
 
-static void program_directory(const Entry *program, char *out, size_t cap) {
+static void program_directory(const LauncherEntry *program, char *out, size_t cap) {
     size_t length = strlen(program->path) - strlen(program->name);
     if (length > 1) --length;   /* drop the separator, but keep a lone "/" */
     if (length >= cap) length = cap - 1;
@@ -184,100 +170,31 @@ static void program_directory(const Entry *program, char *out, size_t cap) {
 
 /* ---- search ---- */
 
-typedef struct Candidate {
-    int score;
-    Entry entry;
-} Candidate;
-
-static void rank_insert(Candidate *list, int *count, int capacity, const Candidate *candidate) {
-    int at = *count;
-    if (at == capacity && candidate->score <= list[capacity - 1].score) return;
-    if (at == capacity) --at;
-    while (at > 0 && list[at - 1].score < candidate->score) {
-        list[at] = list[at - 1];
-        --at;
-    }
-    list[at] = *candidate;
-    if (*count < capacity) ++*count;
-}
-
-static void add_item(const Entry *entry, int section) {
-    if (g.item_count >= MAX_ITEMS) return;
-    g.items[g.item_count].entry = *entry;
-    g.items[g.item_count].section = section;
-    ++g.item_count;
-}
-
-static void add_group(const Candidate *list, int count, int section) {
-    for (int i = 0; i < count; ++i) add_item(&list[i].entry, section);
-}
-
-/* The group whose best match is better comes first. */
-static void collect_matches(void) {
-    unsigned int mode = g.query_length >= LOOSE_QUERY_MIN ? FUZZY_LOOSE : FUZZY_STRICT;
-    Candidate apps[MAX_ITEMS];
-    Candidate programs[MAX_ITEMS];
-    int app_matches = 0;
-    int program_matches = 0;
-
-    for (int i = 0; i < g.host->app_count; ++i) {
-        const SpotlightApp *app = &g.host->apps[i];
-        int score = fuzzy_score(g.query, app->name, mode);
-        int keyword_score = has_text(app->keywords)
-            ? fuzzy_score(g.query, app->keywords, FUZZY_STRICT) / 2 : 0;
-        if (keyword_score > score) score = keyword_score;
-        if (score == 0) continue;
-        Candidate candidate = { score, { app->id, "", "" } };
-        copy_text(candidate.entry.name, sizeof(candidate.entry.name), app->name);
-        rank_insert(apps, &app_matches, MAX_ITEMS, &candidate);
-    }
-    for (int i = 0; i < g.program_count; ++i) {
-        int score = fuzzy_score(g.query, g.programs[i].name, mode);
-        if (score == 0) continue;
-        Candidate candidate = { score, g.programs[i] };
-        rank_insert(programs, &program_matches, MAX_ITEMS, &candidate);
-    }
-
-    if (program_matches > 0 && (app_matches == 0 || programs[0].score > apps[0].score)) {
-        add_group(programs, program_matches, SECTION_PROGRAMS);
-        add_group(apps, app_matches, SECTION_APPS);
-    } else {
-        add_group(apps, app_matches, SECTION_APPS);
-        add_group(programs, program_matches, SECTION_PROGRAMS);
-    }
-}
-
-static void collect_suggestions(void) {
-    for (int i = 0; i < g.host->app_count && g.item_count < MAX_ITEMS; ++i) {
-        Entry entry = { g.host->apps[i].id, "", "" };
-        copy_text(entry.name, sizeof(entry.name), g.host->apps[i].name);
-        add_item(&entry, SECTION_APPS);
-    }
-    for (int i = 0; i < g.recent_count; ++i) add_item(&g.recent[i], SECTION_PROGRAMS);
-}
-
 /* Fills the item list for the current query and assigns each item its row. */
 static void rebuild_items(void) {
-    g.item_count = 0;
-    if (g.query_length > 0) collect_matches(); else collect_suggestions();
+    if (g.query_length > 0)
+        launcher_search(g.query, g.host->apps, g.host->app_count, g.programs, g.program_count, &g.results);
+    else
+        launcher_suggest(g.host->apps, g.host->app_count, &g.recents, &g.results);
 
     int y = LIST_Y;
     int previous = -1;
-    for (int s = 0; s < SECTION_COUNT; ++s) g.header_y[s] = -1;
-    for (int i = 0; i < g.item_count; ++i) {
-        if (g.items[i].section != previous) {
-            g.header_y[g.items[i].section] = y;
+    for (int s = 0; s < LAUNCHER_SECTION_COUNT; ++s) g.header_y[s] = -1;
+    for (int i = 0; i < g.results.count; ++i) {
+        int section = g.results.items[i].section;
+        if (section != previous) {
+            g.header_y[section] = y;
             y += HEADER_H;
-            previous = g.items[i].section;
+            previous = section;
         }
-        g.items[i].y = y;
+        g.row_y[i] = y;
         y += ROW_H;
     }
 }
 
 static const char *section_title(int section) {
-    if (g.query_length > 0) return section == SECTION_APPS ? "Applications" : "Programs";
-    return section == SECTION_APPS ? "Pinned" : "Recent";
+    if (g.query_length > 0) return section == LAUNCHER_SECTION_APPS ? "Applications" : "Programs";
+    return section == LAUNCHER_SECTION_APPS ? "Pinned" : "Recent";
 }
 
 /* ---- drawing ---- */
@@ -304,7 +221,7 @@ static void draw_text(int x, int y, const char *text, uint32_t rgb) {
 
 /* Draws text that is cut with an ellipsis when it exceeds max_chars. */
 static void draw_text_fit(int x, int y, const char *text, int max_chars, uint32_t rgb) {
-    char line[NAME_CAP + PATH_CAP];
+    char line[LAUNCHER_NAME_CAP + LAUNCHER_PATH_CAP];
     if (max_chars <= 0) return;
     if ((int)strlen(text) <= max_chars) {
         draw_text(x, y, text, rgb);
@@ -381,17 +298,18 @@ static void draw_program_badge(int x, int y, int size, const char *name, uint32_
 
 static void draw_item(int index) {
     const SettingsPalette *p = g.palette;
-    const Item *item = &g.items[index];
+    const LauncherItem *item = &g.results.items[index];
+    int row_y = g.row_y[index];
     int selected = index == g.selected;
     int row_w = SPOTLIGHT_WIDTH - 2 * PAD;
     uint32_t ink = selected ? p->on_accent : p->chrome_text;
     uint32_t dim = selected ? gfx_mix(p->accent, p->on_accent, 170) : p->chrome_dim;
-    char hint[PATH_CAP];
+    char hint[LAUNCHER_PATH_CAP];
 
-    if (selected) fill_round(PAD, item->y, row_w, ROW_H, ROW_RADIUS, p->accent, 255);
+    if (selected) fill_round(PAD, row_y, row_w, ROW_H, ROW_RADIUS, p->accent, 255);
 
-    int icon_y = item->y + (ROW_H - ICON_SIZE) / 2;
-    if (item->entry.app_id == ENTRY_PROGRAM) {
+    int icon_y = row_y + (ROW_H - ICON_SIZE) / 2;
+    if (item->entry.app_id == LAUNCHER_ENTRY_PROGRAM) {
         draw_program_badge(ICON_X, icon_y, ICON_SIZE, item->entry.name, ink, OPACITY_BADGE);
         program_directory(&item->entry, hint, sizeof(hint));
         if (strcmp(hint, "/") == 0) copy_text(hint, sizeof(hint), "Program");
@@ -402,7 +320,7 @@ static void draw_item(int index) {
 
     int hint_chars = (int)strlen(hint);
     int hint_x = PAD + row_w - 12 - hint_chars * CHAR_W;
-    int text_y = item->y + (ROW_H - CHAR_H) / 2;
+    int text_y = row_y + (ROW_H - CHAR_H) / 2;
     draw_text(hint_x, text_y, hint, dim);
     draw_text_fit(NAME_X, text_y, item->entry.name, (hint_x - 12 - NAME_X) / CHAR_W, ink);
 }
@@ -461,8 +379,8 @@ static void draw_power_button(int action, int selected) {
 static void draw_power_section(void) {
     int separator_y = g.height - POWER_H;
     fill_round(PAD, separator_y, SPOTLIGHT_WIDTH - 2 * PAD, 1, 0, g.palette->chrome_text, OPACITY_SEPARATOR);
-    draw_power_button(POWER_SHUTDOWN, g.selected == g.item_count);
-    draw_power_button(POWER_RESTART, g.selected == g.item_count + 1);
+    draw_power_button(POWER_SHUTDOWN, g.selected == g.results.count);
+    draw_power_button(POWER_RESTART, g.selected == g.results.count + 1);
 }
 
 /* Confirmation dialog buttons: Cancel on the left, the action on the right. */
@@ -513,8 +431,8 @@ static void draw_confirmation(void) {
    window changes height and position together. */
 static int wanted_height(void) {
     if (g.confirm != POWER_NONE) return CONFIRM_H;
-    int list_end = g.item_count > 0 ? g.items[g.item_count - 1].y + ROW_H : LIST_Y + EMPTY_H;
-    return list_end + LIST_GAP + (has_text(g.notice) ? NOTICE_H : 0) + POWER_H;
+    int list_end = g.results.count > 0 ? g.row_y[g.results.count - 1] + ROW_H : LIST_Y + EMPTY_H;
+    return list_end + LIST_GAP + (has_text(panel_notice()) ? NOTICE_H : 0) + POWER_H;
 }
 
 static void fit_window(void) {
@@ -535,13 +453,14 @@ static void draw(void) {
         draw_confirmation();
     } else {
         draw_field();
-        for (int s = 0; s < SECTION_COUNT; ++s)
+        for (int s = 0; s < LAUNCHER_SECTION_COUNT; ++s)
             if (g.header_y[s] >= 0)
                 draw_text(PAD + 8, g.header_y[s] + (HEADER_H - CHAR_H) / 2 + 2, section_title(s), p->chrome_dim);
-        for (int i = 0; i < g.item_count; ++i) draw_item(i);
-        if (g.item_count == 0) draw_no_results();
-        if (has_text(g.notice))
-            draw_text_centered(SPOTLIGHT_WIDTH / 2, g.height - POWER_H - NOTICE_H + (NOTICE_H - CHAR_H) / 2, g.notice, p->danger);
+        for (int i = 0; i < g.results.count; ++i) draw_item(i);
+        if (g.results.count == 0) draw_no_results();
+        if (has_text(panel_notice()))
+            draw_text_centered(SPOTLIGHT_WIDTH / 2, g.height - POWER_H - NOTICE_H + (NOTICE_H - CHAR_H) / 2,
+                               panel_notice(), has_text(g.notice) ? p->danger : p->chrome_dim);
         draw_power_section();
     }
     comp_damage_window(g.window);
@@ -549,24 +468,13 @@ static void draw(void) {
 
 /* ---- actions ---- */
 
-static void remember(const Entry *entry) {
-    int at = 0;
-    while (at < g.recent_count && !entry_same(&g.recent[at], entry)) ++at;
-    if (at == g.recent_count) {
-        if (g.recent_count < MAX_RECENT) ++g.recent_count;
-        at = g.recent_count - 1;
-    }
-    for (; at > 0; --at) g.recent[at] = g.recent[at - 1];
-    g.recent[0] = *entry;
-}
-
 static void set_notice(const char *text) {
     copy_text(g.notice, sizeof(g.notice), text);
 }
 
 /* Programs have no window of their own yet, so they run detached with their
    output discarded. */
-static int start_program(const Entry *program) {
+static int start_program(const LauncherEntry *program) {
     if (g.child_count == MAX_CHILDREN) spotlight_service();
     if (g.child_count == MAX_CHILDREN) {
         set_notice("Too many programs are running.");
@@ -584,20 +492,20 @@ static int start_program(const Entry *program) {
 }
 
 static void launch(int index) {
-    Entry entry = g.items[index].entry;
+    LauncherEntry entry = g.results.items[index].entry;
 
-    if (entry.app_id == ENTRY_PROGRAM && start_program(&entry) != 0) {
+    if (entry.app_id == LAUNCHER_ENTRY_PROGRAM && start_program(&entry) != 0) {
         draw();
         return;
     }
-    remember(&entry);
+    launcher_recents_add(&g.recents, &entry);
     spotlight_close();
-    if (entry.app_id != ENTRY_PROGRAM) g.host->launch(entry.app_id);
+    if (entry.app_id != LAUNCHER_ENTRY_PROGRAM) g.host->launch(entry.app_id);
 }
 
 static void begin_confirmation(int action) {
     g.confirm = action;
-    g.confirm_accept = 1;
+    g.confirm_accept = 0;
     g.notice[0] = '\0';
     draw();
 }
@@ -628,7 +536,7 @@ static void select_item(int selected) {
 /* Selection indices: the items, then the two power buttons; -1 is nothing,
    which is what an empty result list starts with so Enter cannot power off. */
 static int first_selection(void) {
-    return g.item_count > 0 ? 0 : -1;
+    return g.results.count > 0 ? 0 : -1;
 }
 
 static void query_changed(void) {
@@ -683,7 +591,7 @@ void spotlight_redraw(void) {
 }
 
 static int step_selection(int step) {
-    int last = g.item_count + 1;
+    int last = g.results.count + 1;
     int next = g.selected + step;
     return next < 0 ? g.selected : next > last ? last : next;
 }
@@ -724,12 +632,12 @@ int spotlight_key(long key) {
         return 1;
     }
 
-    int power_zone = g.selected >= g.item_count;
+    int power_zone = g.selected >= g.results.count;
     switch (key) {
     case '\n':
         if (g.selected < 0) break;
-        if (g.selected < g.item_count) launch(g.selected);
-        else begin_confirmation(g.selected == g.item_count ? POWER_SHUTDOWN : POWER_RESTART);
+        if (g.selected < g.results.count) launch(g.selected);
+        else begin_confirmation(g.selected == g.results.count ? POWER_SHUTDOWN : POWER_RESTART);
         break;
     case '\b':
     case 0x7F:
@@ -745,13 +653,13 @@ int spotlight_key(long key) {
         select_item(step_selection(1));
         break;
     case '\t':
-        select_item(g.selected == g.item_count + 1 ? 0 : g.selected + 1);
+        select_item(g.selected == g.results.count + 1 ? 0 : g.selected + 1);
         break;
     case KBD_KEY_LEFT:
-        if (power_zone) select_item(g.item_count);
+        if (power_zone) select_item(g.results.count);
         break;
     case KBD_KEY_RIGHT:
-        if (power_zone) select_item(g.item_count + 1);
+        if (power_zone) select_item(g.results.count + 1);
         break;
     default:
         if (key >= 0x20 && key <= 0x7E && g.query_length < QUERY_MAX) {
@@ -775,11 +683,11 @@ static int target_at(int x, int y) {
                 return accept;
         return -1;
     }
-    for (int i = 0; i < g.item_count; ++i)
-        if (inside(x, y, PAD, g.items[i].y, SPOTLIGHT_WIDTH - 2 * PAD, ROW_H)) return i;
+    for (int i = 0; i < g.results.count; ++i)
+        if (inside(x, y, PAD, g.row_y[i], SPOTLIGHT_WIDTH - 2 * PAD, ROW_H)) return i;
     for (int action = POWER_SHUTDOWN; action <= POWER_RESTART; ++action)
         if (inside(x, y, button_x(action), button_y(), BUTTON_W, BUTTON_H))
-            return g.item_count + action - POWER_SHUTDOWN;
+            return g.results.count + action - POWER_SHUTDOWN;
     return -1;
 }
 
@@ -791,10 +699,10 @@ int spotlight_press(int x, int y) {
     if (target < 0) return 1;
     if (g.confirm != POWER_NONE) {
         if (target == 1) perform_power(); else end_confirmation();
-    } else if (target < g.item_count) {
+    } else if (target < g.results.count) {
         launch(target);
     } else {
-        begin_confirmation(target == g.item_count ? POWER_SHUTDOWN : POWER_RESTART);
+        begin_confirmation(target == g.results.count ? POWER_SHUTDOWN : POWER_RESTART);
     }
     return 1;
 }

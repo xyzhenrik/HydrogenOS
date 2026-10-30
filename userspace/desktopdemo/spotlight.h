@@ -6,17 +6,14 @@
    launcher only draws into it and shows or hides it. */
 
 #include "compositor.h"
+#include "launcher_model.h"
 #include "settings.h"
 
 #define SPOTLIGHT_WIDTH  400
 /* The tallest the panel gets; it is shorter when there is less to show. */
 #define SPOTLIGHT_HEIGHT 532
 
-typedef struct SpotlightApp {
-    int id;                 /* host-defined, non-negative */
-    const char *name;
-    const char *keywords;   /* extra search terms, space separated */
-} SpotlightApp;
+typedef LauncherApp SpotlightApp;
 
 typedef struct SpotlightHost {
     const SpotlightApp *apps;   /* listed in this order while the query is empty */

@@ -178,7 +178,8 @@ USER_SETTINGS_UI_OBJ = $(BUILD_DIR)/user_settings_ui.o
 USER_SETTINGS_OBJS = $(USER_SETTINGS_OBJ) $(USER_SETTINGS_INFO_OBJ) $(USER_SETTINGS_UI_OBJ)
 USER_FUZZY_OBJ = $(BUILD_DIR)/user_fuzzy.o
 USER_SPOTLIGHT_OBJ = $(BUILD_DIR)/user_spotlight.o
-USER_LAUNCHER_OBJS = $(USER_SPOTLIGHT_OBJ) $(USER_FUZZY_OBJ)
+USER_LAUNCHER_MODEL_OBJ = $(BUILD_DIR)/user_launcher_model.o
+USER_LAUNCHER_OBJS = $(USER_SPOTLIGHT_OBJ) $(USER_LAUNCHER_MODEL_OBJ) $(USER_FUZZY_OBJ)
 USER_DATE_OBJ = $(BUILD_DIR)/user_date.o
 USER_DATE_ELF = $(BUILD_DIR)/user_date.elf
 USER_RTCTEST_OBJ = $(BUILD_DIR)/user_rtctest.o
@@ -797,12 +798,12 @@ $(USER_POWERCHECK_OBJ): userspace/powercheck/powercheck.c userspace/lib/syscall.
 $(USER_POWERCHECK_ELF): $(USER_POWERCHECK_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
 	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_POWERCHECK_OBJ)
 
-$(USER_FUZZYCHECK_OBJ): userspace/fuzzycheck/fuzzycheck.c userspace/lib/fuzzy.h userspace/lib/mini_libc.h
+$(USER_FUZZYCHECK_OBJ): userspace/fuzzycheck/fuzzycheck.c userspace/lib/fuzzy.h userspace/lib/launcher_model.h userspace/lib/mini_libc.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(USER_CFLAGS) -c $< -o $@
 
-$(USER_FUZZYCHECK_ELF): $(USER_FUZZYCHECK_OBJ) $(USER_FUZZY_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
-	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_FUZZYCHECK_OBJ) $(USER_FUZZY_OBJ)
+$(USER_FUZZYCHECK_ELF): $(USER_FUZZYCHECK_OBJ) $(USER_LAUNCHER_MODEL_OBJ) $(USER_FUZZY_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
+	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_FUZZYCHECK_OBJ) $(USER_LAUNCHER_MODEL_OBJ) $(USER_FUZZY_OBJ)
 
 $(USER_PIPEPRODUCER_OBJ): userspace/pipeproducer/pipeproducer.c userspace/lib/syscall.h userspace/lib/mini_libc.h
 	mkdir -p $(BUILD_DIR)
@@ -883,7 +884,11 @@ $(USER_FUZZY_OBJ): userspace/lib/fuzzy.c userspace/lib/fuzzy.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(USER_CFLAGS) -c $< -o $@
 
-$(USER_SPOTLIGHT_OBJ): userspace/desktopdemo/spotlight.c userspace/desktopdemo/spotlight.h userspace/compositor/compositor.h userspace/lib/fuzzy.h userspace/lib/gfx_effects.h userspace/lib/mini_libc.h userspace/lib/settings.h userspace/lib/syscall.h
+$(USER_LAUNCHER_MODEL_OBJ): userspace/lib/launcher_model.c userspace/lib/launcher_model.h userspace/lib/fuzzy.h userspace/lib/mini_libc.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(USER_SPOTLIGHT_OBJ): userspace/desktopdemo/spotlight.c userspace/desktopdemo/spotlight.h userspace/compositor/compositor.h userspace/lib/launcher_model.h userspace/lib/gfx_effects.h userspace/lib/mini_libc.h userspace/lib/settings.h userspace/lib/syscall.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(USER_CFLAGS) -Iuserspace/compositor -Iuserspace/desktopdemo -c $< -o $@
 
