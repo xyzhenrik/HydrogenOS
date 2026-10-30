@@ -25,6 +25,14 @@ void net_count_rx_drop(void) {
     net_iface.rx_dropped++;
 }
 
+uint32_t net_entropy(void) {
+    uint32_t low;
+    uint32_t high;
+
+    __asm__ volatile("rdtsc" : "=a"(low), "=d"(high));
+    return (low ^ (high * 0x9E3779B1u)) * 2654435761u;
+}
+
 int net_ipv4_is_own(uint32_t ipv4) {
     return ipv4 == net_iface.ipv4 || net_ipv4_is_loopback(ipv4);
 }

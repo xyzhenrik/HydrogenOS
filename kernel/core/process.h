@@ -150,6 +150,7 @@ typedef struct process {
     uint8_t waiting_poll_has_deadline;
     uint8_t waiting_poll_net; /* poll set contains a socket */
     int waiting_socket_fd;
+    uint8_t waiting_socket_kind; /* net_wait_kind_t of the blocked socket call */
     /* Pipes the blocked poll watches, snapshotted at block time so a pipe
      * event can find its waiters without touching their address spaces. */
     struct kernel_pipe *waiting_poll_pipes[PROCESS_POLL_MAX_FDS];
@@ -218,9 +219,10 @@ int process_begin_poll_many_wait(process_t *p, uintptr_t array_ptr,
 int process_handle_attach_socket(process_t *p, struct net_socket *socket);
 /* 0, -1 for an invalid fd, -2 when the fd is not a socket. */
 int process_fd_socket(process_t *p, int fd, struct net_socket **out);
-/* Blocks p until the socket behind fd has a datagram; the scheduler then
- * repeats the pending SYS_RECVFROM with the registers saved at syscall entry. */
-int process_begin_socket_recv_wait(process_t *p, int fd);
+/* Blocks p until the socket behind fd is ready for the operation 'kind' (a
+ * net_wait_kind_t); the scheduler then repeats the pending syscall with the
+ * registers saved at syscall entry. */
+int process_begin_socket_wait(process_t *p, int fd, uint8_t kind);
 int process_fd_seek(process_t *p, int fd, int64_t off, int whence,
                     uint64_t *out_pos);
 int process_fd_poll(process_t *p, int fd, uint32_t events,

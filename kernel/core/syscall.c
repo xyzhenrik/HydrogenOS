@@ -28,6 +28,7 @@ void fb_console_clear(void);
 #include "net/net.h"
 #include "net/socket.h"
 #include "net/udp.h"
+#include "socket_syscall.h"
 
 #include <stddef.h>
 #include <stdint.h>
@@ -346,6 +347,9 @@ uint64_t syscall_handle(regs_t *r) {
             return (uint64_t)-EFAULT;
         if (fd < 0 || fd == 0)
             return (uint64_t)-EBADF;
+        uint64_t socket_result;
+        if (socket_syscall_stream_io(proc, r, 1, &socket_result))
+            return socket_result;
         uint32_t wrote = 0;
         int rc = process_fd_write(proc, fd, (const uint8_t *)buf,
                                   (uint32_t)len, &wrote);
@@ -374,6 +378,9 @@ uint64_t syscall_handle(regs_t *r) {
             return (uint64_t)-EFAULT;
         if (fd < 0 || fd == 1 || fd == 2)
             return (uint64_t)-EBADF;
+        uint64_t socket_result;
+        if (socket_syscall_stream_io(proc, r, 0, &socket_result))
+            return socket_result;
         uint32_t got = 0;
         int rc = process_fd_read(proc, fd, (uint8_t *)buf, (uint32_t)len, &got);
         if (rc == 1) {
@@ -1087,12 +1094,19 @@ uint64_t syscall_handle(regs_t *r) {
         rc = net_socket_recvfrom(socket, buf, len, from, &received);
         if (rc == 0)
             return received;
+        if (rc != -EAGAIN)
+            return (uint64_t)(int64_t)rc;
         if ((flags & NET_MSG_DONTWAIT) != 0)
             return (uint64_t)-EAGAIN;
-        if (process_begin_socket_recv_wait(proc, (int)r->rdi) != 0)
+        if (process_begin_socket_wait(proc, (int)r->rdi, NET_WAIT_RECV) != 0)
             return (uint64_t)-EBADF;
         return 0;
     }
+    case SYS_CONNECT:
+    case SYS_LISTEN:
+    case SYS_ACCEPT:
+    case SYS_SHUTDOWN_SOCK:
+        return socket_syscall_dispatch(process_current(), r);
     case SYS_KILL:
         return (uint64_t)signal_kill((uint32_t)r->rdi, (int)r->rsi);
     case SYS_SIGACTION:

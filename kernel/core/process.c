@@ -10,6 +10,8 @@
 #include "paging.h"
 #include "net/netif.h"
 #include "net/socket.h"
+#include "net/tcp.h"
+#include "socket_syscall.h"
 #include "syscall.h"
 #include "usercopy.h"
 
@@ -896,6 +898,8 @@ static int process_resume_blocked_socket(process_t *p) {
     if (!p || p->state != PROCESS_RUNNABLE || p->waiting_socket_fd < 0)
         return 0;
 
+    if (p->waiting_socket_kind != NET_WAIT_RECV)
+        return socket_syscall_resume(p);
     if (process_fd_socket(p, p->waiting_socket_fd, &socket) != 0) {
         p->waiting_socket_fd = -1;
         p->frame.rax = (uint64_t)-PROCESS_ERR_EBADF;
@@ -1449,13 +1453,14 @@ int process_fd_socket(process_t *p, int fd, struct net_socket **out) {
     return 0;
 }
 
-int process_begin_socket_recv_wait(process_t *p, int fd) {
+int process_begin_socket_wait(process_t *p, int fd, uint8_t kind) {
     struct net_socket *socket = 0;
 
     if (!p || p == &kernel_proc || process_fd_socket(p, fd, &socket) != 0)
         return -1;
     p->state = PROCESS_BLOCKED_SOCKET;
     p->waiting_socket_fd = fd;
+    p->waiting_socket_kind = kind;
     return 0;
 }
 
@@ -1783,16 +1788,20 @@ int process_fd_poll(process_t *p, int fd, uint32_t events,
             ready |= PROCESS_POLL_HUP;
         }
         break;
-    case PROCESS_HANDLE_SOCKET:
-        if ((events & PROCESS_POLL_READ) != 0 &&
-            net_socket_poll_readable(entry->resource.socket)) {
+    case PROCESS_HANDLE_SOCKET: {
+        unsigned socket_ready = net_socket_poll(entry->resource.socket);
+
+        if ((events & PROCESS_POLL_READ) != 0 && (socket_ready & NET_POLL_READ) != 0) {
             ready |= PROCESS_POLL_READ;
         }
-        /* A UDP send never waits for queue space. */
-        if ((events & PROCESS_POLL_WRITE) != 0) {
+        if ((events & PROCESS_POLL_WRITE) != 0 && (socket_ready & NET_POLL_WRITE) != 0) {
             ready |= PROCESS_POLL_WRITE;
         }
+        if ((events & PROCESS_POLL_HUP) != 0 && (socket_ready & NET_POLL_HUP) != 0) {
+            ready |= PROCESS_POLL_HUP;
+        }
         break;
+    }
     case PROCESS_HANDLE_NULL_WRITER:
     case PROCESS_HANDLE_CONSOLE_WRITER:
         if ((events & PROCESS_POLL_WRITE) != 0) {
@@ -2039,7 +2048,7 @@ static void process_update_socket_waits(void) {
         if (it->alive && it->state == PROCESS_BLOCKED_SOCKET) {
             struct net_socket *socket = 0;
             if (process_fd_socket(it, it->waiting_socket_fd, &socket) != 0 ||
-                net_socket_pending(socket))
+                net_socket_wait_ready(socket, (net_wait_kind_t)it->waiting_socket_kind))
                 it->state = PROCESS_RUNNABLE;
         } else if (received && it->alive && it->state == PROCESS_BLOCKED_POLL &&
                    it->waiting_poll_net) {
@@ -2156,6 +2165,7 @@ static int process_resume(process_t *p) {
 
 /* Wakes every process whose wait is bounded by time or by a kernel poll. */
 static void process_update_timed_waits(void) {
+    tcp_tick();
     process_wake_sleepers();
     process_update_poll_timeouts();
     process_update_kernel_waits();

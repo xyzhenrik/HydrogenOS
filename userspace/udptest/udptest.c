@@ -106,7 +106,7 @@ static int check_socket_creation(void) {
     int count = 0;
 
     EXPECT("socket bad family", sys_socket(3, NET_SOCK_DGRAM, 0), ERR_EAFNOSUPPORT);
-    EXPECT("socket stream", sys_socket(NET_AF_INET, 1, 0), ERR_EPROTOTYPE);
+    EXPECT("socket raw", sys_socket(NET_AF_INET, 3, 0), ERR_EPROTOTYPE);
     EXPECT("socket bad protocol", sys_socket(NET_AF_INET, NET_SOCK_DGRAM, 6),
            ERR_EPROTONOSUPPORT);
 
