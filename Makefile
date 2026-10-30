@@ -160,6 +160,10 @@ USER_DESKTOPTEST_TASKBAR_OBJ = $(BUILD_DIR)/user_desktoptest_taskbar.o
 USER_DESKTOPTEST_LAUNCHER_OBJ = $(BUILD_DIR)/user_desktoptest_launcher.o
 USER_DESKTOPTEST_FILEMANAGER_OBJ = $(BUILD_DIR)/user_desktoptest_filemanager.o
 USER_GFX_EFFECTS_OBJ = $(BUILD_DIR)/user_gfx_effects.o
+USER_EDITOR_LIB_OBJS = $(BUILD_DIR)/user_textbuffer.o $(BUILD_DIR)/user_textedit.o $(BUILD_DIR)/user_clipboard.o
+USER_APP_EDITOR_OBJ = $(BUILD_DIR)/user_app_editor.o
+USER_EDITORTEST_OBJ = $(BUILD_DIR)/user_editortest.o
+USER_EDITORTEST_ELF = $(BUILD_DIR)/user_editortest.elf
 USER_INIT_OBJ = $(BUILD_DIR)/user_init.o
 USER_INIT_ELF = $(BUILD_DIR)/user_init.elf
 USER_SHELL_MODULES = shell line_editor lexer parser expand env exec jobs builtins diag output
@@ -881,8 +885,23 @@ $(USER_DESKTOPDEMO_OBJ): userspace/desktopdemo/desktopdemo.c userspace/composito
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(USER_CFLAGS) -Iuserspace/compositor -c $< -o $@
 
-$(USER_DESKTOPDEMO_ELF): $(USER_DESKTOPDEMO_OBJ) $(USER_COMPOSITOR_OBJ) $(USER_GFX_EFFECTS_OBJ) $(USER_DESKTOPTEST_THEME_OBJ) $(USER_WALLCLOCK_OBJ) $(USER_SETTINGS_OBJS) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
-	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_DESKTOPDEMO_OBJ) $(USER_COMPOSITOR_OBJ) $(USER_GFX_EFFECTS_OBJ) $(USER_DESKTOPTEST_THEME_OBJ) $(USER_WALLCLOCK_OBJ) $(USER_SETTINGS_OBJS)
+$(USER_DESKTOPDEMO_ELF): $(USER_DESKTOPDEMO_OBJ) $(USER_APP_EDITOR_OBJ) $(USER_EDITOR_LIB_OBJS) $(USER_COMPOSITOR_OBJ) $(USER_GFX_EFFECTS_OBJ) $(USER_DESKTOPTEST_THEME_OBJ) $(USER_WALLCLOCK_OBJ) $(USER_SETTINGS_OBJS) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
+	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_DESKTOPDEMO_OBJ) $(USER_APP_EDITOR_OBJ) $(USER_EDITOR_LIB_OBJS) $(USER_COMPOSITOR_OBJ) $(USER_GFX_EFFECTS_OBJ) $(USER_DESKTOPTEST_THEME_OBJ) $(USER_WALLCLOCK_OBJ) $(USER_SETTINGS_OBJS)
+
+$(USER_APP_EDITOR_OBJ): userspace/desktopdemo/app_editor.c
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -Iuserspace/compositor -c $< -o $@
+
+$(USER_EDITOR_LIB_OBJS): $(BUILD_DIR)/user_%.o: userspace/lib/%.c
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(USER_EDITORTEST_OBJ): userspace/editortest/editortest.c
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(USER_EDITORTEST_ELF): $(USER_EDITORTEST_OBJ) $(USER_EDITOR_LIB_OBJS) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
+	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_EDITORTEST_OBJ) $(USER_EDITOR_LIB_OBJS)
 
 $(USER_DESKTOPTEST_OBJ): userspace/desktoptest/desktoptest.c userspace/compositor/compositor.h userspace/lib/gfx_effects.h userspace/lib/mini_libc.h userspace/lib/widgets.h userspace/lib/layout.h userspace/lib/theme.h userspace/lib/taskbar.h userspace/lib/launcher.h userspace/lib/filemanager.h userspace/lib/settings.h userspace/lib/settings_info.h userspace/lib/settings_ui.h userspace/lib/window_geometry.h
 	mkdir -p $(BUILD_DIR)

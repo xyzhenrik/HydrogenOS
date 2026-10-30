@@ -81,11 +81,17 @@ static inline void buffer_put(uint16_t c) {
     }
 }
 
-int keyboard_read_char(void) {
+int keyboard_read_event(void) {
     if (buf_head == buf_tail) return -1;
     uint16_t c = keybuf[buf_tail];
     buf_tail = (uint8_t)((buf_tail + 1) % KB_BUF_SIZE);
     return (int)(c);
+}
+
+/* Text consoles have no use for modifier flags on navigation keys. */
+int keyboard_read_char(void) {
+    int c = keyboard_read_event();
+    return c < 0 ? c : (c & KEY_CODE_MASK);
 }
 
 void keyboard_handle_scancode(uint8_t scancode) {
@@ -125,6 +131,11 @@ void keyboard_handle_scancode(uint8_t scancode) {
         return;
     }
 
+    if (scancode == 0x01 && !extended) {
+        buffer_put(KEY_ESCAPE);
+        return;
+    }
+
     if (extended) {
         uint16_t code = 0;
         switch (scancode) {
@@ -135,9 +146,16 @@ void keyboard_handle_scancode(uint8_t scancode) {
             case 0x47: code = KEY_HOME; break;
             case 0x4F: code = KEY_END; break;
             case 0x53: code = KEY_DEL; break;
+            case 0x49: code = KEY_PAGE_UP; break;
+            case 0x51: code = KEY_PAGE_DOWN; break;
+            case 0x52: code = KEY_INSERT; break;
             default: break;
         }
-        if (code) buffer_put(code);
+        if (code) {
+            if (shift) code |= KEY_MOD_SHIFT;
+            if (ctrl) code |= KEY_MOD_CTRL;
+            buffer_put(code);
+        }
         extended = 0;
         return;
     }
@@ -184,6 +202,9 @@ static void virtio_feed_key(int code, int value) {
             case 106: extended = 1; scancode = 0x4D; break; /* KEY_RIGHT */
             case 107: extended = 1; scancode = 0x4F; break; /* KEY_END */
             case 108: extended = 1; scancode = 0x50; break; /* KEY_DOWN */
+            case 104: extended = 1; scancode = 0x49; break; /* KEY_PAGEUP */
+            case 109: extended = 1; scancode = 0x51; break; /* KEY_PAGEDOWN */
+            case 110: extended = 1; scancode = 0x52; break; /* KEY_INSERT */
             case 111: extended = 1; scancode = 0x53; break; /* KEY_DELETE */
             default: return;
         }

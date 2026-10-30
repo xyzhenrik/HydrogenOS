@@ -1,7 +1,9 @@
 #include "mini_libc.h"
+#include "app_editor.h"
 #include "compositor.h"
 #include "gfx_effects.h"
 #include "icons.h"
+#include "kbd_keys.h"
 #include "settings.h"
 #include "settings_ui.h"
 #include "syscall.h"
@@ -65,7 +67,7 @@ typedef struct App {
     int resizing;
     int drag_ox, drag_oy;
     int rx, ry, rw, rh;
-    char title[24];
+    char title[64];
     /* terminal */
     char scroll[96][128];
     int scroll_count;
@@ -73,11 +75,7 @@ typedef struct App {
     char input[256];
     int input_len;
     /* editor */
-    char text[8192];
-    int text_len;
-    int cursor;
-    int scroll_line;
-    char path[128];
+    Editor *editor;
     /* files */
     char cwd[128];
     int sel;
@@ -456,8 +454,6 @@ static void term_puts(App *a, const char *text) {
     }
 }
 
-static void editor_load_path(App *e, const char *path);
-
 static int app_open_new(int kind);
 
 static void term_execute(App *a) {
@@ -553,7 +549,10 @@ static void term_execute(App *a) {
         term_puts(a, arg);
     } else if (str_eq(cmd, "edit")) {
         int idx = app_open_new(APP_EDIT);
-        if (idx >= 0 && *arg) editor_load_path(&g_apps[idx], arg);
+        if (idx >= 0 && *arg) {
+            editor_open(g_apps[idx].editor, arg);
+            draw_app_content(&g_apps[idx]);
+        }
     } else if (str_eq(cmd, "files")) {
         app_open_new(APP_FILES);
     } else if (str_eq(cmd, "run")) {
@@ -640,67 +639,6 @@ static int term_key(App *a, char c) {
     return 0;
 }
 
-/* ---------------- editor app ---------------- */
-
-static void editor_save(App *a) {
-    a->text[a->text_len] = 0;
-    const char *path = a->path[0] ? a->path : "/home/user/notes.txt";
-    if (sys_writef(path, a->text, (unsigned long)a->text_len) == 0) {
-        /* status in the first terminal */
-        for (int i = 0; i < MAX_APPS; ++i) {
-            if (g_apps[i].used && g_apps[i].kind == APP_TERM) {
-                term_puts(&g_apps[i], "editor: saved");
-                if (!g_apps[i].minimized && g_apps[i].win && g_apps[i].win->visible) {
-                    draw_terminal(&g_apps[i]);
-                    comp_damage_rect(g_bg, g_apps[i].win->x, g_apps[i].win->y,
-                                     g_apps[i].win->w, g_apps[i].win->h);
-                }
-                break;
-            }
-        }
-    }
-}
-
-static void editor_load_path(App *e, const char *path) {
-    str_copy_to(e->path, path, sizeof(e->path));
-    int fd = (int)open(path, 0);
-    if (fd < 0) return;
-    long n = read(fd, e->text, sizeof(e->text) - 1);
-    close(fd);
-    if (n < 0) return;
-    e->text_len = (int)n;
-    e->text[e->text_len] = 0;
-    e->cursor = e->text_len;
-}
-
-static void editor_key(App *a, char c) {
-    if (c == 0x13) { editor_save(a); return; }
-    if (c == 0x0F) { editor_load_path(a, a->path[0] ? a->path : "/home/user/notes.txt"); return; }
-    if (c == 0x0E) { a->text_len = 0; a->cursor = 0; a->text[0] = 0; return; }
-    if (c == '\r' || c == '\n') {
-        if (a->text_len < (int)sizeof(a->text) - 2) {
-            for (int i = a->text_len; i > a->cursor; --i) a->text[i] = a->text[i-1];
-            a->text[a->cursor] = '\n';
-            a->text_len++; a->cursor++;
-        }
-        return;
-    }
-    if (c == '\b' || c == 0x7F) {
-        if (a->cursor > 0) {
-            for (int i = a->cursor - 1; i < a->text_len - 1; ++i) a->text[i] = a->text[i+1];
-            a->text_len--; a->cursor--;
-        }
-        return;
-    }
-    if (c == '\t') c = ' ';
-    if (c < 0x20 || c > 0x7E) return;
-    if (a->text_len < (int)sizeof(a->text) - 2) {
-        for (int i = a->text_len; i > a->cursor; --i) a->text[i] = a->text[i-1];
-        a->text[a->cursor] = c;
-        a->text_len++; a->cursor++;
-    }
-}
-
 /* ---------------- rendering per app ---------------- */
 
 static void draw_titlebar(App *a) {
@@ -712,6 +650,8 @@ static void draw_titlebar(App *a) {
     fill_circle(w, 38, 15, 6, COL_MIN);
     fill_circle(w, 58, 15, 6, COL_MAX);
     comp_text_render(w, 78, 7, a->title, COL_TEXT);
+    if (a->kind == APP_EDIT && a->editor && editor_modified(a->editor))
+        fill_circle(w, 78 + (int)strlen(a->title) * 8 + 12, 15, 4, COL_ACCENT);
 }
 
 static void draw_terminal(App *a) {
@@ -745,39 +685,11 @@ static void draw_terminal(App *a) {
     }
 }
 
-static void editor_cursor_line_col(App *a, int *out_line, int *out_col) {
-    int line = 0, col = 0;
-    for (int i = 0; i < a->cursor && i < a->text_len; ++i) {
-        if (a->text[i] == '\n') { line++; col = 0; } else col++;
-    }
-    *out_line = line; *out_col = col;
-}
-
 static void draw_editor(App *a) {
-    Window *w = a->win;
-    fill_rect(w, 0, TITLE_H, w->w, w->h - TITLE_H, COL_EDIT_BG);
-    draw_titlebar(a);
-    int cols = (w->w - 2 * PAD) / 8; if (cols < 1) cols = 1;
-    int rows = (w->h - TITLE_H - PAD) / LINE_H;
-    int line = 0, start = 0, draw_row = 0;
-    for (int i = 0; i <= a->text_len && draw_row < rows; ++i) {
-        if (i == a->text_len || a->text[i] == '\n') {
-            if (line >= a->scroll_line) {
-                char tmp[160]; int k = 0, j = start;
-                while (j < i && k < cols && k < 159) tmp[k++] = a->text[j++];
-                tmp[k] = 0;
-                comp_text_render(w, PAD, TITLE_H + PAD / 2 + draw_row * LINE_H, tmp, COL_EDIT_FG);
-                draw_row++;
-            }
-            start = i + 1; line++;
-        }
-    }
-    editor_cursor_line_col(a, &line, &cols);
-    line -= a->scroll_line;
-    if (line >= 0 && line < rows) {
-        int cx = PAD + cols * 8;
-        int cy = TITLE_H + PAD / 2 + line * LINE_H;
-        fill_rect(w, cx, cy, 2, LINE_H, COL_EDIT_FG);
+    if (editor_draw(a->editor, a->win, &g_th, TITLE_H) & EDITOR_DRAW_TITLE) {
+        editor_title(a->editor, a->title, sizeof(a->title));
+        draw_titlebar(a);
+        comp_damage_rect(g_bg, a->win->x, a->win->y, a->win->w, TITLE_H);
     }
 }
 
@@ -822,7 +734,7 @@ static void draw_settings(App *a) {
 static void draw_app_content(App *a) {
     switch (a->kind) {
     case APP_TERM: draw_terminal(a); break;
-    case APP_EDIT: draw_editor(a); break;
+    case APP_EDIT: editor_invalidate(a->editor); draw_editor(a); break;
     case APP_FILES: draw_files(a); break;
     default: draw_settings(a); break;
     }
@@ -927,6 +839,8 @@ static void app_close(App *a) {
         comp_destroy_window(a->win);
         a->win = 0;
     }
+    editor_destroy(a->editor);
+    a->editor = 0;
     a->used = 0;
     a->minimized = 0;
     a->dragging = 0;
@@ -1053,7 +967,13 @@ static int app_open_new(int kind) {
         term_puts(a, "HydrogenOS shell app");
         term_puts(a, "Type 'help'. Drag the title bar to move.");
     } else if (kind == APP_EDIT) {
-        a->path[0] = 0;
+        a->editor = editor_create();
+        if (!a->editor) {
+            comp_destroy_window(a->win);
+            a->win = 0;
+            a->used = 0;
+            return -1;
+        }
     } else if (kind == APP_FILES) {
         getcwd(a->cwd, sizeof(a->cwd));
         a->sel = 0;
@@ -1170,7 +1090,11 @@ static void handle_press(int mx, int my) {
         }
         if (ly < TITLE_H) {
             int dx = lx - 18, dy = ly - 15;
-            if (dx * dx + dy * dy <= 36) { app_close(a); return; }
+            if (dx * dx + dy * dy <= 36) {
+                if (a->kind == APP_EDIT && !editor_close_allowed(a->editor)) draw_editor(a);
+                else app_close(a);
+                return;
+            }
             dx = lx - 38;
             if (dx * dx + dy * dy <= 36) { app_minimize(a); return; }
             dx = lx - 58;
@@ -1222,7 +1146,7 @@ static void handle_press(int mx, int my) {
                                     if (str_eq(a->cwd, "/")) full[k++] = '/';
                                     else { str_copy_to(full, a->cwd, sizeof(full)); k = 0; while (full[k]) k++; full[k++] = '/'; }
                                     str_copy_to(full + k, de.d_name, (int)sizeof(full) - k);
-                                    editor_load_path(&g_apps[e], full);
+                                    editor_open(g_apps[e].editor, full);
                                     draw_app_content(&g_apps[e]);
                                 }
                             }
@@ -1235,6 +1159,10 @@ static void handle_press(int mx, int my) {
                 comp_damage_rect(g_bg, w->x, w->y, w->w, w->h);
                 return;
             }
+        } else if (a->kind == APP_EDIT) {
+            editor_mouse_press(a->editor, lx, ly, time_ms());
+            draw_editor(a);
+            return;
         } else if (a->kind == APP_SETTINGS) {
             unsigned int result = settings_ui_click(&a->settings_ui, w, lx, ly);
             if (result & SETTINGS_UI_CHANGED) {
@@ -1319,6 +1247,10 @@ static void handle_release(void) {
     for (int i = 0; i < MAX_APPS; ++i) {
         g_apps[i].dragging = 0;
         g_apps[i].resizing = 0;
+        if (g_apps[i].used && g_apps[i].kind == APP_EDIT) {
+            editor_mouse_release(g_apps[i].editor);
+            draw_editor(&g_apps[i]);
+        }
     }
 }
 
@@ -1385,7 +1317,8 @@ int main(void) {
                 dirty = 1;
                 continue;
             }
-            char c = (char)k;
+            /* Keys without a character (arrows, Escape, ...) are not terminal input. */
+            char c = k < 0x100 ? (char)k : 0;
             if (g_focus >= 0 && g_apps[g_focus].used && !g_apps[g_focus].minimized) {
                 App *a = &g_apps[g_focus];
                 if (a->kind == APP_TERM) {
@@ -1401,9 +1334,8 @@ int main(void) {
                     }
                     dirty = 1;
                 } else if (a->kind == APP_EDIT) {
-                    editor_key(a, c);
+                    editor_key(a->editor, (int)k);
                     draw_editor(a);
-                    comp_damage_rect(g_bg, a->win->x, a->win->y, a->win->w, a->win->h);
                     dirty = 1;
                 }
             }
@@ -1412,7 +1344,8 @@ int main(void) {
         int m[4] = { 0, 0, 0, 0 };
         if (sys_mouse_state(m) == 0) {
             int nmx = m[0], nmy = m[1], nbtn = m[2] & 7;
-            if (nmx != g_mx || nmy != g_my) {
+            int moved = nmx != g_mx || nmy != g_my;
+            if (moved) {
                 g_mx = nmx;
                 g_my = nmy;
                 dirty = 1;
@@ -1432,11 +1365,8 @@ int main(void) {
                     comp_damage_rect(g_bg, fa->win->x, fa->win->y, fa->win->w, fa->win->h);
                     dirty = 1;
                 } else if (fa->kind == APP_EDIT) {
-                    fa->scroll_line -= wheel;
-                    if (fa->scroll_line < 0) fa->scroll_line = 0;
-                    if (fa->scroll_line > fa->text_len) fa->scroll_line = fa->text_len;
+                    editor_scroll(fa->editor, -wheel * EDITOR_WHEEL_LINES);
                     draw_editor(fa);
-                    comp_damage_rect(g_bg, fa->win->x, fa->win->y, fa->win->w, fa->win->h);
                     dirty = 1;
                 }
             }
@@ -1444,6 +1374,12 @@ int main(void) {
             int any_drag = 0;
             for (int i = 0; i < MAX_APPS; ++i) if (g_apps[i].dragging || g_apps[i].resizing) any_drag = 1;
             if (any_drag) { handle_drag(g_mx, g_my); dirty = 1; }
+            if (moved && (g_btn & 1) && g_focus >= 0 && g_apps[g_focus].used &&
+                g_apps[g_focus].kind == APP_EDIT && !g_apps[g_focus].minimized) {
+                App *ea = &g_apps[g_focus];
+                editor_mouse_drag(ea->editor, g_mx - ea->win->x, g_my - ea->win->y);
+                draw_editor(ea);
+            }
             if (release) { handle_release(); dirty = 1; }
         }
 

@@ -164,6 +164,12 @@ Beispiel: `-2` entspricht `ENOENT`.
 - Nicht implementiert: ICMP Port Unreachable, IP-Fragmentierung (Datagramme > 1472 Byte), Broadcast, `connect`/`getsockname`.
 - Beispiel: `userspace/lib/dns.c` ist ein kleiner A-Record-Resolver (`dns_resolve_a`, Standardserver 10.0.2.3 von QEMU User-Networking); `nslookup <host> [server]` nutzt ihn.
 
+## Tastatur (sys_kbd_read, 39)
+- Nicht blockierend: liefert das naechste Ereignis oder `-1`, wenn keines ansteht.
+- Druckbare Tasten und Steuerzeichen kommen als ASCII-Wert (Ctrl+Buchstabe = 1..26, Enter `\n`, Backspace `\b`, Tab `\t`).
+- Tasten ohne Zeichen liegen ab `0x100`: Left, Right, Up, Down, Home, End, Delete, PageUp, PageDown, Insert, Escape (in dieser Reihenfolge; siehe `userspace/lib/kbd_keys.h`).
+- Navigationstasten (Pfeile, Home, End, Delete, PageUp/Down, Insert) tragen die gehaltenen Modifier als Flag-Bits: `0x1000` Shift, `0x2000` Ctrl; Maske fuer den Tastencode `0x0FFF`. Die Konsole (`read` auf stdin) sieht diese Flags nie.
+
 ## Error Codes (Subset)
 Diese errno-Werte sind als Startmenge vorgesehen:
 - `EPERM (1)`

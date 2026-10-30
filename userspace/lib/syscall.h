@@ -338,10 +338,6 @@ static inline long sys_kbd_read(void) {
     return syscall1(SYS_KBD_READ, 0);
 }
 
-/* Non-character key reported by SYS_KBD_READ: Alt+Tab (KEY_ALT_TAB in the
-   kernel's keyboard.h). */
-#define KBD_KEY_ALT_TAB 0x107
-
 static inline long sys_console_cursor(int visible) {
     return syscall1(SYS_CONSOLE_CURSOR, visible);
 }
