@@ -5,6 +5,7 @@
 #include "isr.h"
 #include "signal.h"
 #include "vmm_user.h"
+#include "waitq.h"
 
 struct kernel_pipe;
 struct net_socket;
@@ -153,12 +154,16 @@ typedef struct process {
     uint32_t waiting_poll_count;
     uint64_t waiting_poll_deadline_ms;
     uint8_t waiting_poll_has_deadline;
-    uint8_t waiting_poll_net; /* poll set contains a socket */
     int waiting_socket_fd;
-    /* Pipes the blocked poll watches, snapshotted at block time so a pipe
-     * event can find its waiters without touching their address spaces. */
-    struct kernel_pipe *waiting_poll_pipes[PROCESS_POLL_MAX_FDS];
-    uint32_t waiting_poll_pipe_count;
+    /* Wait-queue registrations of the blocked syscall. block_wait covers a
+     * pipe read or write, a socket receive and a child wait; a poll gets one
+     * entry in poll_waits per pipe or socket it watches. The queues wake
+     * these entries without looking at the address space of their owner. */
+    WaitEntry block_wait;
+    WaitEntry poll_waits[PROCESS_POLL_MAX_FDS];
+    uint32_t poll_wait_count;
+    /* Parent blocked in SYS_WAIT for this process to exit. */
+    WaitQueue exit_waiters;
     VmmUserSpace vm;
     signal_state_t signals;
     uint64_t user_cycles;   /* TSC ticks spent in user mode */

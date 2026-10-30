@@ -30,9 +30,7 @@ static uint32_t console_escape_pos = 0;
 #define PROCESS_ERR_EPIPE 32
 
 static void process_handle_release(process_handle_entry_t *entry);
-static void process_wake_pipe_waiters(kernel_pipe_t *pipe);
 static int process_resume_blocked_socket(process_t *p);
-static void process_update_socket_waits(void);
 static int process_resume_blocked_io(process_t *p);
 static int process_resume_blocked_poll(process_t *p);
 static void process_update_poll_timeouts(void);
@@ -207,8 +205,73 @@ static void process_clear_poll_wait(process_t *p) {
     p->waiting_poll_count = 0;
     p->waiting_poll_deadline_ms = 0;
     p->waiting_poll_has_deadline = 0;
-    p->waiting_poll_net = 0;
-    p->waiting_poll_pipe_count = 0;
+}
+
+/*
+ * Wait queues. A blocked process is registered on the queues of the objects
+ * whose events can end its wait, and those events wake it directly. A woken
+ * entry leaves its queue but keeps pointing at it, so that a wake which turns
+ * out spurious is answered by process_wait_rearm(). All registrations are
+ * dropped once the syscall completes, is interrupted, or the process dies.
+ */
+typedef struct process_exit_notice {
+    uint32_t pid;
+    int status;
+} process_exit_notice_t;
+
+static void process_wake_blocked(WaitEntry *entry, void *key) {
+    process_t *p = entry->owner;
+
+    (void)key;
+    p->state = PROCESS_RUNNABLE;
+}
+
+static void process_wake_child_wait(WaitEntry *entry, void *key) {
+    process_t *waiter = entry->owner;
+    const process_exit_notice_t *notice = key;
+
+    waiter->wait_result_pid = notice->pid;
+    waiter->wait_status = notice->status;
+    waiter->wait_ready = 1;
+    waiter->state = PROCESS_RUNNABLE;
+}
+
+static void process_wait_init(process_t *p) {
+    wait_entry_init(&p->block_wait, process_wake_blocked, p, 0);
+    p->poll_wait_count = 0;
+    wait_queue_init(&p->exit_waiters);
+}
+
+/* With 'cancel', a wake the process consumed without acting on it goes to the
+ * next waiter of that queue instead of getting lost. */
+static void process_wait_detach(process_t *p, int cancel) {
+    if (!p->block_wait.queue && p->poll_wait_count == 0)
+        return;
+    if (cancel)
+        wait_queue_cancel(&p->block_wait);
+    else
+        wait_queue_remove(&p->block_wait);
+    for (uint32_t i = 0; i < p->poll_wait_count; ++i)
+        wait_queue_remove(&p->poll_waits[i]);
+    p->poll_wait_count = 0;
+}
+
+static void process_wait_rearm(process_t *p) {
+    if (p->block_wait.queue && !p->block_wait.linked)
+        wait_queue_add(p->block_wait.queue, &p->block_wait);
+    for (uint32_t i = 0; i < p->poll_wait_count; ++i) {
+        WaitEntry *entry = &p->poll_waits[i];
+
+        if (!entry->linked)
+            wait_queue_add(entry->queue, entry);
+    }
+}
+
+static void process_wait_block(process_t *p, WaitQueue *queue, WaitWakeFn wake,
+                               int exclusive) {
+    process_wait_detach(p, 0);
+    wait_entry_init(&p->block_wait, wake, p, exclusive);
+    wait_queue_add(queue, &p->block_wait);
 }
 
 static void process_handle_reset(process_handle_entry_t *entry) {
@@ -488,7 +551,6 @@ static int process_handle_alloc(process_t *p, process_handle_type_t type) {
 
 static void process_handle_release(process_handle_entry_t *entry) {
     process_file_handle_t *file = 0;
-    kernel_pipe_t *pipe = 0;
     if (!entry || !entry->used) {
         if (entry) process_handle_reset(entry);
         return;
@@ -504,11 +566,9 @@ static void process_handle_release(process_handle_entry_t *entry) {
         }
         break;
     case PROCESS_HANDLE_PIPE_READER:
-        pipe = entry->resource.pipe;
         kernel_pipe_close_reader(entry->resource.pipe);
         break;
     case PROCESS_HANDLE_PIPE_WRITER:
-        pipe = entry->resource.pipe;
         kernel_pipe_close_writer(entry->resource.pipe);
         break;
     case PROCESS_HANDLE_SOCKET:
@@ -518,9 +578,6 @@ static void process_handle_release(process_handle_entry_t *entry) {
         break;
     }
     process_handle_reset(entry);
-    if (pipe) {
-        process_wake_pipe_waiters(pipe);
-    }
 }
 
 static int process_handle_clone(process_handle_entry_t *dst,
@@ -826,6 +883,7 @@ static int process_resume_blocked_io(process_t *p) {
     int err = PROCESS_ERR_EIO;
 
     if (!entry) {
+        process_wait_detach(p, 1);
         p->waiting_pipe = 0;
         p->waiting_handle = -1;
         p->waiting_is_stdio = 0;
@@ -837,6 +895,7 @@ static int process_resume_blocked_io(process_t *p) {
     if (user_range_validate(buf, len,
                             entry->type == PROCESS_HANDLE_PIPE_READER ?
                                 USER_ACCESS_WRITE : USER_ACCESS_READ) != 0) {
+        process_wait_detach(p, 1);
         p->waiting_pipe = 0;
         p->waiting_handle = -1;
         p->waiting_is_stdio = 0;
@@ -851,6 +910,7 @@ static int process_resume_blocked_io(process_t *p) {
             process_stdio_read(p, p->waiting_handle, buf, len, &done) :
             process_handle_read(p, p->waiting_handle, buf, len, &done);
         if (rc == 1) {
+            process_wait_rearm(p);
             p->state = PROCESS_BLOCKED_PIPE_READ;
             return -1;
         }
@@ -860,6 +920,7 @@ static int process_resume_blocked_io(process_t *p) {
             process_stdio_write(p, p->waiting_handle, in, len, &done) :
             process_handle_write(p, p->waiting_handle, in, len, &done);
         if (rc == 1) {
+            process_wait_rearm(p);
             p->state = PROCESS_BLOCKED_PIPE_WRITE;
             return -1;
         }
@@ -897,6 +958,7 @@ static int process_resume_blocked_socket(process_t *p) {
         return 0;
 
     if (process_fd_socket(p, p->waiting_socket_fd, &socket) != 0) {
+        process_wait_detach(p, 1);
         p->waiting_socket_fd = -1;
         p->frame.rax = (uint64_t)-PROCESS_ERR_EBADF;
         return 0;
@@ -906,6 +968,7 @@ static int process_resume_blocked_socket(process_t *p) {
         (p->frame.r8 != 0 &&
          user_range_validate((const void *)(uintptr_t)p->frame.r8,
                              sizeof(net_sockaddr_t), USER_ACCESS_WRITE) != 0)) {
+        process_wait_detach(p, 1);
         p->waiting_socket_fd = -1;
         p->frame.rax = (uint64_t)-PROCESS_ERR_EFAULT;
         return 0;
@@ -914,6 +977,7 @@ static int process_resume_blocked_socket(process_t *p) {
                              (size_t)p->frame.rdx,
                              (net_sockaddr_t *)(uintptr_t)p->frame.r8, &received);
     if (rc != 0) {
+        process_wait_rearm(p);
         p->state = PROCESS_BLOCKED_SOCKET;
         return -1;
     }
@@ -957,6 +1021,7 @@ static int process_resume_blocked_poll(process_t *p) {
     if (p->waiting_poll_count > 0 ? (ready_count == 0) : (ready == 0)) {
         if (!p->waiting_poll_has_deadline ||
             time_ms() < p->waiting_poll_deadline_ms) {
+            process_wait_rearm(p);
             p->state = PROCESS_BLOCKED_POLL;
             return -1;
         }
@@ -970,56 +1035,6 @@ static int process_resume_blocked_poll(process_t *p) {
     process_clear_poll_wait(p);
     p->frame.rax = result;
     return 0;
-}
-
-static int process_poll_watches_pipe(const process_t *p,
-                                    const kernel_pipe_t *pipe) {
-    for (uint32_t i = 0; i < p->waiting_poll_pipe_count; ++i) {
-        if (p->waiting_poll_pipes[i] == pipe) {
-            return 1;
-        }
-    }
-    return 0;
-}
-
-/*
- * Makes runnable exactly the processes whose wait can make progress after an
- * event on 'pipe': readers when data arrived or the last writer left, writers
- * when space opened up or the last reader left, and pollers watching it. A
- * wake that loses the race against another waiter is harmless: the resume path
- * re-checks the condition and blocks again.
- */
-static void process_wake_pipe_waiters(kernel_pipe_t *pipe) {
-    if (!pipe || !process_list) return;
-    process_t *it = process_list;
-    do {
-        if (it->alive) {
-            switch ((process_state_t)it->state) {
-            case PROCESS_BLOCKED_PIPE_READ:
-                if (it->waiting_pipe == pipe &&
-                    (kernel_pipe_has_data(pipe) ||
-                     !kernel_pipe_has_writers(pipe))) {
-                    it->state = PROCESS_RUNNABLE;
-                }
-                break;
-            case PROCESS_BLOCKED_PIPE_WRITE:
-                if (it->waiting_pipe == pipe &&
-                    (kernel_pipe_has_space(pipe) ||
-                     !kernel_pipe_has_readers(pipe))) {
-                    it->state = PROCESS_RUNNABLE;
-                }
-                break;
-            case PROCESS_BLOCKED_POLL:
-                if (process_poll_watches_pipe(it, pipe)) {
-                    it->state = PROCESS_RUNNABLE;
-                }
-                break;
-            default:
-                break;
-            }
-        }
-        it = it->next;
-    } while (it && it != process_list);
 }
 
 static void process_update_poll_timeouts(void) {
@@ -1065,6 +1080,7 @@ void process_init(uint64_t *kernel_pml4) {
     kernel_proc.waiting_pipe = 0;
     kernel_proc.waiting_socket_fd = -1;
     process_clear_poll_wait(&kernel_proc);
+    process_wait_init(&kernel_proc);
     kernel_proc.kernel_wait_fn = 0;
     kernel_proc.kernel_wait_arg = 0;
     process_handles_reset(&kernel_proc);
@@ -1109,6 +1125,7 @@ process_t *process_create(uint64_t *pml4, uint32_t parent_pid) {
     p->kernel_cycles = 0;
     p->perf_was_blocked = 0;
     process_clear_poll_wait(p);
+    process_wait_init(p);
     p->kernel_wait_fn = 0;
     p->kernel_wait_arg = 0;
     process_handles_reset(p);
@@ -1127,6 +1144,7 @@ process_t *process_create(uint64_t *pml4, uint32_t parent_pid) {
 
 void process_destroy(process_t *p) {
     if (!p || p == &kernel_proc) return;
+    process_wait_detach(p, 1);
     if (process_list == p) {
         if (p->next == p) {
             process_list = 0;
@@ -1166,8 +1184,13 @@ void process_set_current(process_t *p) {
 }
 
 static void process_record_exit(process_t *p, int status) {
+    process_exit_notice_t notice = { p->pid, status };
+
     p->alive = 0;
     p->state = PROCESS_RUNNABLE;
+
+    /* A process that dies while queued must not stay on any queue. */
+    process_wait_detach(p, 1);
 
     /* Close this process's handles at exit time (not just at reap time) so
        pipe EOF/HUP propagates and processes blocked in poll/write wake up. */
@@ -1185,13 +1208,7 @@ static void process_record_exit(process_t *p, int status) {
     /* A parent blocked on exactly this child is handed the status directly.
        The record is published regardless and only claimed once the status has
        actually reached the parent's memory. */
-    if (parent->state == PROCESS_BLOCKED_WAIT &&
-        parent->waiting_for_pid == p->pid) {
-        parent->state = PROCESS_RUNNABLE;
-        parent->wait_result_pid = p->pid;
-        parent->wait_status = status;
-        parent->wait_ready = 1;
-    }
+    wait_queue_wake_all(&p->exit_waiters, &notice);
 }
 
 void process_mark_exited(process_t *p, int status) {
@@ -1304,7 +1321,12 @@ int process_wait(process_t *waiter, uint32_t pid, int *out_status) {
 }
 
 int process_begin_wait(process_t *waiter, uint32_t pid, uintptr_t status_ptr) {
+    process_t *child;
+
     if (!waiter || waiter == &kernel_proc || pid == 0) return -1;
+    child = process_find_child(waiter->pid, pid);
+    if (!child) return -1;
+    process_wait_block(waiter, &child->exit_waiters, process_wake_child_wait, 0);
     waiter->state = PROCESS_BLOCKED_WAIT;
     waiter->waiting_for_pid = pid;
     waiter->waiting_status_ptr = status_ptr;
@@ -1437,6 +1459,7 @@ int process_begin_socket_recv_wait(process_t *p, int fd) {
 
     if (!p || p == &kernel_proc || process_fd_socket(p, fd, &socket) != 0)
         return -1;
+    process_wait_block(p, net_socket_recv_waiters(socket), process_wake_blocked, 1);
     p->state = PROCESS_BLOCKED_SOCKET;
     p->waiting_socket_fd = fd;
     return 0;
@@ -1525,6 +1548,8 @@ int process_begin_pipe_read_wait(process_t *p, int handle) {
     process_handle_entry_t *entry = process_handle_get(p, handle);
     if (!entry || entry->type != PROCESS_HANDLE_PIPE_READER)
         return -1;
+    process_wait_block(p, kernel_pipe_read_waiters(entry->resource.pipe),
+                       process_wake_blocked, 1);
     p->state = PROCESS_BLOCKED_PIPE_READ;
     p->waiting_handle = handle;
     p->waiting_is_stdio = 0;
@@ -1537,6 +1562,8 @@ int process_begin_pipe_write_wait(process_t *p, int handle) {
     process_handle_entry_t *entry = process_handle_get(p, handle);
     if (!entry || entry->type != PROCESS_HANDLE_PIPE_WRITER)
         return -1;
+    process_wait_block(p, kernel_pipe_write_waiters(entry->resource.pipe),
+                       process_wake_blocked, 1);
     p->state = PROCESS_BLOCKED_PIPE_WRITE;
     p->waiting_handle = handle;
     p->waiting_is_stdio = 0;
@@ -1549,6 +1576,8 @@ int process_begin_pipe_read_wait_stdio(process_t *p, int stdio_fd) {
     process_handle_entry_t *entry = process_stdio_get(p, stdio_fd);
     if (!entry || entry->type != PROCESS_HANDLE_PIPE_READER)
         return -1;
+    process_wait_block(p, kernel_pipe_read_waiters(entry->resource.pipe),
+                       process_wake_blocked, 1);
     p->state = PROCESS_BLOCKED_PIPE_READ;
     p->waiting_handle = stdio_fd;
     p->waiting_is_stdio = 1;
@@ -1561,6 +1590,8 @@ int process_begin_pipe_write_wait_stdio(process_t *p, int stdio_fd) {
     process_handle_entry_t *entry = process_stdio_get(p, stdio_fd);
     if (!entry || entry->type != PROCESS_HANDLE_PIPE_WRITER)
         return -1;
+    process_wait_block(p, kernel_pipe_write_waiters(entry->resource.pipe),
+                       process_wake_blocked, 1);
     p->state = PROCESS_BLOCKED_PIPE_WRITE;
     p->waiting_handle = stdio_fd;
     p->waiting_is_stdio = 1;
@@ -1587,11 +1618,25 @@ int process_begin_fd_write_wait(process_t *p, int fd) {
 
 static void process_poll_watch_entry(process_t *p,
                                      const process_handle_entry_t *entry) {
-    if (!entry || (entry->type != PROCESS_HANDLE_PIPE_READER &&
-                   entry->type != PROCESS_HANDLE_PIPE_WRITER)) {
+    WaitQueue *queue = 0;
+    WaitEntry *wait;
+
+    if (!entry)
+        return;
+    switch ((process_handle_type_t)entry->type) {
+    case PROCESS_HANDLE_PIPE_READER:
+    case PROCESS_HANDLE_PIPE_WRITER:
+        queue = kernel_pipe_poll_waiters(entry->resource.pipe);
+        break;
+    case PROCESS_HANDLE_SOCKET:
+        queue = net_socket_poll_waiters(entry->resource.socket);
+        break;
+    default:
         return;
     }
-    p->waiting_poll_pipes[p->waiting_poll_pipe_count++] = entry->resource.pipe;
+    wait = &p->poll_waits[p->poll_wait_count++];
+    wait_entry_init(wait, process_wake_blocked, p, 0);
+    wait_queue_add(queue, wait);
 }
 
 int process_begin_fd_poll_wait(process_t *p, int fd, uint32_t events,
@@ -1620,8 +1665,7 @@ int process_begin_fd_poll_wait(process_t *p, int fd, uint32_t events,
     p->waiting_poll_events = events;
     p->waiting_poll_array_ptr = 0;
     p->waiting_poll_count = 0;
-    p->waiting_poll_net = entry->type == PROCESS_HANDLE_SOCKET;
-    p->waiting_poll_pipe_count = 0;
+    process_wait_detach(p, 0);
     process_poll_watch_entry(p, entry);
     if (timeout_ms >= 0) {
         p->waiting_poll_deadline_ms = time_ms() + (uint64_t)timeout_ms;
@@ -1649,14 +1693,11 @@ int process_begin_poll_many_wait(process_t *p, uintptr_t array_ptr,
     p->waiting_poll_events = 0;
     p->waiting_poll_array_ptr = array_ptr;
     p->waiting_poll_count = count;
-    p->waiting_poll_net = 0;
-    p->waiting_poll_pipe_count = 0;
+    process_wait_detach(p, 0);
     fds = (const process_poll_fd_t *)array_ptr;
     for (uint32_t i = 0; i < count; ++i) {
         const process_handle_entry_t *entry =
             process_fd_valid(fds[i].fd) ? process_fd_get_const(p, fds[i].fd) : 0;
-        if (entry && entry->type == PROCESS_HANDLE_SOCKET)
-            p->waiting_poll_net = 1;
         process_poll_watch_entry(p, entry);
     }
     if (timeout_ms >= 0) {
@@ -1856,11 +1897,7 @@ int process_handle_read(process_t *p, int handle, uint8_t *out, uint32_t out_sz,
     process_handle_entry_t *entry = process_handle_get(p, handle);
     if (!entry)
         return -1;
-    int rc = process_entry_read(entry, out, out_sz, out_len);
-    if (rc == 0 && *out_len > 0 && entry->type == PROCESS_HANDLE_PIPE_READER) {
-        process_wake_pipe_waiters(entry->resource.pipe);
-    }
-    return rc;
+    return process_entry_read(entry, out, out_sz, out_len);
 }
 
 int process_handle_write(process_t *p, int handle, const uint8_t *in,
@@ -1870,13 +1907,7 @@ int process_handle_write(process_t *p, int handle, const uint8_t *in,
     process_handle_entry_t *entry = process_handle_get(p, handle);
     if (!entry)
         return -1;
-    int rc = process_entry_write(entry, in, in_sz, out_len);
-    if (rc != 0)
-        return rc;
-    if (*out_len > 0 && entry->type == PROCESS_HANDLE_PIPE_WRITER) {
-        process_wake_pipe_waiters(entry->resource.pipe);
-    }
-    return 0;
+    return process_entry_write(entry, in, in_sz, out_len);
 }
 
 int process_fd_read(process_t *p, int fd, uint8_t *out, uint32_t out_sz,
@@ -1912,11 +1943,7 @@ int process_stdio_read(process_t *p, int stdio_fd, uint8_t *out, uint32_t out_sz
     process_handle_entry_t *entry = process_stdio_get_with_fallback(p, stdio_fd);
     if (!entry)
         return -1;
-    int rc = process_entry_read(entry, out, out_sz, out_len);
-    if (rc == 0 && *out_len > 0 && entry->type == PROCESS_HANDLE_PIPE_READER) {
-        process_wake_pipe_waiters(entry->resource.pipe);
-    }
-    return rc;
+    return process_entry_read(entry, out, out_sz, out_len);
 }
 
 int process_stdio_write(process_t *p, int stdio_fd, const uint8_t *in,
@@ -1926,13 +1953,7 @@ int process_stdio_write(process_t *p, int stdio_fd, const uint8_t *in,
     process_handle_entry_t *entry = process_stdio_get_with_fallback(p, stdio_fd);
     if (!entry)
         return -1;
-    int rc = process_entry_write(entry, in, in_sz, out_len);
-    if (rc != 0)
-        return rc;
-    if (*out_len > 0 && entry->type == PROCESS_HANDLE_PIPE_WRITER) {
-        process_wake_pipe_waiters(entry->resource.pipe);
-    }
-    return 0;
+    return process_entry_write(entry, in, in_sz, out_len);
 }
 
 int process_stdio_close(process_t *p, int stdio_fd) {
@@ -1997,39 +2018,12 @@ static void process_update_kernel_waits(void) {
 
 /*
  * Sockets have no interrupt-driven receive path: the NIC is polled whenever
- * some process waits on a socket. Receivers wake once their queue is
- * non-empty; poll waiters wake on any new datagram and re-check their set.
+ * some process waits on a socket, and arriving datagrams wake the waiters of
+ * their socket.
  */
 static void process_update_socket_waits(void) {
-    process_t *it;
-    int waiting = 0;
-
-    if (!process_list) return;
-
-    it = process_list;
-    do {
-        if (it->alive && (it->state == PROCESS_BLOCKED_SOCKET ||
-                          (it->state == PROCESS_BLOCKED_POLL && it->waiting_poll_net)))
-            waiting = 1;
-        it = it->next;
-    } while (it && it != process_list);
-    if (!waiting) return;
-
-    net_poll();
-    int received = net_socket_take_rx_event();
-    it = process_list;
-    do {
-        if (it->alive && it->state == PROCESS_BLOCKED_SOCKET) {
-            struct net_socket *socket = 0;
-            if (process_fd_socket(it, it->waiting_socket_fd, &socket) != 0 ||
-                net_socket_pending(socket))
-                it->state = PROCESS_RUNNABLE;
-        } else if (received && it->alive && it->state == PROCESS_BLOCKED_POLL &&
-                   it->waiting_poll_net) {
-            it->state = PROCESS_RUNNABLE;
-        }
-        it = it->next;
-    } while (it && it != process_list);
+    if (net_socket_has_waiters())
+        net_poll();
 }
 
 void process_wake_sleepers(void) {
@@ -2059,6 +2053,7 @@ int process_interrupt_wait(process_t *p) {
         p->waiting_poll_count == 0 && p->waiting_socket_fd < 0)
         return 0;
 
+    process_wait_detach(p, 1);
     p->waiting_for_pid = 0;
     p->waiting_status_ptr = 0;
     p->wait_result_pid = 0;
@@ -2134,6 +2129,7 @@ static int process_resume(process_t *p) {
     if (process_resume_blocked_poll(p) != 0) {
         return -1;
     }
+    process_wait_detach(p, 0);
     return 0;
 }
 

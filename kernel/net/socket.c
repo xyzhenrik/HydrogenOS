@@ -4,6 +4,7 @@
 #include "net_bytes.h"
 #include "netif.h"
 #include "udp.h"
+#include "core/waitq.h"
 
 #include <string.h>
 
@@ -27,11 +28,13 @@ struct net_socket {
     uint8_t rx_head;
     uint8_t rx_count;
     net_datagram_t rx[NET_SOCKET_RX_DEPTH];
+    /* Blocked receivers wake one per datagram, pollers all together. */
+    WaitQueue recv_waiters;
+    WaitQueue poll_waiters;
 };
 
 /* Single CPU, interrupts disabled inside the stack: no locking needed. */
 static net_socket_t net_sockets[NET_SOCKET_MAX];
-static int net_rx_event;
 
 static int net_address_is_local(uint32_t ipv4) {
     return ipv4 == 0 || net_ipv4_is_own(ipv4);
@@ -84,6 +87,8 @@ int net_socket_create(int family, int type, int protocol, net_socket_t **out) {
     for (int i = 0; i < NET_SOCKET_MAX; ++i) {
         if (net_sockets[i].refs == 0) {
             memset(&net_sockets[i], 0, sizeof(net_sockets[i]));
+            wait_queue_init(&net_sockets[i].recv_waiters);
+            wait_queue_init(&net_sockets[i].poll_waiters);
             net_sockets[i].refs = 1;
             *out = &net_sockets[i];
             return 0;
@@ -158,23 +163,35 @@ int net_socket_recvfrom(net_socket_t *socket, uint8_t *buf, size_t cap,
     socket->rx_head = (uint8_t)((socket->rx_head + 1) % NET_SOCKET_RX_DEPTH);
     socket->rx_count--;
     *out_len = (uint32_t)copied;
+    /* A woken receiver takes one datagram; pass the rest on. */
+    if (socket->rx_count != 0)
+        wait_queue_wake_one(&socket->recv_waiters, 0);
     return 0;
 }
 
-int net_socket_pending(const net_socket_t *socket) {
-    return socket->rx_count != 0;
+WaitQueue *net_socket_recv_waiters(net_socket_t *socket) {
+    return &socket->recv_waiters;
+}
+
+WaitQueue *net_socket_poll_waiters(net_socket_t *socket) {
+    return &socket->poll_waiters;
+}
+
+int net_socket_has_waiters(void) {
+    for (int i = 0; i < NET_SOCKET_MAX; ++i) {
+        const net_socket_t *socket = &net_sockets[i];
+
+        if (socket->refs != 0 && (!wait_queue_empty(&socket->recv_waiters) ||
+                                  !wait_queue_empty(&socket->poll_waiters)))
+            return 1;
+    }
+    return 0;
 }
 
 int net_socket_poll_readable(const net_socket_t *socket) {
     if (socket->rx_count == 0)
         net_poll();
     return socket->rx_count != 0;
-}
-
-int net_socket_take_rx_event(void) {
-    int event = net_rx_event;
-    net_rx_event = 0;
-    return event;
 }
 
 void net_socket_deliver_udp(uint32_t src, uint16_t src_port, uint32_t dst,
@@ -201,7 +218,8 @@ void net_socket_deliver_udp(uint32_t src, uint16_t src_port, uint32_t dst,
         slot->len = (uint16_t)len;
         memcpy(slot->data, data, len);
         socket->rx_count++;
-        net_rx_event = 1;
+        wait_queue_wake_one(&socket->recv_waiters, 0);
+        wait_queue_wake_all(&socket->poll_waiters, 0);
         return;
     }
 }

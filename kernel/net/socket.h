@@ -3,6 +3,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "core/waitq.h"
+
 #define NET_AF_INET     2
 #define NET_SOCK_DGRAM  2
 #define NET_IPPROTO_UDP 17
@@ -50,14 +52,18 @@ int net_socket_recvfrom(net_socket_t *socket, uint8_t *buf, size_t cap,
                         net_sockaddr_t *from, uint32_t *out_len);
 
 /* 1 when a datagram is queued. Does not poll the NIC. */
-int net_socket_pending(const net_socket_t *socket);
 
 /* Polls the NIC, then reports whether a datagram is queued. */
 int net_socket_poll_readable(const net_socket_t *socket);
 
-/* True once since the last call if any socket received a datagram. Lets the
- * scheduler wake poll waiters without inspecting their poll sets. */
-int net_socket_take_rx_event(void);
+/* Queues the socket wakes when a datagram arrives. A waiter registers before
+ * it blocks and re-checks the socket when woken. */
+WaitQueue *net_socket_recv_waiters(net_socket_t *socket);
+WaitQueue *net_socket_poll_waiters(net_socket_t *socket);
+
+/* 1 when some process is blocked on a socket: the NIC then has to be polled,
+ * because there is no interrupt-driven receive path. */
+int net_socket_has_waiters(void);
 
 /* UDP demultiplexer entry point: queues the payload on the socket bound to
  * dst:dst_port. Dropped when nobody listens or the receive queue is full. */
