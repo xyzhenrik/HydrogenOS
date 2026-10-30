@@ -108,6 +108,13 @@ int comp_height(void);
 /* Draws 8x16 bitmap text with its top-left at (x, y) and damages the window. */
 void comp_text_render(Window *win, int x, int y, const char *text, uint32_t color);
 
+/* Draws the first length bytes of text (or up to its NUL) inside the
+   window-local clip rectangle (NULL: the whole window). Unlike
+   comp_text_render it leaves damage to the caller, so a text view can repaint
+   one line and damage just that line. */
+void comp_text_draw(Window *win, int x, int y, const char *text, size_t length,
+                    uint32_t color, const CompRect *clip);
+
 /* Event loop */
 void comp_event_loop(void);
 

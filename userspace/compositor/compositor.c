@@ -791,21 +791,46 @@ int comp_window_count(void) {
     return comp_window_cnt;
 }
 
-/* Simple bitmap glyph renderer (fallback for unavailable TrueType). */
-static void glyph_render(uint32_t *buf, int stride, int buf_w, int buf_h,
+/* Simple bitmap glyph renderer (fallback for unavailable TrueType). Pixels
+   outside the clip rectangle are left alone. */
+static void glyph_render(uint32_t *buf, int stride, const CompRect *clip,
                         int x, int y, unsigned char ch, uint32_t color) {
-    if (!buf || ch < 32) return;
+    if (!buf || ch <= 32) return;
     const unsigned char *glyph = comp_font8x16[ch];
     for (int row = 0; row < 16; ++row) {
+        int py = y + row;
+        if (py < clip->y || py >= clip->y + clip->h) continue;
         unsigned char bits = glyph[row];
         for (int col = 0; col < 8; ++col) {
             if (bits & (1u << (7 - col))) {
                 int px = x + col;
-                int py = y + row;
-                if (px < 0 || py < 0 || px >= buf_w || py >= buf_h) continue;
+                if (px < clip->x || px >= clip->x + clip->w) continue;
                 buf[py * stride + px] = color;
             }
         }
+    }
+}
+
+void comp_text_draw(Window *win, int x, int y, const char *text, size_t length,
+                    uint32_t color, const CompRect *clip) {
+    if (!win || !text) return;
+    uint32_t *surf = (uint32_t *)win->surface;
+    if (!surf || !window_surface_ok(win)) return;
+    CompRect bounds = { 0, 0, win->w, win->h };
+    CompRect area;
+    if (clip) {
+        if (!rect_clip(&bounds, clip, &area)) return;
+    } else {
+        area = bounds;
+    }
+    /* Glass surfaces carry content opacity in the alpha byte. */
+    uint32_t ink = win->style.material == COMP_MATERIAL_GLASS
+        ? (color | 0xFF000000u) : (color & 0x00FFFFFFu);
+    int cx = x;
+    for (size_t i = 0; i < length && text[i]; ++i) {
+        glyph_render(surf, win->w, &area, cx, y, (unsigned char)text[i], ink);
+        cx += 8;
+        if (cx >= area.x + area.w) break;
     }
 }
 
@@ -818,6 +843,7 @@ void text_render(Window *win, int x, int y, const char *text, uint32_t color) {
     /* Glass surfaces carry content opacity in the alpha byte. */
     uint32_t ink = win->style.material == COMP_MATERIAL_GLASS
         ? (color | 0xFF000000u) : (color & 0x00FFFFFFu);
+    CompRect all = { 0, 0, win->w, win->h };
     int cx = x;
     int cy = y;
     for (size_t i = 0; text[i]; ++i) {
@@ -825,7 +851,7 @@ void text_render(Window *win, int x, int y, const char *text, uint32_t color) {
         if (ch == '\n') { cx = x; cy += 16; continue; }
         if (ch == '\r') { cx = x; continue; }
         if (ch < 32) continue;
-        glyph_render(surf, win->w, win->w, win->h, cx, cy, ch, ink);
+        glyph_render(surf, win->w, &all, cx, cy, ch, ink);
         cx += 8;
     }
     win->damaged = 1;
