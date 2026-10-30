@@ -686,12 +686,15 @@ static int process_entry_read(process_handle_entry_t *entry, uint8_t *out,
     }
 }
 
-/* Returns PROCESS_RESOURCE_IO_ERROR (-4) on filesystem failure so the
- * syscall layer can report EIO instead of EBADF. */
+/* A filesystem failure after some bytes were stored is reported as a short
+ * write: the error resurfaces on the next call, which then stores nothing.
+ * Without any progress the cause is returned as PROCESS_RESOURCE_NO_SPACE,
+ * PROCESS_RESOURCE_TOO_BIG or PROCESS_RESOURCE_IO_ERROR. */
 static int process_file_write(process_handle_entry_t *entry, const uint8_t *in,
                               uint32_t in_sz, uint32_t *out_len) {
     process_file_handle_t *file = entry->resource.file;
     uint32_t offset;
+    uint32_t written = 0;
     if (!file)
         return -1;
     offset = file->offset;
@@ -702,12 +705,20 @@ static int process_file_write(process_handle_entry_t *entry, const uint8_t *in,
         offset = st.size;
     }
     if (in_sz > UINT32_MAX - offset)
+        return PROCESS_RESOURCE_TOO_BIG;
+    int rc = vfs_write_file_at(file->path, offset, in, in_sz, &written);
+    file->offset = offset + written;
+    *out_len = written;
+    if (rc == 0 || written > 0)
+        return 0;
+    switch (rc) {
+    case -ENOSPC:
+        return PROCESS_RESOURCE_NO_SPACE;
+    case -EFBIG:
+        return PROCESS_RESOURCE_TOO_BIG;
+    default:
         return PROCESS_RESOURCE_IO_ERROR;
-    if (vfs_write_file_at(file->path, offset, in, in_sz) != 0)
-        return PROCESS_RESOURCE_IO_ERROR;
-    file->offset = offset + in_sz;
-    *out_len = in_sz;
-    return 0;
+    }
 }
 
 static int process_entry_write(process_handle_entry_t *entry, const uint8_t *in,
@@ -1824,6 +1835,21 @@ int process_fd_seek(process_t *p, int fd, int64_t off, int whence,
     entry->resource.file->offset = (uint32_t)next;
     *out_pos = (uint64_t)next;
     return 0;
+}
+
+int process_fd_truncate(process_t *p, int fd, uint32_t length) {
+    const process_handle_entry_t *entry;
+
+    if (!process_fd_valid(fd))
+        return -EBADF;
+    entry = process_fd_get_const(p, fd);
+    if (!entry)
+        return -EBADF;
+    if (entry->type != PROCESS_HANDLE_FILE || !entry->resource.file)
+        return -EINVAL;
+    if (!process_entry_can_write(entry))
+        return -EBADF;
+    return vfs_truncate(entry->resource.file->path, length);
 }
 
 int process_fd_poll(process_t *p, int fd, uint32_t events,

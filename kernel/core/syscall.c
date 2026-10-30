@@ -387,6 +387,10 @@ uint64_t syscall_handle(regs_t *r) {
             return (uint64_t)-EPIPE;
         if (rc == PROCESS_RESOURCE_IO_ERROR)
             return (uint64_t)-EIO;
+        if (rc == PROCESS_RESOURCE_NO_SPACE)
+            return (uint64_t)-ENOSPC;
+        if (rc == PROCESS_RESOURCE_TOO_BIG)
+            return (uint64_t)-EFBIG;
         if (rc != 0)
             return (uint64_t)-EBADF;
         return wrote;
@@ -1062,6 +1066,15 @@ uint64_t syscall_handle(regs_t *r) {
             return (uint64_t)-EFBIG;
         return fs_status(vfs_truncate(kpath, (uint32_t)length));
     }
+    case SYS_FTRUNCATE: {
+        if (r->rsi > UINT32_MAX)
+            return (uint64_t)-EFBIG;
+        int rc = process_fd_truncate(process_current(), (int)r->rdi,
+                                     (uint32_t)r->rsi);
+        return rc == -EBADF ? (uint64_t)-EBADF : fs_status(rc);
+    }
+    case SYS_SYNC:
+        return vfs_is_ready() ? fs_status(vfs_sync()) : 0;
     case SYS_WRITEF: {
         const char *path = (const char *)(uintptr_t)r->rdi;
         const uint8_t *data = (const uint8_t *)(uintptr_t)r->rsi;

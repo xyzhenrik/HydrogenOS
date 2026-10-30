@@ -124,6 +124,21 @@ static int test_commands(void) {
     return 0;
 }
 
+/* What the desktop uses to start a program from Files: the line is typed at an
+   idle, empty prompt and then behaves like any other command. */
+static int test_run_line(void) {
+    if (terminal_run_line(terminal, "echo from-files") != 0 || wait_prompt(COMMAND_TIMEOUT_MS) != 0 ||
+        !has_line("from-files"))
+        return fail("run line");
+    type("par");
+    if (terminal_run_line(terminal, "echo never") == 0)
+        return fail("run line over a typed line");
+    abandon_line();
+    if (terminal_run_line(terminal, "") == 0)
+        return fail("empty run line");
+    return 0;
+}
+
 static int test_colors(void) {
     int row;
     const TerminalFrame *frame;
@@ -295,7 +310,7 @@ int main(void) {
         return fail("create");
     if (terminal_start(terminal) != 0 || wait_prompt(PROMPT_TIMEOUT_MS) != 0)
         return fail("start");
-    if (test_commands() != 0 || test_colors() != 0 || test_interrupt() != 0 ||
+    if (test_commands() != 0 || test_run_line() != 0 || test_colors() != 0 || test_interrupt() != 0 ||
         test_editing() != 0 || test_screen() != 0 || test_scrollback() != 0 ||
         test_reflow() != 0 || test_exit() != 0)
         return 1;

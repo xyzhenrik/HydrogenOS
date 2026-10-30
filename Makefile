@@ -467,7 +467,7 @@ $(BUILD_DIR)/mbr.o: kernel/drivers/mbr.c kernel/drivers/mbr.h kernel/drivers/blo
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/ext2.o: kernel/fs/ext2.c kernel/fs/ext2.h kernel/fs/dcache.h kernel/fs/vfs.h kernel/drivers/block.h kernel/drivers/mbr.h
+$(BUILD_DIR)/ext2.o: kernel/fs/ext2.c kernel/fs/ext2.h $(ARCH_DIR)/rtc.h kernel/include/rtc_time.h kernel/fs/dcache.h kernel/fs/vfs.h kernel/drivers/block.h kernel/drivers/mbr.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
@@ -776,7 +776,7 @@ $(USER_WPTEST_OBJ): userspace/wptest/wptest.c userspace/lib/errno.h userspace/li
 $(USER_WPTEST_ELF): $(USER_WPTEST_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
 	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_WPTEST_OBJ)
 
-$(USER_IOTEST_OBJ): userspace/iotest/iotest.c userspace/lib/syscall.h userspace/lib/mini_libc.h
+$(USER_IOTEST_OBJ): userspace/iotest/iotest.c userspace/lib/syscall.h userspace/lib/mini_libc.h userspace/lib/wallclock.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(USER_CFLAGS) -c $< -o $@
 

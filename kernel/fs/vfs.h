@@ -17,6 +17,7 @@ typedef struct vfs_stat {
     uint32_t mode; // permission bits only, 0777 at most
     uint32_t uid;
     uint32_t gid;
+    uint32_t mtime; // seconds since the Unix epoch (UTC), 0 if not tracked
 } vfs_stat_t;
 
 int vfs_init(void);
@@ -63,9 +64,10 @@ int vfs_resolve(const char *path, int follow_final, char *out, uint32_t out_sz);
 int vfs_write_file(const char *path, const uint8_t *data, uint32_t size);
 /* Writes into the file in place, extending it if needed; a gap between the old
    end of file and offset reads back as zero. Returns 0 or a negative errno
-   value. A failed write may have stored part of the data. */
+   value. *written (always set) is the number of bytes stored; a failed write
+   may have stored part of the data, for example -ENOSPC on a full disk. */
 int vfs_write_file_at(const char *path, uint32_t offset, const uint8_t *data,
-                      uint32_t size);
+                      uint32_t size, uint32_t *written);
 /* Shrinks or grows a regular file; the new range reads as zero. Returns 0 or
    a negative errno value (-EFBIG if size exceeds what the filesystem holds). */
 int vfs_truncate(const char *path, uint32_t size);

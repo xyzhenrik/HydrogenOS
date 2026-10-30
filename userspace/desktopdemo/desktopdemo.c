@@ -73,6 +73,7 @@ typedef struct App {
     char title[64];
     /* terminal */
     Terminal *term;
+    char start_command[4 * FM_PATH_CAP + 4];  /* typed at the first prompt; empty once done */
     /* editor */
     Editor *editor;
     /* files */
@@ -742,6 +743,13 @@ static int terminal_service_all(void) {
         App *a = &g_apps[i];
         if (!a->used || a->kind != APP_TERM || !a->term) continue;
         unsigned events = terminal_pump(a->term);
+        if (a->start_command[0]) {
+            if (!terminal_alive(a->term)) a->start_command[0] = 0;
+            else if (terminal_run_line(a->term, a->start_command) == 0) {
+                a->start_command[0] = 0;
+                events |= TERMINAL_EVENT_OUTPUT;
+            }
+        }
         TerminalRequest request;
         while (terminal_take_request(a->term, &request)) handle_terminal_request(&request);
         if ((events & TERMINAL_EVENT_EXITED) && terminal_exit_status(a->term) == 0) {
@@ -802,23 +810,50 @@ static void settings_startup(void) {
 
 /* ---------------- files ---------------- */
 
-#define MAX_PROGRAMS 8
+static int shell_word_safe(char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+           c == '/' || c == '.' || c == '_' || c == '-' || c == '+' || c == ',' || c == '@';
+}
 
-/* Processes started from Files that have not been reaped yet; 0 is a free slot. */
-static int g_programs[MAX_PROGRAMS];
-
-/* Starts a program without a console; finished ones are reaped here. */
-static int program_launch(const char *path) {
-    int slot = -1;
-
-    for (int i = 0; i < MAX_PROGRAMS; ++i) {
-        if (g_programs[i] && try_wait_pid(g_programs[i], 0) != 0) g_programs[i] = 0;
-        if (!g_programs[i] && slot < 0) slot = i;
+/* Writes path as one shell word: as it is when nothing in it needs quoting,
+   otherwise in single quotes with each embedded quote closed, escaped and
+   reopened. Returns 0, or -1 if it does not fit. */
+static int shell_quote(char *out, size_t capacity, const char *path) {
+    size_t n = 0;
+    int plain = path[0] != 0;
+    for (const char *p = path; *p; ++p) if (!shell_word_safe(*p)) plain = 0;
+    if (plain) {
+        if (strlen(path) + 1 > capacity) return -1;
+        memcpy(out, path, strlen(path) + 1);
+        return 0;
     }
-    if (slot < 0) return -1;
-    long pid = spawn_with_stdio(path, SPAWN_STDIO_NULL, SPAWN_STDIO_NULL, SPAWN_STDIO_NULL);
-    if (pid <= 0) return -1;
-    g_programs[slot] = (int)pid;
+    if (capacity < 3) return -1;
+    out[n++] = '\'';
+    for (; *path; ++path) {
+        size_t need = *path == '\'' ? 4 : 1;
+        if (n + need + 2 > capacity) return -1;
+        if (*path == '\'') {
+            memcpy(out + n, "'\\''", 4);
+            n += 4;
+        } else {
+            out[n++] = *path;
+        }
+    }
+    out[n++] = '\'';
+    out[n] = 0;
+    return 0;
+}
+
+/* A program started from Files runs in a Terminal window of its own, so its
+   output is visible and it can read the keyboard. The command is typed once
+   the shell shows its prompt (see terminal_service_all). */
+static int program_launch(const char *path) {
+    int idx = app_open_new(APP_TERM);
+    if (idx < 0) return -1;
+    if (shell_quote(g_apps[idx].start_command, sizeof(g_apps[idx].start_command), path) != 0) {
+        app_close(&g_apps[idx]);
+        return -1;
+    }
     return 0;
 }
 

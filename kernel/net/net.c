@@ -17,13 +17,16 @@
 #define NET_STATIC_GATEWAY NET_IPV4_ADDR(10, 0, 2, 2)
 
 static net_interface_t net_iface;
+/* Set while a frame from the link is being processed. */
+static int net_receiving_from_link;
 
 const net_interface_t *net_interface(void) {
     return &net_iface;
 }
 
 void net_count_rx_drop(void) {
-    net_iface.rx_dropped++;
+    if (net_receiving_from_link)
+        net_iface.rx_dropped++;
 }
 
 uint32_t net_entropy(void) {
@@ -59,7 +62,9 @@ int net_link_transmit(const uint8_t *frame, size_t len) {
 static void net_deliver(const uint8_t *frame, size_t len) {
     net_iface.rx_frames++;
     perf_count_net_rx((uint32_t)len);
+    net_receiving_from_link = 1;
     ethernet_input(frame, len);
+    net_receiving_from_link = 0;
 }
 
 void net_poll(void) {

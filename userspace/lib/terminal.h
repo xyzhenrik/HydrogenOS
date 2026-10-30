@@ -89,6 +89,12 @@ void terminal_feed(Terminal *terminal, const char *data, int length);
 
 void terminal_key(Terminal *terminal, int key);
 
+/* Types line at the prompt and presses Enter, exactly as a user would, so the
+ * command shows in the scrollback and history. Returns -1 when the shell is
+ * not waiting at an empty prompt yet (try again later) or the line does not
+ * fit. */
+int terminal_run_line(Terminal *terminal, const char *line);
+
 /* Positive rows scroll towards older output. */
 void terminal_scroll(Terminal *terminal, int rows);
 void terminal_resize(Terminal *terminal, int cols, int rows);

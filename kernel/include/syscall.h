@@ -80,6 +80,8 @@
 #define SYS_CHOWN 79
 #define SYS_TRUNCATE 80
 #define SYS_PERF_READ 81
+#define SYS_SYNC 84
+#define SYS_FTRUNCATE 85
 #define SYS_PUTCHAR 255
 
 uint64_t syscall_handle(regs_t *r);

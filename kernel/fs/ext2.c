@@ -4,6 +4,7 @@
 #include "drivers/mbr.h"
 #include "fs/dcache.h"
 #include "mm/kheap.h"
+#include "rtc.h"
 #include "errno.h"
 
 #include <stddef.h>
@@ -276,9 +277,14 @@ static int sync_result(int rc) {
 /* Inodes                                                              */
 /* ------------------------------------------------------------------ */
 
-/* The kernel has no wall clock yet; the newest timestamp recorded in the
-   superblock is the best available lower bound for "now". */
+/* Wall-clock seconds from the RTC. Without a usable RTC the newest timestamp
+   recorded in the superblock is the best available lower bound for "now", so
+   inode times never run backwards. */
 static uint32_t fs_timestamp(void) {
+    hydrogen_rtc_time_t now;
+    if (rtc_now(&now) == 0 && now.epoch_seconds > 0)
+        return now.epoch_seconds > UINT32_MAX ? UINT32_MAX : (uint32_t)now.epoch_seconds;
+
     uint32_t t = sb.s_wtime;
     if (sb.s_mtime > t) t = sb.s_mtime;
     if (sb.s_lastcheck > t) t = sb.s_lastcheck;
@@ -1219,6 +1225,7 @@ int ext2_stat(const char *path, vfs_stat_t *out) {
     out->mode = ino.i_mode & EXT2_PERMISSION_MASK;
     out->uid = inode_uid(&ino);
     out->gid = inode_gid(&ino);
+    out->mtime = ino.i_mtime;
     return 0;
 }
 
@@ -1338,7 +1345,9 @@ int ext2_write_file(const char *path, const uint8_t *data, uint32_t size) {
     return sync_result(write_inode(ino_num, &ino));
 }
 
-int ext2_write_at(const char *path, uint32_t offset, const uint8_t *data, uint32_t size) {
+int ext2_write_at(const char *path, uint32_t offset, const uint8_t *data, uint32_t size,
+                  uint32_t *written) {
+    *written = 0;
     int rc = write_check(path);
     if (rc != 0) return rc;
     if (size > 0 && !data) return -EINVAL;
@@ -1394,6 +1403,8 @@ int ext2_write_at(const char *path, uint32_t offset, const uint8_t *data, uint32
         ino.i_mtime = ino.i_ctime = fs_timestamp();
     }
     int inode_rc = write_inode(ino_num, &ino);
+    if (inode_rc == 0)
+        *written = pos - offset;
     return rc != 0 ? rc : inode_rc;
 }
 

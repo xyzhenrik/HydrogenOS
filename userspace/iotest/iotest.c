@@ -1,15 +1,21 @@
 #include "mini_libc.h"
 #include "syscall.h"
+#include "wallclock.h"
 
 #define ERR_ENOENT 2
+#define ERR_EBADF  9
+#define ERR_EINVAL 22
 #define ERR_EISDIR 21
 #define ERR_EFBIG  27
+#define ERR_ENOSPC 28
 
 #define TEST_PATH   "/tmp/iotest.bin"
 #define CHUNK       4096u
 #define MIB         (1024u * 1024u)
 #define LARGE_WRITE (64u * 1024u)
 #define FILE_LIMIT  0x7FFFFFFFul
+#define BLOCK_BYTES 1024l
+#define MTIME_TOLERANCE_S 120
 /* Generous: TCG under load is slow, the old whole-file rewrite needs minutes. */
 #define SEQUENTIAL_BUDGET_MS 30000ul
 
@@ -255,10 +261,106 @@ static int test_sequential(void) {
     return 0;
 }
 
+static int test_ftruncate_and_sync(void) {
+    long fd = open(TEST_PATH, OPEN_READ | OPEN_WRITE | OPEN_CREATE | OPEN_TRUNCATE);
+    if (fd < 0)
+        return fail("create for ftruncate");
+    fill(wbuf, 3000, 0, 1);
+    if (write_all((int)fd, wbuf, 3000) != 0)
+        return fail("write for ftruncate");
+
+    if (ftruncate((int)fd, 1000) != 0 || file_size(TEST_PATH) != 1000)
+        return fail("ftruncate shrink");
+    if (lseek((int)fd, 0, SEEK_CUR) != 3000)
+        return fail("ftruncate moved the file offset");
+    if (ftruncate((int)fd, 2500) != 0 || file_size(TEST_PATH) != 2500)
+        return fail("ftruncate grow");
+    if (check_range(TEST_PATH, 0, 1000, 1) != 0 ||
+        check_range(TEST_PATH, 1000, 1500, 0) != 0)
+        return fail("content after ftruncate");
+    if (ftruncate((int)fd, FILE_LIMIT + 1) != -ERR_EFBIG)
+        return fail("ftruncate beyond the size limit");
+    if (sync() != 0)
+        return fail("sync");
+
+    long readonly = open(TEST_PATH, OPEN_READ);
+    int fds[2];
+    if (readonly < 0 || pipe(fds) != 0)
+        return fail("open for ftruncate errors");
+    if (ftruncate((int)readonly, 0) != -ERR_EBADF)
+        return fail("ftruncate on a read-only fd");
+    if (ftruncate(fds[1], 0) != -ERR_EINVAL)
+        return fail("ftruncate on a pipe");
+    if (ftruncate(60, 0) != -ERR_EBADF)
+        return fail("ftruncate on a closed fd");
+    close(fds[0]);
+    close(fds[1]);
+    close((int)readonly);
+    close((int)fd);
+    return 0;
+}
+
+static int test_mtime(void) {
+    hydrogen_rtc_time_t now;
+    stat_t st;
+    long fd = open(TEST_PATH, OPEN_WRITE | OPEN_CREATE | OPEN_TRUNCATE);
+    if (fd < 0 || write_all((int)fd, wbuf, 10) != 0)
+        return fail("create for mtime");
+    close((int)fd);
+    if (sys_rtc_time((struct hydrogen_rtc_time *)&now) != 0 || stat(TEST_PATH, &st) != 0)
+        return fail("clock or stat");
+    long long skew = (long long)st.st_mtime - now.epoch_seconds;
+    if (skew < -MTIME_TOLERANCE_S || skew > MTIME_TOLERANCE_S)
+        return fail("mtime does not follow the wall clock");
+    return 0;
+}
+
+/* Fills the disk with one file: the write that hits the end must report the
+   bytes that fit, the next one ENOSPC, and deleting the file frees the space. */
+static int test_disk_full(void) {
+    long free_before = free_blocks();
+    long fd = open(TEST_PATH, OPEN_WRITE | OPEN_CREATE | OPEN_TRUNCATE);
+    if (free_before < 0 || fd < 0)
+        return fail("open for disk full");
+
+    fill(wbuf, LARGE_WRITE, 0, 7);
+    long total = 0;
+    int short_write = 0;
+    long rc = 0;
+    for (;;) {
+        rc = write((int)fd, wbuf, LARGE_WRITE);
+        if (rc < 0)
+            break;
+        total += rc;
+        if (rc < (long)LARGE_WRITE)
+            short_write = 1;
+        if (total > free_before * BLOCK_BYTES + (long)LARGE_WRITE)
+            break;
+    }
+    if (rc != -ERR_ENOSPC) {
+        close((int)fd);
+        sys_unlink(TEST_PATH);
+        return fail("full disk does not report ENOSPC");
+    }
+    if (!short_write || file_size(TEST_PATH) != total) {
+        close((int)fd);
+        sys_unlink(TEST_PATH);
+        return fail("partial write count on a full disk");
+    }
+    close((int)fd);
+    if (sys_unlink(TEST_PATH) != 0)
+        return fail("unlink after disk full");
+    long free_after = free_blocks();
+    if (free_after < free_before - 8)
+        return fail("space not returned after disk full");
+    return 0;
+}
+
 int main(void) {
     sys_unlink(TEST_PATH);
     int failed = test_append_and_overwrite() || test_truncate() ||
-                 test_sparse() || test_sequential();
+                 test_sparse() || test_sequential() || test_ftruncate_and_sync() ||
+                 test_mtime() || test_disk_full();
     sys_unlink(TEST_PATH);
     if (failed)
         return 1;

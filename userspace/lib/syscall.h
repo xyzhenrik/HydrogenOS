@@ -78,6 +78,8 @@
 #define SYS_CHOWN 79
 #define SYS_TRUNCATE 80
 #define SYS_PERF_READ 81
+#define SYS_SYNC 84
+#define SYS_FTRUNCATE 85
 
 #define PRIO_IDLE   0
 #define PRIO_NORMAL 1
@@ -321,6 +323,19 @@ static inline long sys_readlink(const char *path, char *buf, unsigned long cap) 
    reads as zero. Returns 0 or -errno (-27 EFBIG beyond 2 GiB - 1). */
 static inline long sys_truncate(const char *path, unsigned long length) {
     return syscall2(SYS_TRUNCATE, (long)path, (long)length);
+}
+
+/* Same as sys_truncate on the file behind a writable fd; the file offset is
+   not moved. Returns 0 or -errno (-9 EBADF for a read-only fd, -22 EINVAL when
+   fd is not a file). */
+static inline long sys_ftruncate(int fd, unsigned long length) {
+    return syscall2(SYS_FTRUNCATE, fd, (long)length);
+}
+
+/* Writes every pending filesystem change to the disk. Returns 0 or -errno
+   (-5 EIO when the device failed). */
+static inline long sys_sync(void) {
+    return syscall1(SYS_SYNC, 0);
 }
 
 static inline long sys_getuid(void) {

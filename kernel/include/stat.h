@@ -21,5 +21,5 @@ typedef struct hydrogen_stat {
     uint32_t st_ino;     /* inode number */
     uint32_t st_uid;     /* owner */
     uint32_t st_gid;     /* owning group */
-    uint64_t st_mtime;   /* modification time (ms since boot) */
+    uint64_t st_mtime;   /* modification time, seconds since the Unix epoch (UTC); 0 if unknown */
 } hydrogen_stat_t;
