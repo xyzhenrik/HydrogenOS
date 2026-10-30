@@ -6,11 +6,14 @@
 #include "settings_ui.h"
 #include "syscall.h"
 #include "wallclock.h"
+#include "window_geometry.h"
 
 #define TITLE_H   30
 #define PAD       12
 #define LINE_H    16
 #define TASKBAR_H 56
+/* Height a top bar reserves above the work area; windows maximize below it. */
+#define TOPBAR_H  0
 #define MAX_APPS  8
 /* Width of TIME_FORMAT_SHORT ("Thu 29 Oct 14:05") in 8px glyphs. */
 #define CLOCK_W   (16 * 8)
@@ -45,6 +48,8 @@ static int g_settings_save_failed;
 #define COL_CHROME_TEXT (g_th.chrome_text)
 #define COL_WALLPAPER_TEXT (g_th.wallpaper_text)
 #define COL_CHROME_DIM  (g_th.chrome_dim)
+#define COL_CHROME_ICON (g_th.chrome_icon)
+#define COL_TITLE_BORDER (g_th.title_border)
 
 enum { APP_TERM = 0, APP_EDIT, APP_FILES, APP_SETTINGS, APP_KIND_COUNT };
 
@@ -54,6 +59,8 @@ typedef struct App {
     Window *win;
     int minimized;
     int maximized;
+    /* Order of the last focus; the highest stamp is the topmost window. */
+    unsigned long focus_stamp;
     int dragging;
     int resizing;
     int drag_ox, drag_oy;
@@ -88,6 +95,11 @@ static int g_menu_open = 0;
 static int g_mx = -1, g_my = -1, g_btn = 0;
 static int g_prev_mx = -1, g_prev_my = -1;
 static unsigned long g_last_sec = 0;
+static unsigned long g_focus_clock = 0;
+/* The previous title bar press, to recognise a double click. */
+static int g_click_app = -1;
+static int g_click_x, g_click_y;
+static unsigned long g_click_ms;
 
 static void draw_terminal(App *a);
 static void draw_editor(App *a);
@@ -154,16 +166,13 @@ static void draw_resize_cursor(uint32_t *buf, int w, int h, int mx, int my) {
     }
 }
 
+static App *app_at(int mx, int my);
+
 static int cursor_over_resize(int mx, int my) {
-    for (int i = MAX_APPS - 1; i >= 0; --i) {
-        App *a = &g_apps[i];
-        if (!a->used || a->minimized || !a->win || !a->win->visible) continue;
-        Window *w = a->win;
-        if (mx < w->x || my < w->y || mx >= w->x + w->w || my >= w->y + w->h) continue;
-        int lx = mx - w->x, ly = my - w->y;
-        return (lx >= w->w - 16 && ly >= w->h - 16);
-    }
-    return 0;
+    App *a = app_at(mx, my);
+    if (!a || a->maximized) return 0;
+    Window *w = a->win;
+    return mx - w->x >= w->w - 16 && my - w->y >= w->h - 16;
 }
 
 static int str_eq(const char *a, const char *b) {
@@ -189,7 +198,12 @@ static void append_num(char *line, int *z, int v) {
 
 /* ---------------- icons ---------------- */
 
-static void blit_icon(Window *win, int x, int y, const uint32_t *icon, int size) {
+/* An icon is drawn in its own colours (ICON_NATIVE) or as a silhouette in a
+   single ink colour, given as ICON_INK(rgb). */
+#define ICON_NATIVE 0u
+#define ICON_INK(rgb) (0xFF000000u | ((rgb) & 0x00FFFFFFu))
+
+static void blit_icon(Window *win, int x, int y, const uint32_t *icon, int size, uint32_t ink) {
     if (!win || !win->surface || !icon || size <= 0) return;
     uint32_t *dst = (uint32_t *)win->surface;
     for (int py = 0; py < size; ++py) {
@@ -228,7 +242,7 @@ static void blit_icon(Window *win, int x, int y, const uint32_t *icon, int size)
             int dx = x + px, dy = y + py;
             if (dx < 0 || dy < 0 || dx >= win->w || dy >= win->h) continue;
             uint32_t *d = &dst[dy * win->w + dx];
-            uint32_t rgb = (r << 16) | (g << 8) | b;
+            uint32_t rgb = ink ? (ink & 0x00FFFFFFu) : (r << 16) | (g << 8) | b;
             if (win->style.material == COMP_MATERIAL_GLASS)
                 *d = gfx_over(*d, 0xFF000000u | rgb, a);
             else
@@ -237,11 +251,11 @@ static void blit_icon(Window *win, int x, int y, const uint32_t *icon, int size)
     }
 }
 
-static void draw_icon_os(Window *win, int x, int y, int s) { blit_icon(win, x, y, icon_os, s); }
-static void draw_icon_terminal(Window *win, int x, int y, int s) { blit_icon(win, x, y, icon_terminal, s); }
-static void draw_icon_editor(Window *win, int x, int y, int s) { blit_icon(win, x, y, icon_editor, s); }
-static void draw_icon_files(Window *win, int x, int y, int s) { blit_icon(win, x, y, icon_files, s); }
-static void draw_icon_settings(Window *win, int x, int y, int s) { blit_icon(win, x, y, icon_settings, s); }
+static void draw_icon_os(Window *win, int x, int y, int s) { blit_icon(win, x, y, icon_os, s, ICON_NATIVE); }
+static void draw_icon_terminal(Window *win, int x, int y, int s) { blit_icon(win, x, y, icon_terminal, s, ICON_INK(COL_CHROME_ICON)); }
+static void draw_icon_editor(Window *win, int x, int y, int s) { blit_icon(win, x, y, icon_editor, s, ICON_INK(COL_CHROME_ICON)); }
+static void draw_icon_files(Window *win, int x, int y, int s) { blit_icon(win, x, y, icon_files, s, ICON_INK(COL_CHROME_ICON)); }
+static void draw_icon_settings(Window *win, int x, int y, int s) { blit_icon(win, x, y, icon_settings, s, ICON_INK(COL_CHROME_ICON)); }
 
 static void draw_clock(Window *win, int right_x, int y) {
     char buf[32];
@@ -271,10 +285,15 @@ static void draw_kind_icon(Window *win, int kind, int x, int y, int s) {
     }
 }
 
-static int app_is_running(int kind) {
-    for (int i = 0; i < MAX_APPS; ++i)
-        if (g_apps[i].used && g_apps[i].kind == kind && !g_apps[i].minimized) return 1;
-    return 0;
+/* 0: no window of the app, 1: only minimized windows, 2: a window is open. */
+static int app_presence(int kind) {
+    int presence = 0;
+    for (int i = 0; i < MAX_APPS; ++i) {
+        if (!g_apps[i].used || g_apps[i].kind != kind) continue;
+        if (!g_apps[i].minimized) return 2;
+        presence = 1;
+    }
+    return presence;
 }
 
 /* With glass on, the taskbar and the menu are glass windows whose surface
@@ -292,8 +311,10 @@ static void draw_taskbar(void) {
     draw_icon_os(g_taskbar, tb_logo_x(), tb_logo_y() - ty, 32);
     for (int k = 0; k < APP_KIND_COUNT; ++k) {
         draw_kind_icon(g_taskbar, k, tb_icon_x(k), tb_y() - ty, tb_icon_s());
-        if (app_is_running(k))
-            fill_rect(g_taskbar, tb_icon_x(k), TASKBAR_H - 3, tb_icon_s(), 3, GLASS_INK | COL_ACCENT);
+        int presence = app_presence(k);
+        if (presence)
+            fill_rect(g_taskbar, tb_icon_x(k), TASKBAR_H - 3, tb_icon_s(), 3,
+                      GLASS_INK | (presence == 2 ? COL_ACCENT : COL_CHROME_DIM));
     }
     draw_clock(g_taskbar, SW - 16, 20);
 }
@@ -663,7 +684,7 @@ static void draw_titlebar(App *a) {
     Window *w = a->win;
     int focused = (g_focus >= 0 && &g_apps[g_focus] == a) && !a->minimized;
     fill_rect(w, 0, 0, w->w, TITLE_H, focused ? COL_TITLE_F : COL_TITLE);
-    fill_rect(w, 0, TITLE_H, w->w, 1, COL_ACCENT);
+    fill_rect(w, 0, TITLE_H, w->w, 1, COL_TITLE_BORDER);
     fill_circle(w, 18, 15, 6, COL_CLOSE);
     fill_circle(w, 38, 15, 6, COL_MIN);
     fill_circle(w, 58, 15, 6, COL_MAX);
@@ -795,12 +816,16 @@ static int app_index_of(App *a) {
     return -1;
 }
 
-static void focus_app(App *a) {
-    int idx = app_index_of(a);
-    if (idx < 0) return;
-    g_focus = idx;
-    if (a->win) comp_raise(a->win);
-    /* redraw title bars of all visible apps */
+static CompRect work_area(void) {
+    return wm_work_area(SW, SH, TOPBAR_H, TASKBAR_H);
+}
+
+static void refresh_taskbar(void) {
+    draw_taskbar();
+    comp_damage_rect(g_bg, 0, SH - TASKBAR_H, SW, TASKBAR_H);
+}
+
+static void refresh_titlebars(void) {
     for (int i = 0; i < MAX_APPS; ++i) {
         App *o = &g_apps[i];
         if (o->used && o->win && o->win->visible && !o->minimized) {
@@ -810,57 +835,107 @@ static void focus_app(App *a) {
     }
 }
 
-static void app_minimize(App *a) {
-    a->minimized = 1;
-    if (a->win) a->win->visible = 0;
-    if (g_focus >= 0 && &g_apps[g_focus] == a) {
-        g_focus = -1;
-        for (int i = MAX_APPS - 1; i >= 0; --i)
-            if (g_apps[i].used && !g_apps[i].minimized) { g_focus = i; break; }
+/* Puts the window on top of the other app windows. The taskbar stays above
+   them all, so a window's shadow never darkens it. */
+static void raise_app_window(App *a) {
+    a->focus_stamp = ++g_focus_clock;
+    comp_raise(a->win);
+    comp_raise(g_taskbar);
+}
+
+/* The visible window that was focused last, or -1. */
+static int topmost_app(void) {
+    int top = -1;
+    for (int i = 0; i < MAX_APPS; ++i) {
+        App *a = &g_apps[i];
+        if (!a->used || a->minimized || !a->win) continue;
+        if (top < 0 || a->focus_stamp > g_apps[top].focus_stamp) top = i;
     }
-    draw_taskbar();
-    if (a->win) comp_damage_rect(g_bg, a->win->x, a->win->y, a->win->w, a->win->h);
-    comp_damage_rect(g_bg, 0, SH - TASKBAR_H, SW, TASKBAR_H);
+    return top;
+}
+
+/* The window under the pointer: the topmost visible one, taskbar excluded. */
+static App *app_at(int mx, int my) {
+    App *hit = 0;
+    if (my >= SH - TASKBAR_H) return 0;
+    for (int i = 0; i < MAX_APPS; ++i) {
+        App *a = &g_apps[i];
+        if (!a->used || a->minimized || !a->win || !a->win->visible) continue;
+        if (!point_in_rect(mx, my, a->win->x, a->win->y, a->win->w, a->win->h)) continue;
+        if (!hit || a->focus_stamp > hit->focus_stamp) hit = a;
+    }
+    return hit;
+}
+
+static void bring_to_front(App *a, int idx) {
+    g_focus = idx;
+    if (a->win) raise_app_window(a);
+    refresh_titlebars();
+}
+
+static void focus_app(App *a) {
+    int idx = app_index_of(a);
+    if (idx >= 0 && idx != g_focus) bring_to_front(a, idx);
+}
+
+static void app_minimize(App *a) {
+    if (!a->used || a->minimized) return;
+    a->minimized = 1;
+    a->dragging = 0;
+    a->resizing = 0;
+    if (a->win) a->win->visible = 0;
+    if (g_focus == app_index_of(a)) g_focus = topmost_app();
+    refresh_titlebars();
+    refresh_taskbar();
+}
+
+static void app_restore(App *a) {
+    if (!a->used || !a->minimized) return;
+    a->minimized = 0;
+    if (a->win) a->win->visible = 1;
+    bring_to_front(a, app_index_of(a));
+    refresh_taskbar();
 }
 
 static void app_close(App *a) {
     if (!a->used) return;
+    int idx = app_index_of(a);
     if (a->win) {
-        comp_damage_rect(g_bg, a->win->x, a->win->y, a->win->w, a->win->h);
         comp_destroy_window(a->win);
         a->win = 0;
     }
-    int was_focus = (g_focus >= 0 && &g_apps[g_focus] == a);
     a->used = 0;
     a->minimized = 0;
     a->dragging = 0;
     a->resizing = 0;
-    if (was_focus) {
-        g_focus = -1;
-        for (int i = MAX_APPS - 1; i >= 0; --i)
-            if (g_apps[i].used && !g_apps[i].minimized) { g_focus = i; break; }
-    }
-    draw_taskbar();
-    comp_damage_rect(g_bg, 0, SH - TASKBAR_H, SW, TASKBAR_H);
+    if (g_click_app == idx) g_click_app = -1;
+    if (g_focus == idx) g_focus = topmost_app();
+    refresh_titlebars();
+    refresh_taskbar();
 }
 
-/* Floating windows get rounded corners and a shadow; maximized ones are
-   flush with the screen edges. */
+/* Floating windows get rounded corners and a shadow; maximized ones fill the
+   work area edge to edge and cast none. */
 static void style_app_window(Window *win, int maximized) {
     CompWindowStyle style;
     comp_style_window(&style);
-    if (maximized) style.corner_radius = 0;
+    if (maximized) {
+        style.corner_radius = 0;
+        style.shadow = 0;
+    }
     comp_set_window_style(win, &style);
 }
 
-static void app_maximize(App *a) {
+/* Maximizes into the work area, or restores the geometry from before. */
+static void app_toggle_maximize(App *a) {
     Window *w = a->win;
     if (!w) return;
     if (!a->maximized) {
+        CompRect work = work_area();
         int rx = w->x, ry = w->y, rw = w->w, rh = w->h;
-        if (comp_resize_window(w, SW, SH - TASKBAR_H) != 0) return;
+        if (comp_resize_window(w, work.w, work.h) != 0) return;
         a->rx = rx; a->ry = ry; a->rw = rw; a->rh = rh;
-        w->x = 0; w->y = 0;
+        w->x = work.x; w->y = work.y;
         a->maximized = 1;
     } else {
         if (comp_resize_window(w, a->rw, a->rh) != 0) return;
@@ -869,7 +944,36 @@ static void app_maximize(App *a) {
     }
     style_app_window(w, a->maximized);
     draw_app_content(a);
-    comp_damage_rect(g_bg, w->x, w->y, w->w, w->h);
+}
+
+/* Alt+Tab: focuses the next open window. */
+static void cycle_focus(void) {
+    for (int step = 1; step <= MAX_APPS; ++step) {
+        int i = (g_focus + step + MAX_APPS) % MAX_APPS;
+        if (!g_apps[i].used || g_apps[i].minimized) continue;
+        focus_app(&g_apps[i]);
+        return;
+    }
+}
+
+/* What a click on a taskbar icon does to the windows of that app. */
+static void dock_click(int kind) {
+    int target = -1;
+    for (int i = 0; i < MAX_APPS; ++i) {
+        App *a = &g_apps[i];
+        if (!a->used || a->kind != kind) continue;
+        /* Visible windows win over minimized ones, then the most recent. */
+        if (target < 0 || (g_apps[target].minimized && !a->minimized) ||
+            (g_apps[target].minimized == a->minimized && a->focus_stamp > g_apps[target].focus_stamp))
+            target = i;
+    }
+    switch (wm_dock_action(target >= 0, target >= 0 && g_apps[target].minimized,
+                           target >= 0 && target == g_focus)) {
+    case WM_DOCK_LAUNCH: app_open_new(kind); break;
+    case WM_DOCK_RESTORE: app_restore(&g_apps[target]); break;
+    case WM_DOCK_RAISE: focus_app(&g_apps[target]); break;
+    case WM_DOCK_MINIMIZE: app_minimize(&g_apps[target]); break;
+    }
 }
 
 static int find_free_slot(void) {
@@ -892,21 +996,22 @@ static int app_open_new(int kind) {
     App *a = &g_apps[idx];
     for (int i = 0; i < (int)sizeof(App); ++i) ((char *)a)[i] = 0;
 
+    CompRect work = work_area();
     int w = SW * 45 / 100, h = SH * 62 / 100;
     if (w < 720) w = 720;
     if (w > SW - 120) w = SW - 120;
     if (h < 420) h = 420;
-    if (h > SH - TASKBAR_H - 80) h = SH - TASKBAR_H - 80;
+    if (h > work.h - 80) h = work.h - 80;
     if (kind == APP_FILES) { w = 620; h = 460; }
     if (kind == APP_SETTINGS) { w = 700; h = 480; }
     if (w > SW) w = SW;
-    if (h > SH - TASKBAR_H) h = SH - TASKBAR_H;
+    if (h > work.h) h = work.h;
     int x = (SW - w) / 2 + (idx % 4) * 30 - 60;
-    int y = (SH - TASKBAR_H - h) / 2 + (idx % 4) * 30 - 40;
+    int y = work.y + (work.h - h) / 2 + (idx % 4) * 30 - 40;
     if (x < 0) x = 0;
-    if (y < 0) y = 0;
+    if (y < work.y) y = work.y;
     if (x + w > SW) x = SW - w;
-    if (y + h > SH - TASKBAR_H) y = SH - TASKBAR_H - h;
+    if (y + h > work.y + work.h) y = work.y + work.h - h;
 
     a->used = 1;
     a->kind = kind;
@@ -933,12 +1038,9 @@ static int app_open_new(int kind) {
         settings_ui_init(&a->settings_ui, &g_settings, &g_th, draw_icon_os, TITLE_H);
     }
 
-    g_focus = idx;
-    comp_raise(a->win);
     draw_app_content(a);
-    draw_taskbar();
-    comp_damage_rect(g_bg, x, y, w, h);
-    comp_damage_rect(g_bg, 0, SH - TASKBAR_H, SW, TASKBAR_H);
+    bring_to_front(a, idx);
+    refresh_taskbar();
     return idx;
 }
 
@@ -1022,37 +1124,22 @@ static void handle_press(int mx, int my) {
         }
         for (int k = 0; k < APP_KIND_COUNT; ++k) {
             if (point_in_rect(mx, my, tb_icon_x(k), tb_y(), tb_icon_s(), tb_icon_s())) {
-                /* focus existing non-minimized instance, else create one */
-                int found = -1;
-                for (int i = 0; i < MAX_APPS; ++i)
-                    if (g_apps[i].used && g_apps[i].kind == k && !g_apps[i].minimized) { found = i; break; }
-                if (found >= 0) focus_app(&g_apps[found]);
-                else {
-                    for (int i = 0; i < MAX_APPS; ++i)
-                        if (g_apps[i].used && g_apps[i].kind == k) { g_apps[i].minimized = 0; g_apps[i].win->visible = 1; focus_app(&g_apps[i]); break; }
-                    if (found < 0 && g_focus < 0) app_open_new(k);
-                    else if (found < 0) {
-                        int any = 0;
-                        for (int i = 0; i < MAX_APPS; ++i) if (g_apps[i].used && g_apps[i].kind == k) any = 1;
-                        if (!any) app_open_new(k);
-                    }
-                }
+                dock_click(k);
                 return;
             }
         }
         return;
     }
 
-    for (int i = MAX_APPS - 1; i >= 0; --i) {
-        App *a = &g_apps[i];
-        if (!a->used || a->minimized || !a->win || !a->win->visible) continue;
+    {
+        App *a = app_at(mx, my);
+        if (!a) return;
         Window *w = a->win;
-        if (!point_in_rect(mx, my, w->x, w->y, w->w, w->h)) continue;
         focus_app(a);
         int lx = mx - w->x, ly = my - w->y;
 
         /* resize handle: bottom-right 16x16 */
-        if (lx >= w->w - 16 && ly >= w->h - 16) {
+        if (!a->maximized && lx >= w->w - 16 && ly >= w->h - 16) {
             a->resizing = 1;
             a->drag_ox = lx;
             a->drag_oy = ly;
@@ -1064,10 +1151,22 @@ static void handle_press(int mx, int my) {
             dx = lx - 38;
             if (dx * dx + dy * dy <= 36) { app_minimize(a); return; }
             dx = lx - 58;
-            if (dx * dx + dy * dy <= 36) { app_maximize(a); return; }
-            a->dragging = 1;
-            a->drag_ox = lx;
-            a->drag_oy = ly;
+            if (dx * dx + dy * dy <= 36) { app_toggle_maximize(a); return; }
+            int idx = app_index_of(a);
+            unsigned long now = time_ms();
+            int twice = g_click_app == idx &&
+                        wm_is_double_click(g_click_ms, g_click_x, g_click_y, now, mx, my);
+            g_click_app = twice ? -1 : idx;
+            g_click_ms = now;
+            g_click_x = mx;
+            g_click_y = my;
+            if (twice) {
+                app_toggle_maximize(a);
+            } else if (!a->maximized) {
+                a->dragging = 1;
+                a->drag_ox = lx;
+                a->drag_oy = ly;
+            }
             return;
         }
 
@@ -1135,23 +1234,22 @@ static void handle_drag(int mx, int my) {
         if (a->dragging) {
             int nx = mx - a->drag_ox;
             int ny = my - a->drag_oy;
-            if (nx < 0) nx = 0;
-            if (ny < 0) ny = 0;
-            if (nx + w->w > SW) nx = SW - w->w;
-            if (ny + w->h > SH - TASKBAR_H) ny = SH - TASKBAR_H - w->h;
+            CompRect work = work_area();
+            wm_clamp_position(&work, w->w, TITLE_H, &nx, &ny);
             if (nx == w->x && ny == w->y) continue;
-            comp_damage_rect(g_bg, w->x, w->y, w->w, w->h);
+            /* The compositor repaints where the window was and where it is,
+               shadow included. */
             w->x = nx; w->y = ny;
-            comp_damage_rect(g_bg, w->x, w->y, w->w, w->h);
         } else if (a->resizing) {
             int nw = mx - w->x;
             int nh = my - w->y;
             int min_w = a->kind == APP_SETTINGS ? SETTINGS_UI_MIN_WIDTH : 320;
             int min_h = a->kind == APP_SETTINGS ? SETTINGS_UI_MIN_HEIGHT : 200;
+            CompRect work = work_area();
+            if (w->x + nw > work.x + work.w) nw = work.x + work.w - w->x;
+            if (w->y + nh > work.y + work.h) nh = work.y + work.h - w->y;
             if (nw < min_w) nw = min_w;
             if (nh < min_h) nh = min_h;
-            if (w->x + nw > SW) nw = SW - w->x;
-            if (w->y + nh > SH - TASKBAR_H) nh = SH - TASKBAR_H - w->y;
             if (nw == w->w && nh == w->h) continue;
             if (comp_resize_window(w, nw, nh) != 0) continue;
             draw_app_content(a);
@@ -1161,16 +1259,9 @@ static void handle_drag(int mx, int my) {
 
 /* Hover highlights follow the pointer over the topmost window only. */
 static void settings_track_pointer(int mx, int my) {
-    int under = -1;
+    App *top = app_at(mx, my);
+    int under = top ? app_index_of(top) : -1;
 
-    for (int i = MAX_APPS - 1; i >= 0; --i) {
-        App *a = &g_apps[i];
-        if (a->used && !a->minimized && a->win && a->win->visible &&
-            point_in_rect(mx, my, a->win->x, a->win->y, a->win->w, a->win->h)) {
-            under = i;
-            break;
-        }
-    }
     if (g_menu_open && point_in_rect(mx, my, menu_x(), menu_y(), MENU_W, MENU_H)) under = -1;
 
     for (int i = 0; i < MAX_APPS; ++i) {
@@ -1266,6 +1357,11 @@ int main(void) {
         for (int guard = 0; guard < 64; ++guard) {
             long k = sys_kbd_read();
             if (k < 0) break;
+            if (k == KBD_KEY_ALT_TAB) {
+                cycle_focus();
+                dirty = 1;
+                continue;
+            }
             char c = (char)k;
             if (g_focus >= 0 && g_apps[g_focus].used && !g_apps[g_focus].minimized) {
                 App *a = &g_apps[g_focus];

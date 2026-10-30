@@ -863,14 +863,14 @@ $(USER_GFX_EFFECTS_OBJ): userspace/lib/gfx_effects.c userspace/lib/gfx_effects.h
 $(USER_COMPOSITOR_ELF): $(USER_COMPOSITOR_OBJ) $(BUILD_DIR)/input_router.o $(USER_GFX_EFFECTS_OBJ) $(USER_DESKTOPTEST_THEME_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
 	$(LD) $(USER_LDFLAGS) --defsym main=comp_event_loop -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_COMPOSITOR_OBJ) $(BUILD_DIR)/input_router.o $(USER_GFX_EFFECTS_OBJ) $(USER_DESKTOPTEST_THEME_OBJ)
 
-$(USER_DESKTOPDEMO_OBJ): userspace/desktopdemo/desktopdemo.c userspace/compositor/compositor.h userspace/lib/mini_libc.h userspace/lib/syscall.h userspace/lib/wallclock.h userspace/lib/settings.h userspace/lib/settings_ui.h
+$(USER_DESKTOPDEMO_OBJ): userspace/desktopdemo/desktopdemo.c userspace/compositor/compositor.h userspace/lib/mini_libc.h userspace/lib/syscall.h userspace/lib/wallclock.h userspace/lib/settings.h userspace/lib/settings_ui.h userspace/lib/window_geometry.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(USER_CFLAGS) -Iuserspace/compositor -c $< -o $@
 
 $(USER_DESKTOPDEMO_ELF): $(USER_DESKTOPDEMO_OBJ) $(USER_COMPOSITOR_OBJ) $(USER_GFX_EFFECTS_OBJ) $(USER_DESKTOPTEST_THEME_OBJ) $(USER_WALLCLOCK_OBJ) $(USER_SETTINGS_OBJS) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
 	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_DESKTOPDEMO_OBJ) $(USER_COMPOSITOR_OBJ) $(USER_GFX_EFFECTS_OBJ) $(USER_DESKTOPTEST_THEME_OBJ) $(USER_WALLCLOCK_OBJ) $(USER_SETTINGS_OBJS)
 
-$(USER_DESKTOPTEST_OBJ): userspace/desktoptest/desktoptest.c userspace/compositor/compositor.h userspace/lib/gfx_effects.h userspace/lib/mini_libc.h userspace/lib/widgets.h userspace/lib/layout.h userspace/lib/theme.h userspace/lib/taskbar.h userspace/lib/launcher.h userspace/lib/filemanager.h userspace/lib/settings.h userspace/lib/settings_info.h userspace/lib/settings_ui.h
+$(USER_DESKTOPTEST_OBJ): userspace/desktoptest/desktoptest.c userspace/compositor/compositor.h userspace/lib/gfx_effects.h userspace/lib/mini_libc.h userspace/lib/widgets.h userspace/lib/layout.h userspace/lib/theme.h userspace/lib/taskbar.h userspace/lib/launcher.h userspace/lib/filemanager.h userspace/lib/settings.h userspace/lib/settings_info.h userspace/lib/settings_ui.h userspace/lib/window_geometry.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(USER_CFLAGS) -Iuserspace/compositor -c $< -o $@
 

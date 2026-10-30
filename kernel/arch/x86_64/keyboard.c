@@ -93,6 +93,7 @@ void keyboard_handle_scancode(uint8_t scancode) {
     static int extended = 0;
     static int altgr = 0;
     static int ctrl = 0;
+    static int alt = 0;
     static int caps = 0;
 
     if (scancode == 0xE0) { extended = 1; return; }
@@ -100,6 +101,7 @@ void keyboard_handle_scancode(uint8_t scancode) {
         uint8_t code = scancode & 0x7F;
         if (code == 0x2A || code == 0x36) shift = 0;
         if (code == 0x1D) ctrl = 0;
+        if (!extended && code == 0x38) alt = 0;
         if (extended && code == 0x38) altgr = 0;
         extended = 0;
         return;
@@ -108,8 +110,15 @@ void keyboard_handle_scancode(uint8_t scancode) {
      * otherwise the next key press is misread as an extended key and dropped. */
     if (scancode == 0x2A || scancode == 0x36) { shift = 1; extended = 0; return; }
     if (scancode == 0x1D) { ctrl = 1; extended = 0; return; }
+    if (!extended && scancode == 0x38) { alt = 1; return; }
     if (extended && scancode == 0x38) { altgr = 1; extended = 0; return; }
     if (scancode == 0x3A) { caps = !caps; return; }
+
+    if (scancode == 0x0F && alt) {
+        buffer_put(KEY_ALT_TAB);
+        extended = 0;
+        return;
+    }
 
     if (scancode == 0x39) { // Space
         buffer_put(' ');

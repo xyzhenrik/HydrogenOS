@@ -11,6 +11,7 @@
 #include "taskbar.h"
 #include "launcher.h"
 #include "filemanager.h"
+#include "window_geometry.h"
 
 #define TEST_SURFACE_W 320
 #define TEST_SURFACE_H 200
@@ -836,6 +837,222 @@ static const char *test_compositor_effects(void) {
     return 0;
 }
 
+/* ---------------- window manager ---------------- */
+
+static int rect_is(CompRect r, int x, int y, int w, int h) {
+    return r.x == x && r.y == y && r.w == w && r.h == h;
+}
+
+static const char *test_window_geometry(void) {
+    CompRect work = wm_work_area(1280, 720, 24, 56);
+    int x;
+    int y;
+
+    if (!rect_is(work, 0, 24, 1280, 640) ||
+        wm_work_area(100, 40, 30, 30).h != 0) {
+        return "wm work area";
+    }
+
+    /* Title bar stays reachable: never above the work area, never below it,
+       and WM_MIN_TITLE_VISIBLE pixels remain at either side. */
+    work = wm_work_area(1000, 700, 0, 100);
+    x = -5000; y = -5000;
+    wm_clamp_position(&work, 400, 30, &x, &y);
+    if (x != WM_MIN_TITLE_VISIBLE - 400 || y != 0) {
+        return "wm clamp top left";
+    }
+    x = 5000; y = 5000;
+    wm_clamp_position(&work, 400, 30, &x, &y);
+    if (x != 1000 - WM_MIN_TITLE_VISIBLE || y != 600 - 30) {
+        return "wm clamp bottom right";
+    }
+    x = 300; y = 200;
+    wm_clamp_position(&work, 400, 30, &x, &y);
+    if (x != 300 || y != 200) {
+        return "wm clamp inside";
+    }
+    x = -100; y = 0;
+    wm_clamp_position(&work, 40, 30, &x, &y);
+    if (x != 0) {
+        return "wm clamp narrow window";
+    }
+    work = wm_work_area(1000, 700, 40, 100);
+    x = 0; y = 0;
+    wm_clamp_position(&work, 400, 30, &x, &y);
+    if (y != 40) {
+        return "wm clamp below top bar";
+    }
+
+    if (wm_dock_action(0, 0, 0) != WM_DOCK_LAUNCH ||
+        wm_dock_action(1, 1, 0) != WM_DOCK_RESTORE ||
+        wm_dock_action(1, 1, 1) != WM_DOCK_RESTORE ||
+        wm_dock_action(1, 0, 0) != WM_DOCK_RAISE ||
+        wm_dock_action(1, 0, 1) != WM_DOCK_MINIMIZE) {
+        return "wm dock action";
+    }
+
+    if (!wm_is_double_click(1000, 50, 60, 1000 + WM_DOUBLE_CLICK_MS, 52, 58) ||
+        wm_is_double_click(1000, 50, 60, 1001 + WM_DOUBLE_CLICK_MS, 50, 60) ||
+        wm_is_double_click(1000, 50, 60, 1100, 50 + WM_DOUBLE_CLICK_SLOP + 1, 60)) {
+        return "wm double click";
+    }
+    return 0;
+}
+
+/* Renders the pending damage and checks that both buffers then hold the
+   complete frame a from-scratch repaint produces. */
+static const char *frame_check_buffers(uint32_t *front_copy, uint32_t *back_copy, const char *what) {
+    if (comp_render() != 0) {
+        return what;
+    }
+    memcpy(front_copy, comp_front_buffer(), SCENE_PIXELS * sizeof(uint32_t));
+    memcpy(back_copy, comp_back_buffer(), SCENE_PIXELS * sizeof(uint32_t));
+    comp_damage_all();
+    if (comp_render() != 0) {
+        return what;
+    }
+    const uint32_t *full = comp_front_buffer();
+    for (int i = 0; i < SCENE_PIXELS; ++i) {
+        if (front_copy[i] != full[i] || back_copy[i] != full[i]) {
+            return what;
+        }
+    }
+    return 0;
+}
+
+static int min_int(int a, int b) {
+    return a < b ? a : b;
+}
+
+static int max_int(int a, int b) {
+    return a > b ? a : b;
+}
+
+static const char *test_window_damage(void) {
+    const ThemeEffects *fx = &theme_default()->effects;
+    const GfxShadow *shadow = gfx_shadow_get(fx->window_radius, fx->shadow_blur_radius);
+    Window *bg;
+    Window *card;
+    CompWindowStyle style;
+    uint32_t *front_copy;
+    uint32_t *back_copy;
+    const char *failure;
+
+    front_copy = (uint32_t *)malloc(SCENE_PIXELS * sizeof(uint32_t));
+    back_copy = (uint32_t *)malloc(SCENE_PIXELS * sizeof(uint32_t));
+    if (!front_copy || !back_copy || !shadow) {
+        return "window damage memory";
+    }
+    if (quiet_stdout_begin() != 0) {
+        return "stdout guard";
+    }
+    if (comp_init_size(TEST_SURFACE_W, TEST_SURFACE_H) != 0) {
+        quiet_stdout_end();
+        return "window damage init";
+    }
+    if (quiet_stdout_end() != 0) {
+        return "stdout restore";
+    }
+    bg = comp_create_window(0, 0, TEST_SURFACE_W, TEST_SURFACE_H);
+    card = comp_create_window(90, 40, 120, 80);
+    if (!bg || !card) {
+        return "window damage windows";
+    }
+    for (int y = 0; y < TEST_SURFACE_H; ++y)
+        for (int x = 0; x < TEST_SURFACE_W; ++x)
+            ((uint32_t *)bg->surface)[y * TEST_SURFACE_W + x] = fx_pattern_pixel(x, y);
+    scene_fill(card, 0, 0, 120, 80, 0x00E8ECF0u);
+
+    /* The extent is the window plus the shadow the theme tokens cast. */
+    if (!rect_is(comp_window_extent(card), 90, 40, 120, 80)) {
+        return "window extent plain";
+    }
+    comp_style_window(&style);
+    style.corner_radius = fx->window_radius;
+    if (comp_set_window_style(card, &style) != 0) {
+        return "window extent style";
+    }
+    int e = shadow->extent;
+    int left = min_int(90, 90 + fx->shadow_offset_x - e);
+    int top = min_int(40, 40 + fx->shadow_offset_y - e);
+    int right = max_int(90 + 120, 90 + 120 + fx->shadow_offset_x + e);
+    int bottom = max_int(40 + 80, 40 + 80 + fx->shadow_offset_y + e);
+    if (e <= 0 || !rect_is(comp_window_extent(card), left, top, right - left, bottom - top)) {
+        return "window extent shadow";
+    }
+    style.shadow = 0;
+    if (comp_set_window_style(card, &style) != 0 ||
+        !rect_is(comp_window_extent(card), 90, 40, 120, 80)) {
+        return "window extent no shadow";
+    }
+    style.shadow = 1;
+    if (comp_set_window_style(card, &style) != 0) {
+        return "window extent restyle";
+    }
+
+    comp_damage_all();
+    failure = frame_check_buffers(front_copy, back_copy, "window damage baseline");
+    if (failure) {
+        return failure;
+    }
+
+    /* Moving, hiding, showing, resizing and destroying need no damage from
+       the caller: the corners of the shadow are repainted too. */
+    card->x += 33;
+    card->y += 61;
+    failure = frame_check_buffers(front_copy, back_copy, "window damage move");
+    if (failure) {
+        return failure;
+    }
+    card->visible = 0;
+    failure = frame_check_buffers(front_copy, back_copy, "window damage hide");
+    if (failure) {
+        return failure;
+    }
+    card->visible = 1;
+    failure = frame_check_buffers(front_copy, back_copy, "window damage show");
+    if (failure) {
+        return failure;
+    }
+    if (comp_resize_window(card, 60, 50) != 0) {
+        return "window damage resize";
+    }
+    scene_fill(card, 0, 0, 60, 50, 0x00203040u);
+    failure = frame_check_buffers(front_copy, back_copy, "window damage resize");
+    if (failure) {
+        return failure;
+    }
+
+    /* Consecutive frames over different areas leave no stale pixels behind in
+       either buffer, which presenting a merged damage box relies on. */
+    scene_fill(bg, 5, 5, 30, 30, 0x00FF0000u);
+    comp_damage_rect(bg, 5, 5, 30, 30);
+    failure = frame_check_buffers(front_copy, back_copy, "window damage first frame");
+    if (failure) {
+        return failure;
+    }
+    scene_fill(bg, 250, 150, 40, 30, 0x0000FF00u);
+    comp_damage_rect(bg, 250, 150, 40, 30);
+    failure = frame_check_buffers(front_copy, back_copy, "window damage second frame");
+    if (failure) {
+        return failure;
+    }
+
+    if (comp_destroy_window(card) != 0) {
+        return "window damage destroy";
+    }
+    failure = frame_check_buffers(front_copy, back_copy, "window damage destroyed");
+    if (failure) {
+        return failure;
+    }
+    if (comp_destroy_window(bg) != 0 || comp_window_count() != 0) {
+        return "window damage cleanup";
+    }
+    free(front_copy);
+    free(back_copy);
+    return 0;
+}
+
 /* ---------------- settings model, palette and Settings app ---------------- */
 
 #define SETTINGS_TEST_PATH "/settings_test.conf"
@@ -1009,11 +1226,29 @@ static const char *test_settings_palette(void) {
         luma_distance(light.chrome_text, light.taskbar) < 100) {
         return "palette contrast";
     }
-    if (luma(light.taskbar) > 80 || luma(light.menu) > 80 || light.glass_alpha < dark.glass_alpha) {
-        return "palette chrome stays dark";
+    if (luma(light.taskbar) <= luma(dark.taskbar) || luma(light.menu) <= luma(dark.menu) ||
+        luma(light.chrome_text) >= luma(dark.chrome_text)) {
+        return "palette chrome follows theme";
     }
-    if (dark.terminal_bg != light.terminal_bg || dark.title != light.title ||
-        dark.document_bg != light.document_bg) {
+    if (luma_distance(dark.chrome_icon, dark.taskbar) < 100 ||
+        luma_distance(light.chrome_icon, light.taskbar) < 100 ||
+        luma_distance(dark.chrome_icon, dark.menu) < 100 ||
+        luma_distance(light.chrome_icon, light.menu) < 100) {
+        return "palette chrome icon contrast";
+    }
+    if (luma(light.title) <= luma(dark.title) || luma(light.title_focus) <= luma(dark.title_focus) ||
+        luma(light.title_text) >= luma(dark.title_text) ||
+        luma(light.title_focus) < luma(light.title)) {
+        return "palette title bar follows theme";
+    }
+    if (luma_distance(dark.title_text, dark.title) < 100 ||
+        luma_distance(light.title_text, light.title) < 100 ||
+        luma_distance(dark.title_text, dark.title_focus) < 100 ||
+        luma_distance(light.title_text, light.title_focus) < 100 ||
+        dark.title_border == dark.title || light.title_border == light.title) {
+        return "palette title bar contrast";
+    }
+    if (dark.terminal_bg != light.terminal_bg || dark.document_bg != light.document_bg) {
         return "palette theme independent tokens";
     }
 
@@ -1652,6 +1887,12 @@ int main(void) {
     }
     if (!failure) {
         failure = test_compositor_effects();
+    }
+    if (!failure) {
+        failure = test_window_geometry();
+    }
+    if (!failure) {
+        failure = test_window_damage();
     }
     if (!failure) {
         failure = test_settings_model();
