@@ -30,27 +30,27 @@ int main(void) {
     const char data[] = "hello fs\n";
 
     /* 1. mkdir accept 0 or -17 */
-    n = sys_mkdir("/fstestdir");
+    n = sys_mkdir("/tmp/fstestdir");
     if (n != 0 && n != -17) {
         fail("mkdir");
         return 1;
     }
 
     /* 2. writef */
-    if (sys_writef("/fstest.txt", data, 9) != 0) {
+    if (sys_writef("/tmp/fstest.txt", data, 9) != 0) {
         fail("writef");
         return 1;
     }
 
     /* 3. stat reg size 9 */
-    if (stat("/fstest.txt", &st) != 0 || !S_ISREG(st.st_mode) ||
+    if (stat("/tmp/fstest.txt", &st) != 0 || !S_ISREG(st.st_mode) ||
         st.st_size != 9) {
         fail("stat new");
         return 1;
     }
 
     /* 4. open + read */
-    fd = open("/fstest.txt", 0);
+    fd = open("/tmp/fstest.txt", 0);
     if (fd < 0) {
         fail("open");
         return 1;
@@ -63,40 +63,45 @@ int main(void) {
     }
 
     /* 5. rename */
-    if (sys_rename("/fstest.txt", "/fstest2.txt") != 0) {
+    if (sys_rename("/tmp/fstest.txt", "/tmp/fstest2.txt") != 0) {
         fail("rename");
         return 1;
     }
-    if (stat("/fstest.txt", &st) == 0) {
+    if (stat("/tmp/fstest.txt", &st) == 0) {
         fail("old exists");
         return 1;
     }
-    if (stat("/fstest2.txt", &st) != 0 || !S_ISREG(st.st_mode) ||
+    if (stat("/tmp/fstest2.txt", &st) != 0 || !S_ISREG(st.st_mode) ||
         st.st_size != 9) {
         fail("new stat");
         return 1;
     }
 
     /* 6. unlink */
-    if (sys_unlink("/fstest2.txt") != 0) {
+    if (sys_unlink("/tmp/fstest2.txt") != 0) {
         fail("unlink");
         return 1;
     }
-    if (stat("/fstest2.txt", &st) == 0) {
+    if (stat("/tmp/fstest2.txt", &st) == 0) {
         fail("unlink incomplete");
         return 1;
     }
 
     /* 7. mkdir idempotent */
-    n = sys_mkdir("/fstestdir");
+    n = sys_mkdir("/tmp/fstestdir");
     if (n != 0 && n != -17) {
         fail("mkdir2");
         return 1;
     }
 
     /* 8. unlink nonexistent -> -2 */
-    if (sys_unlink("/fstest_no_such_file.txt") != -2) {
+    if (sys_unlink("/tmp/fstest_no_such_file.txt") != -2) {
         fail("unlink enoent");
+        return 1;
+    }
+
+    if (sys_rmdir("/tmp/fstestdir") != 0) {
+        fail("rmdir");
         return 1;
     }
 

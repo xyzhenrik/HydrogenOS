@@ -39,36 +39,43 @@ def write_entry(f, name, data, mode):
 
 
 def usage():
-    print("usage: mkinitrd.py <output> name=path [name=path ...]")
+    print("usage: mkinitrd.py <output> <root-directory>")
     sys.exit(1)
 
 
 CPIO_HDR_LEN = 110
-CPIO_MODE_FILE = 0o100644
+CPIO_MODE_DIR = 0o040755
+CPIO_MODE_FILE = 0o100755
+
+
+def collect(root):
+    """Returns (name, mode, data) for every entry below root, each directory
+    ahead of its contents."""
+    entries = []
+    for current, dirs, files in os.walk(root):
+        dirs.sort()
+        relative = os.path.relpath(current, root)
+        if relative != ".":
+            entries.append((relative, CPIO_MODE_DIR, b""))
+        for name in sorted(files):
+            path = os.path.join(current, name)
+            with open(path, "rb") as src:
+                data = src.read()
+            entries.append((os.path.normpath(os.path.join(relative, name)),
+                            CPIO_MODE_FILE, data))
+    return entries
 
 
 def main():
-    if len(sys.argv) < 3:
+    if len(sys.argv) != 3:
         usage()
-    out_path = sys.argv[1]
-    entries = []
-    for arg in sys.argv[2:]:
-        if "=" in arg:
-            name, path = arg.split("=", 1)
-        else:
-            path = arg
-            name = os.path.basename(path)
-        if not name:
-            raise SystemExit(f"invalid name for '{arg}'")
-        if not os.path.isfile(path):
-            raise SystemExit(f"not a file: {path}")
-        with open(path, "rb") as src:
-            data = src.read()
-        entries.append((name, data))
+    out_path, root = sys.argv[1], sys.argv[2]
+    if not os.path.isdir(root):
+        raise SystemExit(f"not a directory: {root}")
 
     with open(out_path, "wb") as f:
-        for name, data in entries:
-            write_entry(f, name, data, CPIO_MODE_FILE)
+        for name, mode, data in collect(root):
+            write_entry(f, name, data, mode)
         write_entry(f, "TRAILER!!!", b"", CPIO_MODE_FILE)
 
 

@@ -234,7 +234,21 @@ DISK_IMG = $(BUILD_DIR)/disk.img
 FS_DIR = fsroot
 FS_FILES = $(shell find $(FS_DIR) -type f 2>/dev/null)
 USER_ELFS = $(foreach v,$(filter USER_%_ELF,$(.VARIABLES)),$($(v)))
-$(DISK_IMG): $(USER_ELFS) $(INIT_CONFIG)
+
+# The root filesystem is staged once from fsroot/ plus the programs placed by
+# tools/rootfs.manifest; the disk image and the initrd both pack that tree.
+ROOTFS_STAGE = $(BUILD_DIR)/rootfs
+ROOTFS_STAMP = $(BUILD_DIR)/rootfs.stamp
+ifeq ($(ARCH),x86_64)
+ROOTFS_MANIFEST = tools/rootfs.manifest
+HASH := \#
+ROOTFS_ELFS := $(shell awk '{ sub(/$(HASH).*/, "") } NF { for (i = 2; i <= NF; ++i) print "$(BUILD_DIR)/user_" $$i ".elf" }' $(ROOTFS_MANIFEST))
+ROOTFS_UNLISTED := $(filter-out $(ROOTFS_ELFS),$(USER_ELFS))
+ifneq ($(ROOTFS_UNLISTED),)
+$(error not placed by $(ROOTFS_MANIFEST): $(ROOTFS_UNLISTED))
+endif
+ROOTFS_ARGS = --manifest $(ROOTFS_MANIFEST) --build-dir $(BUILD_DIR) --init-rc $(INIT_CONFIG)
+endif
 
 -include $(wildcard $(BUILD_DIR)/*.d)
 
@@ -979,73 +993,9 @@ $(USER_FAULTTEST_OBJ): userspace/faulttest/faulttest.c userspace/lib/syscall.h u
 $(USER_FAULTTEST_ELF): $(USER_FAULTTEST_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
 	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_FAULTTEST_OBJ)
 
-$(INITRD): $(USER_HELLO_ELF) $(USER_ECHO_ELF) $(USER_CAT_ELF) $(USER_TIME_ELF) $(USER_SLEEP_ELF) $(USER_PIPEREAD_ELF) $(USER_PIPEDELAYREAD_ELF) $(USER_PIPEPRODUCER_ELF) $(USER_PIPECONSUMER_ELF) $(USER_LOGPRODUCER_A_ELF) $(USER_LOGPRODUCER_B_ELF) $(USER_LOGCOLLECTOR_ELF) $(USER_BOOTPROBE_ELF) $(USER_HANDOFFCHECK_ELF) $(USER_STDIOCHECK_ELF) $(USER_STDIOBADBIND_ELF) $(USER_STDIONULLCHECK_ELF) $(USER_DUPCHECK_ELF) $(USER_HANDLELIMITCHECK_ELF) $(USER_FILEOFFSETCHECK_ELF) $(USER_SEEKCHECK_ELF) $(USER_POLLCHECK_ELF) $(USER_POLLWAITCHECK_ELF) $(USER_POLLWAKEWRITER_ELF) $(USER_POLLMANYCHECK_ELF) $(USER_CWDCHECK_ELF) $(USER_DUPFALLBACKCHECK_ELF) $(USER_FSTEST_ELF) $(USER_LOGIN_ELF) $(USER_PKGTEST_ELF) $(USER_LOGSINK_WRITER_A_ELF) $(USER_LOGSINK_WRITER_B_ELF) $(USER_TEEWRITER_ELF) $(USER_TEEREADER_A_ELF) $(USER_TEEREADER_B_ELF) $(USER_MMAPTEST_ELF) $(USER_COMPOSITOR_ELF) $(USER_DESKTOPDEMO_ELF) $(USER_DESKTOPTEST_ELF) $(USER_INIT_ELF) $(USER_SHELL_ELF) $(USER_SHELLTEST_ELF) $(INIT_CONFIG) tools/mkinitrd.py $(USER_DATE_ELF) $(USER_RTCTEST_ELF) $(USER_PS_ELF) $(USER_PROCTEST_ELF) $(USER_DIRTEST_ELF) $(USER_POWEROFF_ELF) $(USER_REBOOT_ELF) $(USER_POWERCHECK_ELF) $(USER_NETTEST_ELF) $(USER_PING_ELF) $(USER_LIBCTEST_ELF) $(USER_LINKTEST_ELF) $(USER_SYSLOGD_ELF) $(USER_LOGREAD_ELF) $(USER_LOGTEST_ELF) $(USER_MPROTECTTEST_ELF) $(USER_NSLOOKUP_ELF) $(USER_UDPTEST_ELF) $(USER_FAULTTEST_ELF) $(USER_SCHEDTEST_ELF) $(USER_SIGTEST_ELF)
+$(INITRD): $(ROOTFS_STAMP) tools/mkinitrd.py
 	mkdir -p $(BUILD_DIR)
-	python3 tools/mkinitrd.py $@ \
-		user=$(USER_HELLO_ELF) \
-		echo=$(USER_ECHO_ELF) \
-		cat=$(USER_CAT_ELF) \
-		time=$(USER_TIME_ELF) \
-		sleep=$(USER_SLEEP_ELF) \
-		piperead=$(USER_PIPEREAD_ELF) \
-		pipedelayread=$(USER_PIPEDELAYREAD_ELF) \
-		pipeproducer=$(USER_PIPEPRODUCER_ELF) \
-		pipeconsumer=$(USER_PIPECONSUMER_ELF) \
-		logproducer_a=$(USER_LOGPRODUCER_A_ELF) \
-		logproducer_b=$(USER_LOGPRODUCER_B_ELF) \
-		logcollector=$(USER_LOGCOLLECTOR_ELF) \
-		bootprobe=$(USER_BOOTPROBE_ELF) \
-		handoffcheck=$(USER_HANDOFFCHECK_ELF) \
-		stdiocheck=$(USER_STDIOCHECK_ELF) \
-		stdiobadbind=$(USER_STDIOBADBIND_ELF) \
-		stdionullcheck=$(USER_STDIONULLCHECK_ELF) \
-		dupcheck=$(USER_DUPCHECK_ELF) \
-		handlelimitcheck=$(USER_HANDLELIMITCHECK_ELF) \
-		fileoffsetcheck=$(USER_FILEOFFSETCHECK_ELF) \
-		seekcheck=$(USER_SEEKCHECK_ELF) \
-		pollcheck=$(USER_POLLCHECK_ELF) \
-		pollwaitcheck=$(USER_POLLWAITCHECK_ELF) \
-		pollwakewriter=$(USER_POLLWAKEWRITER_ELF) \
-		pollmanycheck=$(USER_POLLMANYCHECK_ELF) \
-		cwdcheck=$(USER_CWDCHECK_ELF) \
-		fstest=$(USER_FSTEST_ELF) \
-		dirtest=$(USER_DIRTEST_ELF) \
-		login=$(USER_LOGIN_ELF) \
-		pkgtest=$(USER_PKGTEST_ELF) \
-		ps=$(USER_PS_ELF) \
-		proctest=$(USER_PROCTEST_ELF) \
-		nettest=$(USER_NETTEST_ELF) \
-		schedtest=$(USER_SCHEDTEST_ELF) \
-		sigtest=$(USER_SIGTEST_ELF) \
-		ping=$(USER_PING_ELF) \
-		linktest=$(USER_LINKTEST_ELF) \
-		syslogd=$(USER_SYSLOGD_ELF) \
-		logread=$(USER_LOGREAD_ELF) \
-		logtest=$(USER_LOGTEST_ELF) \
-		nslookup=$(USER_NSLOOKUP_ELF) \
-		udptest=$(USER_UDPTEST_ELF) \
-		dupfallbackcheck=$(USER_DUPFALLBACKCHECK_ELF) \
-		logsink_writer_a=$(USER_LOGSINK_WRITER_A_ELF) \
-		logsink_writer_b=$(USER_LOGSINK_WRITER_B_ELF) \
-		teewriter=$(USER_TEEWRITER_ELF) \
-		teereader_a=$(USER_TEEREADER_A_ELF) \
-		teereader_b=$(USER_TEEREADER_B_ELF) \
-		mmaptest=$(USER_MMAPTEST_ELF) \
-		libctest=$(USER_LIBCTEST_ELF) \
-		mprotecttest=$(USER_MPROTECTTEST_ELF) \
-		faulttest=$(USER_FAULTTEST_ELF) \
-		poweroff=$(USER_POWEROFF_ELF) \
-		reboot=$(USER_REBOOT_ELF) \
-		powercheck=$(USER_POWERCHECK_ELF) \
-		compositor=$(USER_COMPOSITOR_ELF) \
-		desktopdemo=$(USER_DESKTOPDEMO_ELF) \
-		desktoptest=$(USER_DESKTOPTEST_ELF) \
-		init.rc=$(INIT_CONFIG) \
-		init=$(USER_INIT_ELF) \
-		shell=$(USER_SHELL_ELF) \
-		date=$(USER_DATE_ELF) \
-		rtctest=$(USER_RTCTEST_ELF) \
-		shelltest=$(USER_SHELLTEST_ELF)
+	python3 tools/mkinitrd.py $@ $(ROOTFS_STAGE)
 endif
 
 $(BUILD_DIR)/syscall.o: kernel/core/syscall.c kernel/core/usercopy.h kernel/core/process.h kernel/fs/vfs.h kernel/mm/paging.h kernel/include/syscall.h $(ARCH_DIR)/isr.h kernel/include/console.h kernel/include/tty.h
@@ -1156,20 +1106,16 @@ smoke:
 clean:
 	rm -rf $(BUILD_DIR)
 
-$(DISK_IMG): $(FS_FILES)
+$(ROOTFS_STAMP): tools/stage_rootfs.py $(ROOTFS_MANIFEST) $(ROOTFS_ELFS) $(INIT_CONFIG) $(FS_FILES)
+	mkdir -p $(BUILD_DIR)
+	python3 tools/stage_rootfs.py --out $(ROOTFS_STAGE) --static $(FS_DIR) $(ROOTFS_ARGS)
+	touch $@
+
+$(DISK_IMG): $(ROOTFS_STAMP)
 	mkdir -p $(BUILD_DIR)
 	@if command -v mke2fs >/dev/null 2>&1; then \
-		rm -rf $(BUILD_DIR)/stagedisk; mkdir -p $(BUILD_DIR)/stagedisk; \
-		if [ -d $(FS_DIR) ]; then cp -a $(FS_DIR)/. $(BUILD_DIR)/stagedisk/ 2>/dev/null || true; fi; \
-		mkdir -p $(BUILD_DIR)/stagedisk/bin $(BUILD_DIR)/stagedisk/etc $(BUILD_DIR)/stagedisk/tmp $(BUILD_DIR)/stagedisk/home $(BUILD_DIR)/stagedisk/var/log; \
-		for f in $(BUILD_DIR)/user_*.elf; do \
-			[ -e "$$f" ] || continue; \
-			n=$$(basename $$f .elf); n=$${n#user_}; \
-			cp $$f $(BUILD_DIR)/stagedisk/$$n; \
-		done; \
-		cp $(INIT_CONFIG) $(BUILD_DIR)/stagedisk/init.rc; \
 		rm -f $(DISK_IMG); \
-		mke2fs -t ext2 -F -b 1024 -d $(BUILD_DIR)/stagedisk $(DISK_IMG) 16M; \
+		mke2fs -t ext2 -F -b 1024 -d $(ROOTFS_STAGE) $(DISK_IMG) 16M; \
 	else \
 		dd if=/dev/zero of=$(DISK_IMG) bs=1M count=16; \
 	fi

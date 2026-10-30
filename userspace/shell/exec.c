@@ -262,7 +262,7 @@ static int contains_slash(const char *s) {
     return 0;
 }
 
-/* Looks name up along $PATH (default "/") into resolved_path. */
+/* Looks name up along $PATH (default "/bin:/sbin") into resolved_path. */
 static int resolve_external(const char *name) {
     size_t name_len = strlen(name);
     const char *dirs;
@@ -274,7 +274,7 @@ static int resolve_external(const char *name) {
     }
     dirs = env_get("PATH", 4);
     if (!dirs || !*dirs)
-        dirs = "/";
+        dirs = "/bin:/sbin";
     while (*dirs) {
         size_t dir_len = 0;
         size_t len;

@@ -6,9 +6,9 @@ enum {
     ENOTDIR_ERRNO = 20,
 };
 
-/* Must differ from the name of this program: every userspace binary is
- * installed as a regular file in the root directory. */
-#define CWDCHECK_DIR "/cwdcheck.d"
+#define CWDCHECK_DIR "/tmp/cwdcheck.d"
+/* An installed binary: a directory must not be creatable or enterable there. */
+#define CWDCHECK_BINARY "/bin/time"
 
 static int str_eq(const char *a, const char *b) {
     if (!a || !b) {
@@ -48,11 +48,11 @@ int main(void) {
         return 1;
     }
 
-    if (sys_mkdir("/cwdcheck") != -EEXIST_ERRNO) {
+    if (sys_mkdir(CWDCHECK_BINARY) != -EEXIST_ERRNO) {
         write(1, "cwdcheck: mkdir over binary not refused\n", 40);
         return 19;
     }
-    if (chdir("/cwdcheck") != -ENOTDIR_ERRNO) {
+    if (chdir(CWDCHECK_BINARY) != -ENOTDIR_ERRNO) {
         write(1, "cwdcheck: chdir into binary not refused\n", 40);
         return 20;
     }
@@ -100,7 +100,7 @@ int main(void) {
         return 8;
     }
 
-    fd = open("../time", 0);
+    fd = open("../../bin/time", 0);
     if (fd < 0) {
         write(1, "cwdcheck: parent path failed\n", 29);
         return 9;
@@ -129,7 +129,7 @@ int main(void) {
         return 14;
     }
 
-    if (chdir("..") != 0) {
+    if (chdir("../..") != 0) {
         write(1, "cwdcheck: chdir parent failed\n", 30);
         return 15;
     }
@@ -143,7 +143,7 @@ int main(void) {
         return 22;
     }
 
-    pid = spawn_with_stdio("time", SPAWN_STDIO_INHERIT, SPAWN_STDIO_NULL, SPAWN_STDIO_INHERIT);
+    pid = spawn_with_stdio("bin/time", SPAWN_STDIO_INHERIT, SPAWN_STDIO_NULL, SPAWN_STDIO_INHERIT);
     if (pid < 0) {
         write(1, "cwdcheck: spawn rel failed\n", 27);
         return 17;

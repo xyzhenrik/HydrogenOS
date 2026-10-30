@@ -56,7 +56,7 @@ static int builtin_help(int argc, char **argv) {
             "Syntax:   a | b   a && b   a || b   a ; b   a &\n"
             "          < file   > file   >> file   2> file   2>&1\n"
             "          'single' \"double $VAR\" \\escape  $VAR ${VAR} $?  NAME=value\n"
-            "Other commands are looked up along $PATH (default /).\n");
+            "Other commands are looked up along $PATH (default /bin:/sbin).\n");
     return 0;
 }
 

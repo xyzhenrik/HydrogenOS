@@ -87,7 +87,7 @@ static long spawn_role(const char *role, unsigned first, unsigned second,
     snprintf(first_arg, sizeof(first_arg), "%u", first);
     snprintf(second_arg, sizeof(second_arg), "%u", second);
     const char *argv[] = {"schedtest", role, first_arg, second_arg, 0};
-    return spawn_args("/schedtest", argv, 0, in_fd, out_fd,
+    return spawn_args("/lib/tests/schedtest", argv, 0, in_fd, out_fd,
                       SPAWN_STDIO_INHERIT);
 }
 

@@ -16,7 +16,7 @@
 #define LOGTEST_OLD_PATH  "/var/log/system.log.1"
 #define LOGTEST_ERR_ENOENT (-2)
 #define LOGTEST_SERVICE   "logtest"
-#define LOGTEST_PEER_TEXT " bootprobe: bootprobe: /shell ok at "
+#define LOGTEST_PEER_TEXT " bootprobe: bootprobe: /bin/shell ok at "
 
 enum {
     LOGTEST_TIMEOUT_MS = 15000,
@@ -125,7 +125,8 @@ static int is_directory(const char *path) {
 
 int main(void) {
     static const char *const layout[] = {
-        "/bin", "/etc", "/tmp", "/home", "/var", "/var/log",
+        "/bin", "/sbin", "/lib/tests", "/etc", "/tmp", "/home/user", "/root",
+        "/usr/share", "/var/log", "/proc",
     };
     char marker[LOGTEST_MARKER_CAP];
     char suffix[LOGTEST_MARKER_CAP + sizeof(LOGTEST_SERVICE) + 2];

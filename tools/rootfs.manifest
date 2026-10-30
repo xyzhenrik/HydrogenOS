@@ -1,0 +1,19 @@
+# Root filesystem layout: which program lands in which directory.
+# Format: <directory below /> <program> [<program> ...]
+# Every program is built as build/<arch>/user_<program>.elf. The Makefile
+# refuses to build if a userspace binary is missing from this list.
+# Static content (etc/passwd, home/user/..., ...) lives in fsroot/.
+# See docs/FS_LAYOUT.md.
+
+bin        shell cat echo ps ping nslookup date time sleep hello logread poweroff reboot
+sbin       init syslogd login compositor desktopdemo
+
+lib/tests  bootprobe cwdcheck desktoptest dirtest dupcheck dupfallbackcheck
+lib/tests  faulttest fileoffsetcheck fstest handlelimitcheck handoffcheck
+lib/tests  libctest linktest logcollector logproducer_a logproducer_b logtest
+lib/tests  logsink_writer_a logsink_writer_b mmaptest mprotecttest nettest
+lib/tests  pipeconsumer pipedelayread pipeproducer piperead pkgtest
+lib/tests  pollcheck pollmanycheck pollwaitcheck pollwakewriter powercheck
+lib/tests  proctest rtctest schedtest seekcheck shelltest sigtest
+lib/tests  stdiobadbind stdiocheck stdionullcheck
+lib/tests  teereader_a teereader_b teewriter udptest

@@ -838,7 +838,7 @@ static const char *test_compositor_effects(void) {
 
 /* ---------------- settings model, palette and Settings app ---------------- */
 
-#define SETTINGS_TEST_PATH "/settings_test.conf"
+#define SETTINGS_TEST_PATH "/tmp/settings_test.conf"
 #define SETTINGS_TEST_CANONICAL \
     "# HydrogenOS desktop settings\ntheme=dark\naccent=blue\nglass=on\nlayout=de\n"
 
@@ -1055,7 +1055,7 @@ static const char *test_settings_persistence(void) {
     const char *failure = 0;
 
     settings_defaults(&loaded);
-    if (settings_load("/settings_missing.conf", &loaded) >= 0) {
+    if (settings_load("/tmp/settings_missing.conf", &loaded) >= 0) {
         return "settings load missing";
     }
     settings_defaults(&saved);
