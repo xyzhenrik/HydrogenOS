@@ -41,3 +41,8 @@ int ext2_unlink(const char *path);
 int ext2_rename(const char *old_path, const char *new_path);
 int ext2_link(const char *old_path, const char *new_path);
 int ext2_symlink(const char *target, const char *path);
+/* Replace the permission bits (0777 at most; setuid/setgid/sticky are cleared)
+   or the owner of the inode that path names, without following a final
+   symlink. */
+int ext2_chmod(const char *path, uint32_t mode);
+int ext2_chown(const char *path, uint32_t uid, uint32_t gid);

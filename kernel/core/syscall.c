@@ -13,6 +13,7 @@ void fb_console_clear(void);
 #include "core/time.h"
 #include "fs/vfs.h"
 #include "fs/ext2.h"
+#include "fs/vfs_access.h"
 #include "paging.h"
 #include "pmm.h"
 #include "mm/pmm.h"
@@ -172,6 +173,14 @@ static uint64_t fs_status(int rc) {
     default:
         return (uint64_t)-EIO;
     }
+}
+
+/* For the attribute calls, which report a refused permission as -EPERM or
+   -EACCES instead of treating the former as the VFS' generic failure. */
+static uint64_t attribute_status(int rc) {
+    if (rc == -EPERM || rc == -EACCES)
+        return (uint64_t)(int64_t)rc;
+    return fs_status(rc);
 }
 
 void syscall_set_bootstrap(process_t *proc) {
@@ -425,6 +434,8 @@ uint64_t syscall_handle(regs_t *r) {
             return (uint64_t)-EIO;
         if (handle == PROCESS_RESOURCE_NO_KERNEL_RESOURCE)
             return (uint64_t)-ENOMEM;
+        if (handle == PROCESS_RESOURCE_ACCESS)
+            return (uint64_t)-EACCES;
         if (handle < 0)
             return (uint64_t)-ENOENT;
         return (uint64_t)(handle + 3);
@@ -537,6 +548,9 @@ uint64_t syscall_handle(regs_t *r) {
         int path_rc = copy_followed_user_path(proc, path, kpath, sizeof(kpath), 1);
         if (path_rc != 0)
             return (uint64_t)(int64_t)path_rc;
+        int access_rc = vfs_access_check(&proc->cred, kpath, VFS_ACCESS_EXEC);
+        if (access_rc != 0)
+            return (uint64_t)(int64_t)access_rc;
         uint64_t pid = 0;
         int rc = user_spawn_from_vfs(kpath, r, &pid);
         if (rc != 0)
@@ -555,6 +569,9 @@ uint64_t syscall_handle(regs_t *r) {
         int path_rc = copy_followed_user_path(proc, path, kpath, sizeof(kpath), 1);
         if (path_rc != 0)
             return (uint64_t)(int64_t)path_rc;
+        int access_rc = vfs_access_check(&proc->cred, kpath, VFS_ACCESS_EXEC);
+        if (access_rc != 0)
+            return (uint64_t)(int64_t)access_rc;
         uint64_t pid = 0;
         int rc = user_spawn_with_stdio_from_vfs(kpath, r, &pid,
                                                 stdin_fd, stdout_fd, stderr_fd);
@@ -576,6 +593,9 @@ uint64_t syscall_handle(regs_t *r) {
         int path_rc = copy_followed_user_path(proc, path, kpath, sizeof(kpath), 1);
         if (path_rc != 0)
             return (uint64_t)(int64_t)path_rc;
+        int access_rc = vfs_access_check(&proc->cred, kpath, VFS_ACCESS_EXEC);
+        if (access_rc != 0)
+            return (uint64_t)(int64_t)access_rc;
         spawn_args_t *args = (spawn_args_t *)kalloc(sizeof(spawn_args_t));
         if (!args)
             return (uint64_t)-ENOMEM;
@@ -607,6 +627,9 @@ uint64_t syscall_handle(regs_t *r) {
         int path_rc = copy_followed_user_path(proc, path, kpath, sizeof(kpath), 1);
         if (path_rc != 0)
             return (uint64_t)(int64_t)path_rc;
+        int access_rc = vfs_access_check(&proc->cred, kpath, VFS_ACCESS_EXEC);
+        if (access_rc != 0)
+            return (uint64_t)(int64_t)access_rc;
         /* Everything is copied before the old image is touched. */
         spawn_args_t *args = (spawn_args_t *)kalloc(sizeof(spawn_args_t));
         if (!args)
@@ -765,6 +788,9 @@ uint64_t syscall_handle(regs_t *r) {
             return (uint64_t)(int64_t)path_rc;
         if (!vfs_is_ready())
             return (uint64_t)-ENOENT;
+        int access_rc = vfs_access_check(&proc->cred, kpath, 0);
+        if (access_rc != 0)
+            return (uint64_t)(int64_t)access_rc;
         hydrogen_stat_t kst;
         if (vfs_stat_full(kpath, &kst) != 0)
             return (uint64_t)-ENOENT;
@@ -803,6 +829,9 @@ uint64_t syscall_handle(regs_t *r) {
             return (uint64_t)(int64_t)path_rc;
         if (!vfs_is_ready())
             return (uint64_t)-ENOENT;
+        int access_rc = vfs_access_check(&proc->cred, kpath, VFS_ACCESS_READ);
+        if (access_rc != 0)
+            return (uint64_t)(int64_t)access_rc;
         hydrogen_dirent_t kd;
         int rc = vfs_readdir(kpath, &pos, &kd);
         if (rc < 0)
@@ -840,6 +869,9 @@ uint64_t syscall_handle(regs_t *r) {
             return (uint64_t)-ENOENT;
         if (st.type != 2)
             return (uint64_t)-ENOTDIR;
+        int access_rc = vfs_access_check(&proc->cred, newcwd, VFS_ACCESS_EXEC);
+        if (access_rc != 0)
+            return (uint64_t)(int64_t)access_rc;
         for (size_t i = 0; i < sizeof(proc->cwd); ++i) {
             proc->cwd[i] = newcwd[i];
             if (newcwd[i] == 0) {
@@ -860,7 +892,13 @@ uint64_t syscall_handle(regs_t *r) {
             return (uint64_t)(int64_t)path_rc;
         if (!vfs_is_ready())
             return (uint64_t)-EIO;
-        return fs_status(vfs_mkdir(kpath));
+        int access_rc = vfs_access_check_entry(&proc->cred, kpath);
+        if (access_rc != 0)
+            return (uint64_t)(int64_t)access_rc;
+        int rc = vfs_mkdir(kpath);
+        if (rc == 0)
+            rc = vfs_access_claim(&proc->cred, kpath);
+        return fs_status(rc);
     }
     case SYS_RMDIR: {
         const char *path = (const char *)(uintptr_t)r->rdi;
@@ -873,6 +911,9 @@ uint64_t syscall_handle(regs_t *r) {
             return (uint64_t)(int64_t)path_rc;
         if (!vfs_is_ready())
             return (uint64_t)-EIO;
+        int access_rc = vfs_access_check_entry(&proc->cred, kpath);
+        if (access_rc != 0)
+            return (uint64_t)(int64_t)access_rc;
         return fs_status(vfs_rmdir(kpath));
     }
     case SYS_UNLINK: {
@@ -886,6 +927,9 @@ uint64_t syscall_handle(regs_t *r) {
             return (uint64_t)(int64_t)path_rc;
         if (!vfs_is_ready())
             return (uint64_t)-EIO;
+        int access_rc = vfs_access_check_entry(&proc->cred, kpath);
+        if (access_rc != 0)
+            return (uint64_t)(int64_t)access_rc;
         return fs_status(vfs_unlink(kpath));
     }
     case SYS_RENAME: {
@@ -904,6 +948,11 @@ uint64_t syscall_handle(regs_t *r) {
             return (uint64_t)(int64_t)new_rc;
         if (!vfs_is_ready())
             return (uint64_t)-EIO;
+        int access_rc = vfs_access_check_entry(&proc->cred, kold);
+        if (access_rc == 0)
+            access_rc = vfs_access_check_entry(&proc->cred, knew);
+        if (access_rc != 0)
+            return (uint64_t)(int64_t)access_rc;
         return fs_status(vfs_rename(kold, knew));
     }
     case SYS_LINK: {
@@ -922,6 +971,11 @@ uint64_t syscall_handle(regs_t *r) {
             return (uint64_t)(int64_t)new_rc;
         if (!vfs_is_ready())
             return (uint64_t)-EIO;
+        int access_rc = vfs_access_check(&proc->cred, kold, 0);
+        if (access_rc == 0)
+            access_rc = vfs_access_check_entry(&proc->cred, knew);
+        if (access_rc != 0)
+            return (uint64_t)(int64_t)access_rc;
         return fs_status(vfs_link(kold, knew));
     }
     case SYS_SYMLINK: {
@@ -943,7 +997,13 @@ uint64_t syscall_handle(regs_t *r) {
             return (uint64_t)(int64_t)link_rc;
         if (!vfs_is_ready())
             return (uint64_t)-EIO;
-        return fs_status(vfs_symlink(ktarget, klink));
+        int access_rc = vfs_access_check_entry(&proc->cred, klink);
+        if (access_rc != 0)
+            return (uint64_t)(int64_t)access_rc;
+        int rc = vfs_symlink(ktarget, klink);
+        if (rc == 0)
+            rc = vfs_access_claim(&proc->cred, klink);
+        return fs_status(rc);
     }
     case SYS_READLINK: {
         const char *path = (const char *)(uintptr_t)r->rdi;
@@ -960,6 +1020,9 @@ uint64_t syscall_handle(regs_t *r) {
             return (uint64_t)(int64_t)path_rc;
         if (!vfs_is_ready())
             return (uint64_t)-EIO;
+        int access_rc = vfs_access_check(&proc->cred, kpath, 0);
+        if (access_rc != 0)
+            return (uint64_t)(int64_t)access_rc;
         char ktarget[VFS_PATH_MAX];
         int len = vfs_readlink(kpath, ktarget, sizeof(ktarget));
         if (len == -EINVAL || len == -ENOENT || len == -ENOTDIR)
@@ -983,6 +1046,9 @@ uint64_t syscall_handle(regs_t *r) {
         int path_rc = copy_followed_user_path(proc, path, kpath, sizeof(kpath), 1);
         if (path_rc != 0)
             return (uint64_t)(int64_t)path_rc;
+        int access_rc = vfs_access_check(&proc->cred, kpath, VFS_ACCESS_WRITE);
+        if (access_rc != 0)
+            return (uint64_t)(int64_t)access_rc;
         if (!vfs_is_ready())
             return (uint64_t)-EIO;
         if (length > UINT32_MAX)
@@ -1004,7 +1070,17 @@ uint64_t syscall_handle(regs_t *r) {
             return (uint64_t)-EFAULT;
         if (!vfs_is_ready())
             return (uint64_t)-EIO;
-        return fs_status(vfs_write_file(kpath, data, size));
+        vfs_stat_t existing;
+        int created = vfs_stat(kpath, &existing) != 0;
+        int access_rc = created ? vfs_access_check_entry(&proc->cred, kpath)
+                                : vfs_access_check(&proc->cred, kpath,
+                                                   VFS_ACCESS_WRITE);
+        if (access_rc != 0)
+            return (uint64_t)(int64_t)access_rc;
+        int rc = vfs_write_file(kpath, data, size);
+        if (rc == 0 && created)
+            rc = vfs_access_claim(&proc->cred, kpath);
+        return fs_status(rc);
     }
     case SYS_MMAP: {
         process_t *proc = process_current();
@@ -1148,6 +1224,34 @@ uint64_t syscall_handle(regs_t *r) {
         if (process_begin_socket_recv_wait(proc, (int)r->rdi) != 0)
             return (uint64_t)-EBADF;
         return 0;
+    }
+    case SYS_GETUID:
+        return process_current()->cred.uid;
+    case SYS_GETGID:
+        return process_current()->cred.gid;
+    case SYS_SETUID:
+        return (uint64_t)(int64_t)credentials_set_uid(&process_current()->cred,
+                                                      (uint32_t)r->rdi);
+    case SYS_SETGID:
+        return (uint64_t)(int64_t)credentials_set_gid(&process_current()->cred,
+                                                      (uint32_t)r->rdi);
+    case SYS_CHMOD:
+    case SYS_CHOWN: {
+        const char *path = (const char *)(uintptr_t)r->rdi;
+        process_t *proc = process_current();
+        if (!path)
+            return (uint64_t)-EFAULT;
+        char kpath[PROCESS_CWD_CAP];
+        int path_rc = copy_followed_user_path(proc, path, kpath, sizeof(kpath), 1);
+        if (path_rc != 0)
+            return (uint64_t)(int64_t)path_rc;
+        if (!vfs_is_ready())
+            return (uint64_t)-EIO;
+        int rc = r->rax == SYS_CHMOD
+                     ? vfs_access_chmod(&proc->cred, kpath, (uint32_t)r->rsi)
+                     : vfs_access_chown(&proc->cred, kpath, (uint32_t)r->rsi,
+                                        (uint32_t)r->rdx);
+        return attribute_status(rc);
     }
     case SYS_KILL:
         return (uint64_t)signal_kill((uint32_t)r->rdi, (int)r->rsi);

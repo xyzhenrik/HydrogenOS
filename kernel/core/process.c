@@ -8,6 +8,7 @@
 #include "serial.h"
 #include "tty.h"
 #include "fs/vfs.h"
+#include "fs/vfs_access.h"
 #include "kheap.h"
 #include "paging.h"
 #include "net/netif.h"
@@ -1105,6 +1106,8 @@ process_t *process_create(uint64_t *pml4, uint32_t parent_pid) {
     p->pml4 = pml4;
     p->pid = next_pid++;
     p->parent_pid = parent_pid;
+    /* The creator is the running process; kernel_proc is root. */
+    p->cred = current_proc ? current_proc->cred : kernel_proc.cred;
     p->name[0] = '\0';
     p->cwd[0] = '/';
     p->cwd[1] = '\0';
@@ -1399,6 +1402,14 @@ int process_handle_open_file(process_t *p, const char *path, uint32_t flags) {
         return PROCESS_RESOURCE_ERR;
     if (!exists && (flags & PROCESS_OPEN_CREATE) == 0)
         return PROCESS_RESOURCE_ERR;
+    uint32_t wanted = 0;
+    if ((flags & PROCESS_OPEN_READ) != 0)
+        wanted |= VFS_ACCESS_READ;
+    if ((flags & PROCESS_OPEN_WRITE) != 0)
+        wanted |= VFS_ACCESS_WRITE;
+    if ((exists ? vfs_access_check(&p->cred, norm, wanted)
+                : vfs_access_check_entry(&p->cred, norm)) != 0)
+        return PROCESS_RESOURCE_ACCESS;
     int handle = process_handle_alloc(p, PROCESS_HANDLE_FILE);
     if (handle < 0)
         return PROCESS_RESOURCE_NO_HANDLE_SLOT;
@@ -1412,6 +1423,12 @@ int process_handle_open_file(process_t *p, const char *path, uint32_t flags) {
      * never leaves a modified file behind. */
     if ((!exists || (flags & PROCESS_OPEN_TRUNCATE) != 0) &&
         vfs_write_file(norm, &empty, 0) != 0) {
+        kfree(file);
+        process_handle_reset(&p->handles[handle]);
+        return PROCESS_RESOURCE_IO_ERROR;
+    }
+    if (!exists && vfs_access_claim(&p->cred, norm) != 0) {
+        vfs_unlink(norm);
         kfree(file);
         process_handle_reset(&p->handles[handle]);
         return PROCESS_RESOURCE_IO_ERROR;

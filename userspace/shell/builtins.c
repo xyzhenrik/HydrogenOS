@@ -1,11 +1,13 @@
 #include "builtins.h"
 
+#include "account.h"
 #include "diag.h"
 #include "env.h"
 #include "exec.h"
 #include "jobs.h"
 #include "mini_libc.h"
 #include "output.h"
+#include "passwd.h"
 #include "signal.h"
 #include "syscall.h"
 
@@ -49,8 +51,9 @@ static int builtin_help(int argc, char **argv) {
     (void)argc;
     (void)argv;
     out_str(1,
-            "Builtins: cat cd cp echo env exec exit export false help jobs kill ln ls\n"
-            "          mkdir mv pwd readlink rm sleep time touch true unset wait\n"
+            "Builtins: cat cd chmod chown cp echo env exec exit export false help id\n"
+            "          jobs kill ln ls mkdir mv pwd readlink rm sleep time touch true\n"
+            "          unset wait whoami\n"
             "Diagnostics: pipe piperun pipenoinherit pipeblock pipefull\n"
             "          pipebroken pipeeof pollpipe pollwaitpipe pollmanypipe\n"
             "Syntax:   a | b   a && b   a || b   a ; b   a &\n"
@@ -127,15 +130,37 @@ static void print_link_target(const char *path) {
     out_str(1, target);
 }
 
-static void list_directory(const char *path) {
+/* Starts a long listing line: mode, links, owner, group and size. */
+static void print_long_prefix(const char *path) {
+    stat_t st;
+    char mode[11];
+    char owner[PASSWD_NAME_MAX + 11];
+    char group[PASSWD_NAME_MAX + 11];
+    char line[2 * sizeof(owner) + 48];
+    if (lstat(path, &st) != 0) {
+        out_str(1, "?????????? ? ? ? ? ");
+        return;
+    }
+    account_format_mode(st.st_mode, mode);
+    account_format_owner(st.st_uid, owner, sizeof(owner));
+    account_format_owner(st.st_gid, group, sizeof(group));
+    snprintf(line, sizeof(line), "%s %u %s %s %u ", mode, st.st_nlink, owner,
+             group, st.st_size);
+    out_str(1, line);
+}
+
+static void list_directory(const char *path, int long_format) {
     dirent_t entry;
     char full[COPY_PATH_MAX + DIRENT_NAME_MAX + 2];
     for (int pos = 0; readdir_pos(path, pos, &entry) == 1; ++pos) {
+        int has_path = snprintf(full, sizeof(full), "%s/%s", path, entry.d_name) <
+                       (int)sizeof(full);
+        if (long_format && has_path)
+            print_long_prefix(full);
         out_str(1, entry.d_name);
         if (entry.d_type == 4)
             out_char(1, '/');
-        if (entry.d_type == 10 &&
-            snprintf(full, sizeof(full), "%s/%s", path, entry.d_name) < (int)sizeof(full))
+        if (entry.d_type == 10 && has_path)
             print_link_target(full);
         out_char(1, '\n');
     }
@@ -143,11 +168,14 @@ static void list_directory(const char *path) {
 
 static int builtin_ls(int argc, char **argv) {
     int status = 0;
-    if (argc < 2) {
-        list_directory(".");
+    int first = 1;
+    int long_format = first < argc && str_eq(argv[first], "-l");
+    first += long_format;
+    if (first >= argc) {
+        list_directory(".", long_format);
         return 0;
     }
-    for (int i = 1; i < argc; ++i) {
+    for (int i = first; i < argc; ++i) {
         stat_t st;
         if (stat(argv[i], &st) != 0) {
             out_error("ls", argv[i], "no such file or directory");
@@ -155,16 +183,18 @@ static int builtin_ls(int argc, char **argv) {
             continue;
         }
         if (!S_ISDIR(st.st_mode)) {
+            if (long_format)
+                print_long_prefix(argv[i]);
             out_str(1, argv[i]);
             print_link_target(argv[i]);
             out_char(1, '\n');
             continue;
         }
-        if (argc > 2) {
+        if (argc - first > 1) {
             out_str(1, argv[i]);
             out_str(1, ":\n");
         }
-        list_directory(argv[i]);
+        list_directory(argv[i], long_format);
     }
     return status;
 }
@@ -610,5 +640,6 @@ BuiltinFn builtin_find(const char *name) {
         if (str_eq(builtins[i].name, name))
             return builtins[i].fn;
     }
-    return diag_find(name);
+    BuiltinFn account_fn = account_find(name);
+    return account_fn ? account_fn : diag_find(name);
 }

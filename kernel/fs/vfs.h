@@ -14,6 +14,9 @@ typedef struct vfs_stat {
     uint32_t size;
     uint32_t nlink; // 0 if the filesystem does not track link counts
     uint32_t ino;
+    uint32_t mode; // permission bits only, 0777 at most
+    uint32_t uid;
+    uint32_t gid;
 } vfs_stat_t;
 
 int vfs_init(void);
@@ -31,6 +34,11 @@ int vfs_read_file(const char *path, uint8_t *out, uint32_t out_sz, uint32_t *out
 int vfs_stat(const char *path, vfs_stat_t *out);
 int vfs_stat_full(const char *path, hydrogen_stat_t *out);
 int vfs_readdir(const char *path, int *pos, hydrogen_dirent_t *out);
+/* Attribute changes return 0 or a negative errno value; -EOPNOTSUPP means the
+   filesystem has fixed ownership and permissions (ramfs, procfs). The caller
+   decides who may change what, see vfs_access.h. */
+int vfs_chmod(const char *path, uint32_t mode);
+int vfs_chown(const char *path, uint32_t uid, uint32_t gid);
 
 int vfs_open(const char *path);
 int vfs_read(int fd, uint8_t *out, uint32_t out_sz, uint32_t *out_len);

@@ -68,6 +68,12 @@
 #define SYS_READLINK 65
 #define SYS_SIGPROCMASK 68
 #define SYS_EXECVE 73
+#define SYS_GETUID 74
+#define SYS_SETUID 75
+#define SYS_GETGID 76
+#define SYS_SETGID 77
+#define SYS_CHMOD 78
+#define SYS_CHOWN 79
 #define SYS_TRUNCATE 80
 #define SYS_PERF_READ 81
 #define SYS_PUTCHAR 255
