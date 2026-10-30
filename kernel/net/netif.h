@@ -27,6 +27,11 @@ typedef struct net_interface {
 const net_interface_t *net_interface(void);
 void net_count_rx_drop(void);
 
+/* Unpredictable 32 bits for source ports and initial sequence numbers. The
+ * TSC is the only entropy source the kernel has; a multiplicative hash spreads
+ * its fast-changing low bits over the whole word. */
+uint32_t net_entropy(void);
+
 /* 1 for an address that terminates on this host: the interface address or
  * 127.0.0.0/8. */
 int net_ipv4_is_own(uint32_t ipv4);

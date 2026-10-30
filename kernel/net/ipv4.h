@@ -9,6 +9,7 @@
 #define IPV4_PAYLOAD_MAX    (NET_ETH_MTU - IPV4_HDR_LEN)
 #define IPV4_PAYLOAD_OFFSET (NET_ETH_HDR_LEN + IPV4_HDR_LEN)
 #define IPV4_PROTO_ICMP     1
+#define IPV4_PROTO_TCP      6
 #define IPV4_PROTO_UDP      17
 
 /* RFC 1071 Internet checksum, ready to be stored big-endian. */

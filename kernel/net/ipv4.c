@@ -5,6 +5,7 @@
 #include "ethernet.h"
 #include "icmp.h"
 #include "net_bytes.h"
+#include "tcp.h"
 #include "udp.h"
 
 #define IPV4_VERSION_IHL   0x45
@@ -74,6 +75,9 @@ void ipv4_input(const uint8_t *packet, size_t len) {
     switch (packet[9]) {
     case IPV4_PROTO_ICMP:
         icmp_input(src, payload, payload_len);
+        break;
+    case IPV4_PROTO_TCP:
+        tcp_input(src, dst, payload, payload_len);
         break;
     case IPV4_PROTO_UDP:
         udp_input(src, dst, payload, payload_len);

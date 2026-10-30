@@ -65,6 +65,10 @@
 #define SYS_SYMLINK 64
 #define SYS_READLINK 65
 #define SYS_SIGPROCMASK 68
+#define SYS_CONNECT 69
+#define SYS_LISTEN 70
+#define SYS_ACCEPT 71
+#define SYS_SHUTDOWN_SOCK 72
 #define SYS_EXECVE 73
 #define SYS_GETUID 74
 #define SYS_SETUID 75
@@ -463,7 +467,9 @@ static inline long sys_net_ping(unsigned int ipv4, long timeout_ms) {
 }
 
 #define NET_AF_INET      2
+#define NET_SOCK_STREAM  1
 #define NET_SOCK_DGRAM   2
+#define NET_IPPROTO_TCP  6
 #define NET_IPPROTO_UDP  17
 #define NET_MSG_DONTWAIT (1u << 0)
 
@@ -497,6 +503,38 @@ static inline long sys_recvfrom(int fd, void *buf, unsigned long len,
                                 unsigned int flags, net_sockaddr_t *from) {
     return syscall5(SYS_RECVFROM, (long)fd, (long)buf, (long)len, (long)flags,
                     (long)from);
+}
+
+/* TCP (NET_SOCK_STREAM). Data moves with read() and write() on the socket fd;
+ * poll() reports readiness. All calls block until they can proceed. */
+
+/* Opens a connection to ipv4:port and returns 0 once it is established, or
+ * -ECONNREFUSED (-111), -ETIMEDOUT (-110), -ENETUNREACH (-101), -EISCONN
+ * (-106) or another -errno. */
+static inline long sys_connect(int fd, unsigned int ipv4, unsigned int port) {
+    return syscall3(SYS_CONNECT, (long)fd, (long)ipv4, (long)port);
+}
+
+/* Marks a bound (or unbound: ephemeral port) stream socket as listening;
+ * backlog is clamped to 1..8. */
+static inline long sys_listen(int fd, int backlog) {
+    return syscall2(SYS_LISTEN, (long)fd, (long)backlog);
+}
+
+/* Waits for a connection and returns the fd of a new connected socket.
+ * peer may be NULL. */
+static inline long sys_accept(int fd, net_sockaddr_t *peer) {
+    return syscall2(SYS_ACCEPT, (long)fd, (long)peer);
+}
+
+#define NET_SHUT_RD   0
+#define NET_SHUT_WR   1
+#define NET_SHUT_RDWR 2
+
+/* NET_SHUT_WR sends a FIN once the queued data is out; the peer then reads
+ * end of stream while this side keeps receiving. */
+static inline long sys_shutdown_sock(int fd, int how) {
+    return syscall2(SYS_SHUTDOWN_SOCK, (long)fd, (long)how);
 }
 
 static inline long sys_spawn_args(const char *path, const char *const *argv,

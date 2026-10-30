@@ -67,6 +67,10 @@
 #define SYS_SYMLINK 64
 #define SYS_READLINK 65
 #define SYS_SIGPROCMASK 68
+#define SYS_CONNECT 69
+#define SYS_LISTEN 70
+#define SYS_ACCEPT 71
+#define SYS_SHUTDOWN_SOCK 72
 #define SYS_EXECVE 73
 #define SYS_GETUID 74
 #define SYS_SETUID 75

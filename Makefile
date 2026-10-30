@@ -150,6 +150,10 @@ USER_NSLOOKUP_OBJ = $(BUILD_DIR)/user_nslookup.o
 USER_NSLOOKUP_ELF = $(BUILD_DIR)/user_nslookup.elf
 USER_UDPTEST_OBJ = $(BUILD_DIR)/user_udptest.o
 USER_UDPTEST_ELF = $(BUILD_DIR)/user_udptest.elf
+USER_TCPTEST_OBJ = $(BUILD_DIR)/user_tcptest.o
+USER_TCPTEST_ELF = $(BUILD_DIR)/user_tcptest.elf
+USER_NC_OBJ = $(BUILD_DIR)/user_nc.o
+USER_NC_ELF = $(BUILD_DIR)/user_nc.elf
 USER_DUPFALLBACKCHECK_OBJ = $(BUILD_DIR)/user_dupfallbackcheck.o
 USER_DUPFALLBACKCHECK_ELF = $(BUILD_DIR)/user_dupfallbackcheck.elf
 USER_LOGSINK_WRITER_A_OBJ = $(BUILD_DIR)/user_logsink_writer_a.o
@@ -219,7 +223,7 @@ OBJS = $(BUILD_DIR)/boot.o $(BUILD_DIR)/kernel.o $(BUILD_DIR)/console.o $(BUILD_
        $(BUILD_DIR)/exit_record.o \
        $(BUILD_DIR)/ata.o $(BUILD_DIR)/pci.o $(BUILD_DIR)/virtio.o $(BUILD_DIR)/virtio_blk.o $(BUILD_DIR)/virtio_gpu.o $(BUILD_DIR)/bochs_display.o $(BUILD_DIR)/virtio_input.o $(BUILD_DIR)/virtio_net.o $(BUILD_DIR)/msi.o $(BUILD_DIR)/block.o $(BUILD_DIR)/block_cache.o $(BUILD_DIR)/mbr.o \
        $(BUILD_DIR)/net.o $(BUILD_DIR)/ethernet.o $(BUILD_DIR)/arp.o $(BUILD_DIR)/ipv4.o $(BUILD_DIR)/icmp.o \
-       $(BUILD_DIR)/udp.o $(BUILD_DIR)/socket.o \
+       $(BUILD_DIR)/udp.o $(BUILD_DIR)/socket.o $(BUILD_DIR)/tcp.o $(BUILD_DIR)/socket_syscall.o \
        $(BUILD_DIR)/ext2.o $(BUILD_DIR)/dcache.o $(BUILD_DIR)/vfs.o $(BUILD_DIR)/vfs_access.o $(BUILD_DIR)/ramfs.o $(BUILD_DIR)/procfs.o \
        $(BUILD_DIR)/framebuffer.o $(BUILD_DIR)/fb_console.o $(BUILD_DIR)/bootsplash.o $(BUILD_DIR)/cmdline.o $(BUILD_DIR)/font8x16.o $(BUILD_DIR)/renderer2d.o $(BUILD_DIR)/psf2.o $(BUILD_DIR)/ttf.o $(BUILD_DIR)/tty.o \
        $(BUILD_DIR)/gdt.o $(BUILD_DIR)/gdt_asm.o \
@@ -393,7 +397,7 @@ $(BUILD_DIR)/arp.o: kernel/net/arp.c kernel/net/arp.h kernel/net/netif.h kernel/
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/ipv4.o: kernel/net/ipv4.c kernel/net/ipv4.h kernel/net/netif.h kernel/net/arp.h kernel/net/ethernet.h kernel/net/icmp.h kernel/net/udp.h kernel/net/net_bytes.h
+$(BUILD_DIR)/ipv4.o: kernel/net/ipv4.c kernel/net/ipv4.h kernel/net/netif.h kernel/net/arp.h kernel/net/ethernet.h kernel/net/icmp.h kernel/net/tcp.h kernel/net/udp.h kernel/net/net_bytes.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
@@ -405,7 +409,15 @@ $(BUILD_DIR)/udp.o: kernel/net/udp.c kernel/net/udp.h kernel/net/ipv4.h kernel/n
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/socket.o: kernel/net/socket.c kernel/net/socket.h kernel/net/udp.h kernel/net/net.h kernel/net/netif.h kernel/net/net_bytes.h
+$(BUILD_DIR)/socket.o: kernel/net/socket.c kernel/net/socket.h kernel/net/tcp.h kernel/net/udp.h kernel/net/net.h kernel/net/netif.h kernel/net/net_bytes.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/tcp.o: kernel/net/tcp.c kernel/net/tcp.h kernel/net/ipv4.h kernel/net/socket.h kernel/net/net.h kernel/net/netif.h kernel/net/net_bytes.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(BUILD_DIR)/socket_syscall.o: kernel/core/socket_syscall.c kernel/core/socket_syscall.h kernel/core/process.h kernel/net/socket.h kernel/include/syscall.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
@@ -862,6 +874,20 @@ $(USER_UDPTEST_OBJ): userspace/udptest/udptest.c userspace/lib/dns.h userspace/l
 $(USER_UDPTEST_ELF): $(USER_UDPTEST_OBJ) $(USER_DNS_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
 	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_UDPTEST_OBJ) $(USER_DNS_OBJ)
 
+$(USER_TCPTEST_OBJ): userspace/tcptest/tcptest.c userspace/lib/syscall.h userspace/lib/mini_libc.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(USER_TCPTEST_ELF): $(USER_TCPTEST_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
+	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_TCPTEST_OBJ)
+
+$(USER_NC_OBJ): userspace/nc/nc.c userspace/lib/syscall.h userspace/lib/mini_libc.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(USER_NC_ELF): $(USER_NC_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
+	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_NC_OBJ)
+
 $(USER_DUPFALLBACKCHECK_OBJ): userspace/dupfallbackcheck/dupfallbackcheck.c userspace/lib/syscall.h userspace/lib/mini_libc.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(USER_CFLAGS) -c $< -o $@
@@ -1112,7 +1138,7 @@ $(USER_FAULTTEST_OBJ): userspace/faulttest/faulttest.c userspace/lib/syscall.h u
 $(USER_FAULTTEST_ELF): $(USER_FAULTTEST_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
 	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_FAULTTEST_OBJ)
 
-$(INITRD): $(USER_HELLO_ELF) $(USER_ECHO_ELF) $(USER_CAT_ELF) $(USER_TIME_ELF) $(USER_SLEEP_ELF) $(USER_PIPEREAD_ELF) $(USER_PIPEDELAYREAD_ELF) $(USER_PIPEPRODUCER_ELF) $(USER_PIPECONSUMER_ELF) $(USER_LOGPRODUCER_A_ELF) $(USER_LOGPRODUCER_B_ELF) $(USER_LOGCOLLECTOR_ELF) $(USER_BOOTPROBE_ELF) $(USER_HANDOFFCHECK_ELF) $(USER_STDIOCHECK_ELF) $(USER_STDIOBADBIND_ELF) $(USER_STDIONULLCHECK_ELF) $(USER_DUPCHECK_ELF) $(USER_HANDLELIMITCHECK_ELF) $(USER_FILEOFFSETCHECK_ELF) $(USER_SEEKCHECK_ELF) $(USER_POLLCHECK_ELF) $(USER_POLLWAITCHECK_ELF) $(USER_POLLWAKEWRITER_ELF) $(USER_POLLMANYCHECK_ELF) $(USER_CWDCHECK_ELF) $(USER_DUPFALLBACKCHECK_ELF) $(USER_FSTEST_ELF) $(USER_LOGIN_ELF) $(USER_PKGTEST_ELF) $(USER_LOGSINK_WRITER_A_ELF) $(USER_LOGSINK_WRITER_B_ELF) $(USER_TEEWRITER_ELF) $(USER_TEEREADER_A_ELF) $(USER_TEEREADER_B_ELF) $(USER_MMAPTEST_ELF) $(USER_COMPOSITOR_ELF) $(USER_DESKTOPDEMO_ELF) $(USER_DESKTOPTEST_ELF) $(USER_INIT_ELF) $(USER_SHELL_ELF) $(USER_SHELLTEST_ELF) $(INIT_CONFIG) tools/mkinitrd.py $(USER_DATE_ELF) $(USER_RTCTEST_ELF) $(USER_PS_ELF) $(USER_PROCTEST_ELF) $(USER_DIRTEST_ELF) $(USER_POWEROFF_ELF) $(USER_REBOOT_ELF) $(USER_POWERCHECK_ELF) $(USER_NETTEST_ELF) $(USER_PING_ELF) $(USER_LIBCTEST_ELF) $(USER_LINKTEST_ELF) $(USER_SYSLOGD_ELF) $(USER_LOGREAD_ELF) $(USER_LOGTEST_ELF) $(USER_MPROTECTTEST_ELF) $(USER_NSLOOKUP_ELF) $(USER_UDPTEST_ELF) $(USER_FAULTTEST_ELF) $(USER_SCHEDTEST_ELF) $(USER_SIGTEST_ELF) $(USER_WPTEST_ELF) $(USER_DCACHETEST_ELF) $(USER_IOTEST_ELF) $(USER_PERFTEST_ELF) $(USER_TOP_ELF) $(USER_PERFSTAT_ELF) $(USER_SPLASHTEST_ELF) $(USER_WAITQTEST_ELF) $(USER_SUPERVISETEST_ELF) $(USER_SUPERVISEFLAP_ELF) $(USER_SUPERVISEHANG_ELF) $(USER_EXECTEST_ELF) $(USER_EXECHELPER_ELF) $(USER_PERMTEST_ELF)
+$(INITRD): $(USER_HELLO_ELF) $(USER_ECHO_ELF) $(USER_CAT_ELF) $(USER_TIME_ELF) $(USER_SLEEP_ELF) $(USER_PIPEREAD_ELF) $(USER_PIPEDELAYREAD_ELF) $(USER_PIPEPRODUCER_ELF) $(USER_PIPECONSUMER_ELF) $(USER_LOGPRODUCER_A_ELF) $(USER_LOGPRODUCER_B_ELF) $(USER_LOGCOLLECTOR_ELF) $(USER_BOOTPROBE_ELF) $(USER_HANDOFFCHECK_ELF) $(USER_STDIOCHECK_ELF) $(USER_STDIOBADBIND_ELF) $(USER_STDIONULLCHECK_ELF) $(USER_DUPCHECK_ELF) $(USER_HANDLELIMITCHECK_ELF) $(USER_FILEOFFSETCHECK_ELF) $(USER_SEEKCHECK_ELF) $(USER_POLLCHECK_ELF) $(USER_POLLWAITCHECK_ELF) $(USER_POLLWAKEWRITER_ELF) $(USER_POLLMANYCHECK_ELF) $(USER_CWDCHECK_ELF) $(USER_DUPFALLBACKCHECK_ELF) $(USER_FSTEST_ELF) $(USER_LOGIN_ELF) $(USER_PKGTEST_ELF) $(USER_LOGSINK_WRITER_A_ELF) $(USER_LOGSINK_WRITER_B_ELF) $(USER_TEEWRITER_ELF) $(USER_TEEREADER_A_ELF) $(USER_TEEREADER_B_ELF) $(USER_MMAPTEST_ELF) $(USER_COMPOSITOR_ELF) $(USER_DESKTOPDEMO_ELF) $(USER_DESKTOPTEST_ELF) $(USER_INIT_ELF) $(USER_SHELL_ELF) $(USER_SHELLTEST_ELF) $(INIT_CONFIG) tools/mkinitrd.py $(USER_DATE_ELF) $(USER_RTCTEST_ELF) $(USER_PS_ELF) $(USER_PROCTEST_ELF) $(USER_DIRTEST_ELF) $(USER_POWEROFF_ELF) $(USER_REBOOT_ELF) $(USER_POWERCHECK_ELF) $(USER_NETTEST_ELF) $(USER_PING_ELF) $(USER_LIBCTEST_ELF) $(USER_LINKTEST_ELF) $(USER_SYSLOGD_ELF) $(USER_LOGREAD_ELF) $(USER_LOGTEST_ELF) $(USER_MPROTECTTEST_ELF) $(USER_NSLOOKUP_ELF) $(USER_UDPTEST_ELF) $(USER_FAULTTEST_ELF) $(USER_SCHEDTEST_ELF) $(USER_SIGTEST_ELF) $(USER_WPTEST_ELF) $(USER_DCACHETEST_ELF) $(USER_IOTEST_ELF) $(USER_PERFTEST_ELF) $(USER_TOP_ELF) $(USER_PERFSTAT_ELF) $(USER_SPLASHTEST_ELF) $(USER_WAITQTEST_ELF) $(USER_SUPERVISETEST_ELF) $(USER_SUPERVISEFLAP_ELF) $(USER_SUPERVISEHANG_ELF) $(USER_EXECTEST_ELF) $(USER_EXECHELPER_ELF) $(USER_PERMTEST_ELF) $(USER_TCPTEST_ELF) $(USER_NC_ELF)
 	mkdir -p $(BUILD_DIR)
 	python3 tools/mkinitrd.py $@ \
 		user=$(USER_HELLO_ELF) \
@@ -1171,6 +1197,8 @@ $(INITRD): $(USER_HELLO_ELF) $(USER_ECHO_ELF) $(USER_CAT_ELF) $(USER_TIME_ELF) $
 		logtest=$(USER_LOGTEST_ELF) \
 		nslookup=$(USER_NSLOOKUP_ELF) \
 		udptest=$(USER_UDPTEST_ELF) \
+		tcptest=$(USER_TCPTEST_ELF) \
+		nc=$(USER_NC_ELF) \
 		dupfallbackcheck=$(USER_DUPFALLBACKCHECK_ELF) \
 		logsink_writer_a=$(USER_LOGSINK_WRITER_A_ELF) \
 		logsink_writer_b=$(USER_LOGSINK_WRITER_B_ELF) \
