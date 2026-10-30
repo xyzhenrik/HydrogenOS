@@ -693,7 +693,11 @@ $(USER_WPTEST_OBJ): userspace/wptest/wptest.c userspace/lib/errno.h userspace/li
 
 $(USER_WPTEST_ELF): $(USER_WPTEST_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
 	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_WPTEST_OBJ)
+
 $(USER_IOTEST_OBJ): userspace/iotest/iotest.c userspace/lib/syscall.h userspace/lib/mini_libc.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
 $(USER_IOTEST_ELF): $(USER_IOTEST_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
 	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_IOTEST_OBJ)
 
