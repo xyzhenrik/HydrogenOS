@@ -60,7 +60,6 @@ int main(int argc, char **argv) {
     char byte = 0;
     unsigned long remaining;
     unsigned long start_pages;
-    long ready;
     int read_fd, write_fd, cloexec_fd;
 
     if (argc != ARG_COUNT || strcmp(argv[0], "exechelper") != 0)
