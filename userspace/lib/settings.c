@@ -280,7 +280,7 @@ void settings_palette(const Settings *settings, SettingsPalette *palette) {
     palette->chrome_text = light ? 0x1C1C1Eu : 0xD0D8E0u;
     palette->chrome_dim = light ? 0x6E6E73u : 0x8090A0u;
     palette->chrome_icon = light ? 0x3A3A3Eu : 0xFFFFFFu;
-    palette->logo = light ? 0x1A7F9Fu : 0x56CCF2u;
+    palette->light = light;
 
     palette->title = light ? 0xE2E2E7u : 0x304050u;
     palette->title_focus = light ? 0xF6F6F9u : 0x425870u;

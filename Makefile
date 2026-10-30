@@ -1134,9 +1134,25 @@ $(USER_GFX_EFFECTS_OBJ): userspace/lib/gfx_effects.c userspace/lib/gfx_effects.h
 $(USER_COMPOSITOR_ELF): $(USER_COMPOSITOR_OBJ) $(BUILD_DIR)/input_router.o $(USER_GFX_EFFECTS_OBJ) $(USER_DESKTOPTEST_THEME_OBJ) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
 	$(LD) $(USER_LDFLAGS) --defsym main=comp_event_loop -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_COMPOSITOR_OBJ) $(BUILD_DIR)/input_router.o $(USER_GFX_EFFECTS_OBJ) $(USER_DESKTOPTEST_THEME_OBJ)
 
-$(USER_DESKTOPDEMO_OBJ): userspace/desktopdemo/desktopdemo.c userspace/desktopdemo/spotlight.h userspace/compositor/compositor.h userspace/lib/mini_libc.h userspace/lib/syscall.h userspace/lib/wallclock.h userspace/lib/settings.h userspace/lib/settings_ui.h userspace/lib/window_geometry.h userspace/lib/filemanager.h userspace/desktopdemo/app_terminal.h userspace/lib/terminal.h
+# The logo comes from the artwork in assets/; the tool turns it into headers
+# of coverage bitmaps and stroke gradients, one per consumer.
+LOGO_LIGHT_SOURCE = assets/Hydrogen_Icon_Transparent.png
+LOGO_DARK_SOURCE = assets/Hydrogen_Icon_Dark_Small.png
+LOGO_GEN_DIR = $(BUILD_DIR)/gen
+LOGO_UI_HEADER = $(LOGO_GEN_DIR)/logo_ui.h
+LOGO_SPLASH_HEADER = $(LOGO_GEN_DIR)/logo_splash.h
+
+$(LOGO_UI_HEADER): tools/mklogo.py $(LOGO_LIGHT_SOURCE) $(LOGO_DARK_SOURCE)
+	mkdir -p $(LOGO_GEN_DIR)
+	python3 tools/mklogo.py --light $(LOGO_LIGHT_SOURCE) --dark $(LOGO_DARK_SOURCE) --sizes 32,40,48,64,80,128 --out $@
+
+$(LOGO_SPLASH_HEADER): tools/mklogo.py $(LOGO_LIGHT_SOURCE) $(LOGO_DARK_SOURCE)
+	mkdir -p $(LOGO_GEN_DIR)
+	python3 tools/mklogo.py --light $(LOGO_LIGHT_SOURCE) --dark $(LOGO_DARK_SOURCE) --sizes 128,256 --gradients dark --out $@
+
+$(USER_DESKTOPDEMO_OBJ): userspace/desktopdemo/desktopdemo.c $(LOGO_UI_HEADER) userspace/desktopdemo/spotlight.h userspace/compositor/compositor.h userspace/lib/mini_libc.h userspace/lib/syscall.h userspace/lib/wallclock.h userspace/lib/settings.h userspace/lib/settings_ui.h userspace/lib/window_geometry.h userspace/lib/filemanager.h userspace/desktopdemo/app_terminal.h userspace/lib/terminal.h
 	mkdir -p $(BUILD_DIR)
-	$(CC) $(USER_CFLAGS) -Iuserspace/compositor -Iuserspace/desktopdemo -c $< -o $@
+	$(CC) $(USER_CFLAGS) -Iuserspace/compositor -Iuserspace/desktopdemo -I$(LOGO_GEN_DIR) -c $< -o $@
 
 $(USER_FUZZY_OBJ): userspace/lib/fuzzy.c userspace/lib/fuzzy.h
 	mkdir -p $(BUILD_DIR)
@@ -1362,9 +1378,9 @@ $(BUILD_DIR)/fb_console.o: kernel/video/fb_console.c kernel/video/fb_console.h k
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/bootsplash.o: kernel/video/bootsplash.c kernel/video/bootsplash.h kernel/video/fb_console.h kernel/include/framebuffer.h
+$(BUILD_DIR)/bootsplash.o: kernel/video/bootsplash.c kernel/video/bootsplash.h kernel/video/fb_console.h kernel/include/framebuffer.h $(LOGO_SPLASH_HEADER)
 	mkdir -p $(BUILD_DIR)
-	$(CC) $(CFLAGS) -c $< -o $@
+	$(CC) $(CFLAGS) -I$(LOGO_GEN_DIR) -c $< -o $@
 
 $(BUILD_DIR)/cmdline.o: kernel/core/cmdline.c kernel/core/cmdline.h kernel/include/multiboot.h
 	mkdir -p $(BUILD_DIR)

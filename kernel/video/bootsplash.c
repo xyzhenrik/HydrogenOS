@@ -4,6 +4,7 @@
 #include "fb_console.h"
 #include "framebuffer.h"
 #include "serial.h"
+#include "logo_splash.h"
 
 /* Everything is drawn with integer arithmetic only: the kernel keeps no FPU
    state, and the shapes are signed distance functions in 1/SUB pixel units
@@ -18,8 +19,6 @@
 #define BG_TOP 0x001B2530u
 #define BG_BOTTOM 0x0005070Au
 #define LETTER_COLOR 0x00EEF6FFu
-#define DROP_TOP 0x0086D8F4u
-#define DROP_BOTTOM 0x002E8CE0u
 #define BAR_FILL 0x00F0F7FFu
 #define BAR_TRACK_WEIGHT 36u
 #define SUFFIX_WEIGHT 150u
@@ -27,9 +26,8 @@
 /* Cap-height relative sizes in per mille. */
 #define STROKE 150
 #define LETTER_GAP 190
-#define DROP_RADIUS 470
-#define DROP_APEX 880
-#define DROP_RING 130
+#define DROP_HEIGHT 1300
+#define DROP_OVERSHOOT 90
 
 typedef enum glyph {
     GLYPH_H,
@@ -58,7 +56,7 @@ static const wordmark_letter_t wordmark[] = {
     { GLYPH_Y, 780, 256 },
     { GLYPH_D, 740, 256 },
     { GLYPH_R, 700, 256 },
-    { GLYPH_DROP, 940, 256 },
+    { GLYPH_DROP, 980, 256 },
     { GLYPH_G, 1000, 256 },
     { GLYPH_E, 560, 256 },
     { GLYPH_N, 740, 256 },
@@ -90,7 +88,6 @@ static uint32_t stride_words = 0;
 
 static int32_t imin(int32_t a, int32_t b) { return a < b ? a : b; }
 static int32_t imax(int32_t a, int32_t b) { return a > b ? a : b; }
-static int32_t iabs(int32_t a) { return a < 0 ? -a : a; }
 
 static uint32_t isqrt64(uint64_t value) {
     uint64_t result = 0;
@@ -126,14 +123,6 @@ static uint32_t blend(uint32_t base, uint32_t color, uint32_t weight) {
         out |= ((b * (256u - weight) + c * weight) >> 8) << shift;
     }
     return out;
-}
-
-static uint32_t gradient(uint32_t top, uint32_t bottom, int32_t t, int32_t span) {
-    if (t < 0)
-        t = 0;
-    if (t > span)
-        t = span;
-    return blend(top, bottom, (uint32_t)(((int64_t)t * 256) / (span ? span : 1)));
 }
 
 /* Coverage 0..SUB of a pixel whose center lies at signed distance d from the
@@ -325,55 +314,63 @@ static void draw_glyph(glyph_t glyph, int32_t gx, int32_t gy, int32_t w,
     }
 }
 
-/* Signed distance to a drop: a circle of radius `radius` around the origin
-   with a tangent cone up to an apex `apex` above it. */
-static int32_t drop_distance(int32_t x, int32_t y, int32_t radius, int32_t apex,
-                             int32_t cone_cos) {
-    int32_t dx = iabs(x);
-    int32_t tangent_y = (int32_t)(-((int64_t)radius * radius) / apex);
-    if (y >= tangent_y)
-        return length(dx, y) - radius;
-    int64_t along = (int64_t)dx * radius + (int64_t)(y + apex) * cone_cos;
-    if (along < 0)
-        return length(dx, y + apex);
-    return (int32_t)(((int64_t)dx * cone_cos - (int64_t)(y + apex) * radius) / apex);
+/* Source position of destination pixel `index` of `size` in a source of
+   `source` pixels: a base pixel and a 0..255 weight towards its successor. */
+static void sample_axis(int32_t index, int32_t size, int32_t source,
+                        int32_t *base, uint32_t *weight) {
+    int32_t position = ((2 * index + 1) * source * 256) / (2 * size) - 128;
+    if (position < 0)
+        position = 0;
+    *base = position >> 8;
+    *weight = (uint32_t)position & 0xFFu;
 }
 
-static void draw_drop(int32_t gx, int32_t gy, int32_t w) {
-    const int32_t c = layout.cap;
-    const int32_t ring = c * DROP_RING / 1000;
-    const int32_t radius = c * DROP_RADIUS / 1000 - ring / 2;
-    const int32_t apex = c * DROP_APEX / 1000 - ring / 2;
-    const int32_t cone_cos = (int32_t)isqrt64(
-        (uint64_t)((int64_t)apex * apex - (int64_t)radius * radius));
-    const int32_t cx = gx + w / 2;
-    const int32_t cy = gy + c / 2 + c * 2 / 100;
-    const int32_t swirl_cy = cy + c * 8 / 100;
-    const int32_t swirl_radius = c * 24 / 100;
-    const int32_t swirl_half = ring * 7 / 20;
-    const int32_t top = cy - apex - ring;
-    const int32_t span = apex + radius + 2 * ring;
+static uint32_t coverage_at(const uint8_t *bitmap, int32_t source, int32_t x,
+                            int32_t y) {
+    return bitmap[imin(y, source - 1) * source + imin(x, source - 1)];
+}
 
-    for (int32_t py = top / SUB - 1; py <= (cy + radius + ring) / SUB + 1; ++py) {
-        for (int32_t px = (cx - radius - ring) / SUB - 1;
-             px <= (cx + radius + ring) / SUB + 1; ++px) {
-            uint32_t *pixel = surface_pixel(px, py);
+/* The drop is the artwork's coverage bitmap, bilinearly resampled from the
+   smallest bitmap that is not smaller than the target and coloured with the
+   artwork's stroke gradient. Its bottom sits on the baseline of the cap box
+   at (gx, gy, w), centred in the slot; the apex reaches above the letters. */
+static void draw_drop(int32_t gx, int32_t gy, int32_t w) {
+    const int32_t cap_pixels = layout.cap / SUB;
+    const int32_t size =
+        cap_pixels * DROP_HEIGHT / (1000 - 2 * LOGO_PADDING_PERMILLE);
+    int pick = LOGO_SIZE_COUNT - 1;
+    for (int i = 0; i < LOGO_SIZE_COUNT; ++i) {
+        if (logo_sizes[i] >= size) {
+            pick = i;
+            break;
+        }
+    }
+    const uint8_t *bitmap = logo_coverage[pick];
+    const int32_t source = logo_sizes[pick];
+    const int32_t left = (gx + w / 2) / SUB - size / 2;
+    const int32_t bottom = (gy + layout.cap) / SUB + cap_pixels * DROP_OVERSHOOT / 1000 +
+                           size * LOGO_PADDING_PERMILLE / 1000;
+    const int32_t top = bottom - size;
+
+    for (int32_t py = 0; py < size; ++py) {
+        int32_t y0;
+        uint32_t wy;
+        sample_axis(py, size, source, &y0, &wy);
+        uint32_t color = logo_gradient_at(logo_gradient_dark, size, py);
+        for (int32_t px = 0; px < size; ++px) {
+            uint32_t *pixel = surface_pixel(left + px, top + py);
             if (!pixel)
                 continue;
-            int32_t sx = px * SUB + SUB / 2;
-            int32_t sy = py * SUB + SUB / 2;
-            int32_t outline =
-                iabs(drop_distance(sx - cx, sy - cy, radius, apex, cone_cos)) -
-                ring / 2;
-            int32_t sdx = sx - cx;
-            int32_t sdy = sy - swirl_cy;
-            int32_t swirl = imax(iabs(length(sdx, sdy) - swirl_radius) - swirl_half,
-                                 imin(sdx, -sdy));
-            int32_t cov = coverage(imin(outline, swirl));
-            if (cov) {
-                uint32_t color = gradient(DROP_TOP, DROP_BOTTOM, sy - top, span);
-                *pixel = blend(*pixel, color, (uint32_t)cov * 16u);
-            }
+            int32_t x0;
+            uint32_t wx;
+            sample_axis(px, size, source, &x0, &wx);
+            uint32_t upper = coverage_at(bitmap, source, x0, y0) * (256u - wx) +
+                             coverage_at(bitmap, source, x0 + 1, y0) * wx;
+            uint32_t lower = coverage_at(bitmap, source, x0, y0 + 1) * (256u - wx) +
+                             coverage_at(bitmap, source, x0 + 1, y0 + 1) * wx;
+            uint32_t alpha = ((upper >> 8) * (256u - wy) + (lower >> 8) * wy) >> 8;
+            if (alpha)
+                *pixel = blend(*pixel, color, alpha + (alpha >> 7));
         }
     }
 }

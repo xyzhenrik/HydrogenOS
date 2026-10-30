@@ -6,6 +6,7 @@
 #include "gfx_effects.h"
 #include "icons.h"
 #include "kbd_keys.h"
+#include "logo_ui.h"
 #include "settings.h"
 #include "settings_ui.h"
 #include "spotlight.h"
@@ -53,7 +54,6 @@ static int g_settings_save_failed;
 #define COL_CHROME_TEXT (g_th.chrome_text)
 #define COL_CHROME_DIM  (g_th.chrome_dim)
 #define COL_CHROME_ICON (g_th.chrome_icon)
-#define COL_LOGO        (g_th.logo)
 #define COL_TITLE_BORDER (g_th.title_border)
 
 enum { APP_TERM = 0, APP_EDIT, APP_FILES, APP_SETTINGS, APP_KIND_COUNT };
@@ -184,12 +184,6 @@ static void str_copy_to(char *dst, const char *src, int cap) {
 /* Icons are silhouettes in a single ink colour, given as ICON_INK(rgb). */
 #define ICON_INK(rgb) (0xFF000000u | ((rgb) & 0x00FFFFFFu))
 
-/* The logo is a drop on a dark tile. Keyed out, only the drop remains, so it
-   sits on any chrome in a theme-appropriate ink instead of as a dark square.
-   Pixels at or below LOGO_KEY_LOW luma are tile, at or above LOGO_KEY_HIGH drop. */
-#define LOGO_KEY_LOW  48
-#define LOGO_KEY_HIGH 112
-
 /* Bilinear sample of one 8-bit channel (at bit offset shift) of four pixels;
    wx and wy are 0..255 weights towards the right and lower neighbour. */
 static uint32_t icon_channel(uint32_t p00, uint32_t p10, uint32_t p01, uint32_t p11,
@@ -199,59 +193,90 @@ static uint32_t icon_channel(uint32_t p00, uint32_t p10, uint32_t p01, uint32_t 
     return (top * (256 - wy) + bottom * wy) >> 8;
 }
 
-static void blit_icon(Window *win, int x, int y, const uint32_t *icon, int size, uint32_t ink, int key_dark) {
+/* Composites ink of coverage `alpha` onto pixel (x, y) of the window: over the
+   glass on glass windows, mixed into the solid fill otherwise. */
+static void paint_ink(Window *win, int x, int y, uint32_t ink, uint32_t alpha) {
+    if (alpha == 0 || x < 0 || y < 0 || x >= win->w || y >= win->h) return;
+    uint32_t *dst = &((uint32_t *)win->surface)[y * win->w + x];
+    uint32_t rgb = ink & 0x00FFFFFFu;
+    if (win->style.material == COMP_MATERIAL_GLASS)
+        *dst = gfx_over(*dst, 0xFF000000u | rgb, alpha);
+    else
+        *dst = gfx_mix(*dst, rgb, alpha) & 0x00FFFFFFu;
+}
+
+/* Source position of destination pixel `index` of `size` in a source of
+   `source` pixels, as a base pixel and a 0..255 weight towards its successor. */
+static void sample_axis(int index, int size, int source, int *base, uint32_t *weight) {
+    int position = ((2 * index + 1) * source * 256) / (2 * size) - 128;
+    int whole = position >> 8;
+    *weight = (uint32_t)(position & 0xFF);
+    if (whole < 0) { whole = 0; *weight = 0; }
+    *base = whole;
+}
+
+static void blit_icon(Window *win, int x, int y, const uint32_t *icon, int size, uint32_t ink) {
     if (!win || !win->surface || !icon || size <= 0) return;
-    uint32_t *dst = (uint32_t *)win->surface;
     for (int py = 0; py < size; ++py) {
-        int sy16 = ((2 * py + 1) * ICON_SIZE * 256) / (2 * size) - 128;
-        int sy0 = sy16 >> 8;
-        int wy = sy16 & 0xFF;
-        if (sy0 < 0) { sy0 = 0; wy = 0; }
-        int sy1 = sy0 + 1;
-        if (sy1 >= ICON_SIZE) sy1 = ICON_SIZE - 1;
+        int sy0, sy1;
+        uint32_t wy;
+        sample_axis(py, size, ICON_SIZE, &sy0, &wy);
+        sy1 = sy0 + 1 < ICON_SIZE ? sy0 + 1 : ICON_SIZE - 1;
         for (int px = 0; px < size; ++px) {
-            int sx16 = ((2 * px + 1) * ICON_SIZE * 256) / (2 * size) - 128;
-            int sx0 = sx16 >> 8;
-            int wx = sx16 & 0xFF;
-            if (sx0 < 0) { sx0 = 0; wx = 0; }
-            int sx1 = sx0 + 1;
-            if (sx1 >= ICON_SIZE) sx1 = ICON_SIZE - 1;
-            uint32_t p00 = icon[sy0 * ICON_SIZE + sx0];
-            uint32_t p10 = icon[sy0 * ICON_SIZE + sx1];
-            uint32_t p01 = icon[sy1 * ICON_SIZE + sx0];
-            uint32_t p11 = icon[sy1 * ICON_SIZE + sx1];
-            uint32_t a = icon_channel(p00, p10, p01, p11, (uint32_t)wx, (uint32_t)wy, 24);
-            if (key_dark) {
-                uint32_t r = icon_channel(p00, p10, p01, p11, (uint32_t)wx, (uint32_t)wy, 16);
-                uint32_t g = icon_channel(p00, p10, p01, p11, (uint32_t)wx, (uint32_t)wy, 8);
-                uint32_t b = icon_channel(p00, p10, p01, p11, (uint32_t)wx, (uint32_t)wy, 0);
-                int luma = (int)((299 * r + 587 * g + 114 * b) / 1000);
-                int key = (luma - LOGO_KEY_LOW) * 255 / (LOGO_KEY_HIGH - LOGO_KEY_LOW);
-                a = a * (uint32_t)(key < 0 ? 0 : (key > 255 ? 255 : key)) / 255;
-            }
-            if (a == 0) continue;
-            int dx = x + px, dy = y + py;
-            if (dx < 0 || dy < 0 || dx >= win->w || dy >= win->h) continue;
-            uint32_t *d = &dst[dy * win->w + dx];
-            uint32_t rgb = ink & 0x00FFFFFFu;
-            if (win->style.material == COMP_MATERIAL_GLASS)
-                *d = gfx_over(*d, 0xFF000000u | rgb, a);
-            else
-                *d = gfx_mix(*d, rgb, a) & 0x00FFFFFFu;
+            int sx0, sx1;
+            uint32_t wx;
+            sample_axis(px, size, ICON_SIZE, &sx0, &wx);
+            sx1 = sx0 + 1 < ICON_SIZE ? sx0 + 1 : ICON_SIZE - 1;
+            uint32_t alpha = icon_channel(icon[sy0 * ICON_SIZE + sx0], icon[sy0 * ICON_SIZE + sx1],
+                                          icon[sy1 * ICON_SIZE + sx0], icon[sy1 * ICON_SIZE + sx1],
+                                          wx, wy, 24);
+            paint_ink(win, x + px, y + py, ink, alpha);
         }
     }
 }
 
-/* The drop fills about three quarters of its tile, so it is drawn a third
-   larger, centred on the slot, to match the visual weight of the other icons. */
-static void draw_icon_os(Window *win, int x, int y, int s) {
-    int grown = s + s / 3;
-    blit_icon(win, x - (grown - s) / 2, y - (grown - s) / 2, icon_os, grown, ICON_INK(COL_LOGO), 1);
+/* The logo is the artwork's coverage bitmap, coloured with the artwork's
+   stroke gradient for the theme (light ink on dark surfaces, teal on light
+   ones). It is sampled from the smallest bitmap that is not smaller than the
+   target, so the common sizes are drawn 1:1 without resampling. */
+static void blit_logo(Window *win, int x, int y, int size) {
+    if (!win || !win->surface || size <= 0) return;
+    int pick = LOGO_SIZE_COUNT - 1;
+    for (int i = 0; i < LOGO_SIZE_COUNT; ++i) {
+        if (logo_sizes[i] >= size) { pick = i; break; }
+    }
+    const uint8_t *coverage = logo_coverage[pick];
+    int source = logo_sizes[pick];
+    const uint32_t *gradient = g_th.light ? logo_gradient_light : logo_gradient_dark;
+    for (int py = 0; py < size; ++py) {
+        int sy0, sy1;
+        uint32_t wy;
+        sample_axis(py, size, source, &sy0, &wy);
+        sy1 = sy0 + 1 < source ? sy0 + 1 : source - 1;
+        uint32_t ink = logo_gradient_at(gradient, size, py);
+        for (int px = 0; px < size; ++px) {
+            int sx0, sx1;
+            uint32_t wx;
+            sample_axis(px, size, source, &sx0, &wx);
+            sx1 = sx0 + 1 < source ? sx0 + 1 : source - 1;
+            uint32_t alpha = icon_channel(coverage[sy0 * source + sx0], coverage[sy0 * source + sx1],
+                                          coverage[sy1 * source + sx0], coverage[sy1 * source + sx1],
+                                          wx, wy, 0);
+            paint_ink(win, x + px, y + py, ink, alpha);
+        }
+    }
 }
-static void draw_icon_terminal(Window *win, int x, int y, int s) { blit_icon(win, x, y, icon_terminal, s, ICON_INK(COL_CHROME_ICON), 0); }
-static void draw_icon_editor(Window *win, int x, int y, int s) { blit_icon(win, x, y, icon_editor, s, ICON_INK(COL_CHROME_ICON), 0); }
-static void draw_icon_files(Window *win, int x, int y, int s) { blit_icon(win, x, y, icon_files, s, ICON_INK(COL_CHROME_ICON), 0); }
-static void draw_icon_settings(Window *win, int x, int y, int s) { blit_icon(win, x, y, icon_settings, s, ICON_INK(COL_CHROME_ICON), 0); }
+
+/* The drop is a thin outline in a padded square, so it is drawn a quarter
+   larger, centred on its slot, to match the visual weight of the other icons. */
+static void draw_icon_os(Window *win, int x, int y, int s) {
+    int grown = s + s / 4;
+    blit_logo(win, x - (grown - s) / 2, y - (grown - s) / 2, grown);
+}
+static void draw_icon_terminal(Window *win, int x, int y, int s) { blit_icon(win, x, y, icon_terminal, s, ICON_INK(COL_CHROME_ICON)); }
+static void draw_icon_editor(Window *win, int x, int y, int s) { blit_icon(win, x, y, icon_editor, s, ICON_INK(COL_CHROME_ICON)); }
+static void draw_icon_files(Window *win, int x, int y, int s) { blit_icon(win, x, y, icon_files, s, ICON_INK(COL_CHROME_ICON)); }
+static void draw_icon_settings(Window *win, int x, int y, int s) { blit_icon(win, x, y, icon_settings, s, ICON_INK(COL_CHROME_ICON)); }
 
 static void draw_clock(Window *win, int right_x, int y) {
     char buf[32];
