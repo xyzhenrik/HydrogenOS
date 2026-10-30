@@ -18,16 +18,17 @@ static inline CompRect wm_work_area(int screen_w, int screen_h, int top_inset, i
     return area;
 }
 
-/* Clamps the top-left corner of a window of width w so its title bar (height
-   title_h) never leaves the work area: it cannot rise above the work area,
-   sink below it, or slide so far sideways that fewer than
-   WM_MIN_TITLE_VISIBLE pixels of it remain on screen. */
-static inline void wm_clamp_position(const CompRect *work, int w, int title_h, int *x, int *y) {
+/* Clamps the top-left corner of a window of size w x h so it stays reachable.
+   Vertically the window lies inside the work area, so it never slides under
+   the top bar or the taskbar; a window taller than the work area keeps its
+   title bar (height title_h) inside instead. Sideways it may leave the screen
+   as long as WM_MIN_TITLE_VISIBLE pixels of the title bar remain. */
+static inline void wm_clamp_position(const CompRect *work, int w, int h, int title_h, int *x, int *y) {
     int visible = w < WM_MIN_TITLE_VISIBLE ? w : WM_MIN_TITLE_VISIBLE;
     int min_x = work->x + visible - w;
     int max_x = work->x + work->w - visible;
     int min_y = work->y;
-    int max_y = work->y + work->h - title_h;
+    int max_y = work->y + work->h - (h < work->h ? h : title_h);
     if (max_y < min_y) max_y = min_y;
     if (*x < min_x) *x = min_x;
     if (*x > max_x) *x = max_x;

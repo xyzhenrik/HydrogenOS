@@ -339,5 +339,6 @@ Window-manager fixes (no stale shadow pixels, taskbar restore, themed chrome, ma
 Terminal hosting the real shell, redesigned Files app, Spotlight-style launcher, gap-buffer editor,
 new root layout (`/bin`, `/sbin`, `/lib/tests`, `/etc`, `/tmp`, `/home/user`; see `docs/FS_LAYOUT.md`).
 Older sections above still mention the pre-layout paths `/init` and `/init.rc`.
-Open: no top bar, no Escape key from the kernel keyboard driver, brace expansion and Ctrl+D EOF in the shell,
+Top bar (focused app name, clock), themed Editor surface, windows kept inside the work area.
+Open: no Escape key from the kernel keyboard driver, brace expansion and Ctrl+D EOF in the shell,
 `wc` missing, `ls` lists `./` and `../`.

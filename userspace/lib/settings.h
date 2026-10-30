@@ -30,19 +30,17 @@
 typedef struct Settings {
     int theme;   /* SETTINGS_THEME_* */
     int accent;  /* index into the accent table */
-    int glass;   /* nonzero: blurred, translucent taskbar and launcher */
+    int glass;   /* nonzero: blurred, translucent bars and launcher */
     int layout;  /* SETTINGS_LAYOUT_* */
 } Settings;
 
-/* Colour tokens of the desktop session, all 0x00RRGGBB. The wallpaper, the
-   window title bars, the taskbar, the menu and the Settings surfaces follow
-   the theme; the terminal and the document surface keep their own look. */
+/* Colour tokens of the desktop session, all 0x00RRGGBB. Everything follows
+   the theme except the terminal, which keeps its own dark look. */
 typedef struct SettingsPalette {
     uint32_t wallpaper_top;
     uint32_t wallpaper_bottom;
-    uint32_t wallpaper_text;
 
-    /* Taskbar and menu: tint of the glass (or the solid fill without glass),
+    /* Top bar, taskbar and menu: tint of the glass (or the solid fill without glass),
        its opacity over the wallpaper, and the text on top. */
     uint32_t taskbar;
     uint32_t menu;
@@ -50,6 +48,7 @@ typedef struct SettingsPalette {
     uint32_t chrome_text;
     uint32_t chrome_dim;
     uint32_t chrome_icon;   /* ink of the monochrome app icons on chrome */
+    uint32_t logo;          /* ink of the HydrogenOS drop */
 
     uint32_t accent;
     uint32_t on_accent;
