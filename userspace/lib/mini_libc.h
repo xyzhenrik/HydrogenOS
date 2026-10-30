@@ -73,6 +73,11 @@ long read(int fd, void *buf, size_t len);
 long open(const char *path, int flags);
 long close(int fd);
 long lseek(int fd, long off, int whence);
+/* Resizes the file behind a writable fd; growth leaves a zero-filled hole.
+ * Returns 0 or -errno. */
+long ftruncate(int fd, unsigned long length);
+/* Writes all pending filesystem changes to the disk. Returns 0 or -errno. */
+long sync(void);
 int stat(const char *path, stat_t *buf);
 int lstat(const char *path, stat_t *buf);
 int fstat(int fd, stat_t *buf);

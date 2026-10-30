@@ -330,8 +330,8 @@ Integrated on branch `milestone-0.5` (smoke passes, ext2 `e2fsck` clean).
 - Directory entry cache, performance counters (`top`), boot splash.
 - Keyboard: DE/US tables fixed (AltGr, `< > |`, Caps Lock), virtio-input shares the PS/2 path; font glyph fixes; `tools/uitest`.
 
-Open follow-ups: no sync/fsync syscall, no ftruncate, no TCP congestion control/reassembly,
-orphans are not reparented, init polls children every 10 ms (no SIGCHLD), ext2 mtime not from RTC.
+Open follow-ups: no TCP congestion control/reassembly, orphans are not reparented, init polls children
+every 10 ms (no SIGCHLD). Closed in 0.6 (see the end of this file): sync syscall, ftruncate, ext2 mtime from the RTC.
 
 ### Desktop polish (merged into 0.5, 2026-10-30)
 
@@ -353,3 +353,26 @@ Open: no top bar.
 Top bar (focused app name, clock), themed Editor surface, windows kept inside the work area.
 Open: no Escape key from the kernel keyboard driver, brace expansion and Ctrl+D EOF in the shell,
 `wc` missing, `ls` lists `./` and `../`.
+
+## Milestone 0.6 follow-ups: fsync and polish (2026-10-30)
+
+- **`SYS_SYNC` (84) / `SYS_FTRUNCATE` (85):** `sync` flushes the ext2 write-back cache (and with it every dirty
+  superblock, descriptor, bitmap and inode block) to the device; `sys_ftruncate` resizes the file behind a writable
+  fd without touching its offset. Libc has `sync()` and `ftruncate()`, the shell has a `sync` builtin and the Editor's
+  Save calls `sync()`. `iotest` covers both.
+- **Write errors:** a write that stores only part of its data now returns the short count (offset and size follow it);
+  the next call reports `-ENOSPC` on a full disk or `-EFBIG` beyond 2 GiB - 1 instead of a generic `-EIO`.
+  `iotest` fills the disk to check this and that the space comes back.
+- **ext2 timestamps** come from the RTC wall clock; `st_mtime` of `sys_stat` is now seconds since the Unix epoch
+  (0 on RAMFS and /proc). Without a usable RTC the old superblock-based lower bound is used.
+- **Files:** double-click on a text file opens the Editor; on a program in `/bin` or `/sbin` (or any ELF) it opens a
+  Terminal window and types the command at its prompt (`terminal_run_line`), so output and keyboard input work.
+- **Version:** `kernel/include/version.h` is the single source (now `0.6.0-dev`); `/proc/version`, the shell's
+  `version` and Settings -> About all read it.
+- **Settings -> Network:** `drop` counted loopback datagrams discarded by the stack (UDP queue overflow, malformed
+  TCP segments from the tests), which made it larger than `rx`. It now counts only frames that arrived on the link.
+- Verification: `e2fsck -fn` on the image after guest writes (Editor save, `iotest`) is clean.
+
+Open follow-ups: no TCP congestion control/reassembly, orphans are not reparented, init polls children every 10 ms
+(no SIGCHLD), no `fsync(fd)` for a single file (`sync` flushes everything), programs started from Files have no way
+to run in the background without a Terminal window.

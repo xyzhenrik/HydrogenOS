@@ -1129,6 +1129,17 @@ static void complete(Terminal *t) {
 
 /* ------------------------------------------------------------------ keys */
 
+int terminal_run_line(Terminal *t, const char *line) {
+    int length = (int)strlen(line);
+    if (t->shell_pid == 0 || !t->idle || t->edit_length != 0 || length == 0 ||
+        length > INPUT_MAX)
+        return -1;
+    t->scroll_offset = 0;
+    edit_insert(t, line, length);
+    submit(t);
+    return 0;
+}
+
 void terminal_key(Terminal *t, int key) {
     int page = t->rows > 1 ? t->rows - 1 : 1;
     if (key == TERMINAL_KEY_PAGE_UP) {

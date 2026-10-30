@@ -25,6 +25,10 @@ typedef struct net_interface {
 } net_interface_t;
 
 const net_interface_t *net_interface(void);
+/* Counts a frame, datagram or segment that arrived on the link and was
+ * discarded. Loopback traffic never touches the link and is not part of the
+ * interface statistics, so its discards are not counted: rx_dropped stays
+ * comparable with rx_frames. */
 void net_count_rx_drop(void);
 
 /* Unpredictable 32 bits for source ports and initial sequence numbers. The

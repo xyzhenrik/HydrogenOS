@@ -98,6 +98,8 @@ static const char *const syscall_names[HYDROGEN_PERF_SYSCALL_SLOTS] = {
     [79] = "chown",
     [80] = "truncate",
     [SYS_PERF_READ] = "perf_read",
+    [SYS_SYNC] = "sync",
+    [SYS_FTRUNCATE] = "ftruncate",
     [HYDROGEN_PERF_SYSCALL_OTHER] = "other (>= 95)",
 };
 

@@ -91,6 +91,8 @@ enum {
     PROCESS_RESOURCE_IO_ERROR = -4,
     PROCESS_RESOURCE_INVALID = -5,
     PROCESS_RESOURCE_ACCESS = -6,
+    PROCESS_RESOURCE_NO_SPACE = -7,
+    PROCESS_RESOURCE_TOO_BIG = -8,
 };
 
 enum {
@@ -262,6 +264,10 @@ int process_fd_socket(process_t *p, int fd, struct net_socket **out);
 int process_begin_socket_wait(process_t *p, int fd, uint8_t kind);
 int process_fd_seek(process_t *p, int fd, int64_t off, int whence,
                     uint64_t *out_pos);
+/* Resizes the regular file behind a writable fd; the file offset is not
+ * moved. Returns 0 or a negative errno value (-EBADF for an invalid or
+ * read-only fd, -EINVAL when the fd is not a file). */
+int process_fd_truncate(process_t *p, int fd, uint32_t length);
 int process_fd_poll(process_t *p, int fd, uint32_t events,
                     uint32_t *out_ready);
 int process_poll_many(process_t *p, process_poll_fd_t *fds, uint32_t count,

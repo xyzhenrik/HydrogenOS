@@ -6,7 +6,7 @@
 #define SHELL_BUILTIN_NAMES(X) \
     X(cat) X(cd) X(clear) X(cp) X(echo) X(edit) X(env) X(exec) X(exit) X(export) \
     X(false) X(files) X(help) X(jobs) X(kill) X(ln) X(ls) X(mkdir) X(mv) \
-    X(pwd) X(readlink) X(rm) X(sleep) X(time) X(touch) X(true) X(unset) \
+    X(pwd) X(readlink) X(rm) X(sleep) X(sync) X(time) X(touch) X(true) X(unset) \
     X(uptime) X(version) X(wait)
 
 /* The user and permission builtins that account.c implements. */

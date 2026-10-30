@@ -54,8 +54,8 @@ static int builtin_help(int argc, char **argv) {
     (void)argv;
     out_str(1,
             "Builtins: cat cd chmod chown cp echo env exec exit export false help id\n"
-            "          jobs kill ln ls mkdir mv pwd readlink rm sleep time touch true\n"
-            "          unset uptime version wait whoami\n"
+            "          jobs kill ln ls mkdir mv pwd readlink rm sleep sync time touch\n"
+            "          true unset uptime version wait whoami\n"
             "Desktop terminal only: clear edit [file] files\n"
             "Diagnostics: pipe piperun pipenoinherit pipeblock pipefull\n"
             "          pipebroken pipeeof pollpipe pollwaitpipe pollmanypipe\n"
@@ -496,6 +496,18 @@ static int builtin_uptime(int argc, char **argv) {
     out_str(1, "up ");
     out_str(1, text);
     out_char(1, '\n');
+    return 0;
+}
+
+static int builtin_sync(int argc, char **argv) {
+    (void)argv;
+    if (argc > 1)
+        return usage("sync", "usage: sync");
+    long rc = sys_sync();
+    if (rc != 0) {
+        out_error("sync", 0, "cannot write the filesystem to disk");
+        return STATUS_FAILURE;
+    }
     return 0;
 }
 

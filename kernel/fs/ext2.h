@@ -28,8 +28,11 @@ int ext2_readlink(const char *path, char *buf, uint32_t cap);
 int ext2_write_file(const char *path, const uint8_t *data, uint32_t size);
 /* Positioned write that allocates blocks on demand; a gap behind the old end
    of file stays a hole and reads as zero. Write-back: durable after the next
-   ext2_sync() or the cache's periodic flush. -EFBIG beyond 2 GiB - 1. */
-int ext2_write_at(const char *path, uint32_t offset, const uint8_t *data, uint32_t size);
+   ext2_sync() or the cache's periodic flush. -EFBIG beyond 2 GiB - 1, -ENOSPC
+   when the disk is full. *written (always set) is the number of bytes stored,
+   which can be non-zero even when an error is returned. */
+int ext2_write_at(const char *path, uint32_t offset, const uint8_t *data, uint32_t size,
+                  uint32_t *written);
 /* Sets the file size, freeing blocks when shrinking and leaving a hole when
    growing. Write-back like ext2_write_at. */
 int ext2_truncate(const char *path, uint32_t size);

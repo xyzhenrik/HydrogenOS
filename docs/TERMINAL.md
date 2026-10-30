@@ -88,3 +88,10 @@ only open applications; they never run or write anything.
 Error messages are tinted with ANSI sequences only when they go to the shell's
 own stderr. A builtin whose output is redirected, and a message written to a
 child's stderr, stay plain text.
+
+## Starting a program from the desktop
+
+Files runs a program in a Terminal window of its own. The window starts its shell as usual; once the shell shows its
+prompt the desktop calls `terminal_run_line()`, which types the (shell-quoted) path and presses Enter. The command
+therefore appears in the scrollback and history, output is rendered like any other, and the program can read the
+keyboard. `terminal_run_line()` refuses (returns -1) while the shell is busy or the user has already typed something.

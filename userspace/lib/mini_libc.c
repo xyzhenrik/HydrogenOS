@@ -39,6 +39,14 @@ long lseek(int fd, long off, int whence) {
     return sys_lseek(fd, off, whence);
 }
 
+long ftruncate(int fd, unsigned long length) {
+    return sys_ftruncate(fd, length);
+}
+
+long sync(void) {
+    return sys_sync();
+}
+
 long pipe(int fds[2]) {
     return sys_pipe(fds);
 }

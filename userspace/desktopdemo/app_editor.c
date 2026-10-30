@@ -135,7 +135,8 @@ static const char *reason(int error) {
     case EACCES:
     case EPERM:   return "permission denied";
     case ENOMEM:  return "out of memory";
-    case E2BIG:   return "too large";
+    case E2BIG:
+    case EFBIG:   return "too large";
     case EIO:     return "I/O error";
     default:      return "unexpected error";
     }
@@ -440,6 +441,7 @@ static int save_file(Editor *ed, const char *path) {
     size_t length;
     const char *data = text_buffer_contiguous(ed->edit->buffer, &length);
     long rc = sys_writef(path, data, length);
+    if (rc == 0) rc = sys_sync();
     if (rc == 0) {
         stat_t st;
         if (sys_stat(path, &st) != 0 || st.st_size != length) rc = -EIO;

@@ -82,6 +82,8 @@
 #define SYS_PERF_READ 81
 #define SYS_CRASH 82
 #define SYS_MEMINFO 83
+#define SYS_SYNC 84
+#define SYS_FTRUNCATE 85
 #define SYS_PUTCHAR 255
 
 uint64_t syscall_handle(regs_t *r);

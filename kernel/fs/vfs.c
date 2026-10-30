@@ -238,6 +238,7 @@ int vfs_stat(const char *path, vfs_stat_t *out) {
     if (!m) return -1;
     out->nlink = 0;
     out->ino = 0;
+    out->mtime = 0;
     if (m->fs == VFS_FS_EXT2) {
         if (ext2_stat(sub, out) != 0) return -1;
         return 0;
@@ -277,7 +278,7 @@ int vfs_stat_full(const char *path, hydrogen_stat_t *out) {
     out->st_ino   = st.ino;
     out->st_uid   = st.uid;
     out->st_gid   = st.gid;
-    out->st_mtime = 0;
+    out->st_mtime = st.mtime;
     return 0;
 }
 
@@ -586,13 +587,18 @@ int vfs_write_file(const char *path, const uint8_t *data, uint32_t size) {
 }
 
 int vfs_write_file_at(const char *path, uint32_t offset, const uint8_t *data,
-                      uint32_t size) {
+                      uint32_t size, uint32_t *written) {
+    *written = 0;
     if (!ready || !path || (size > 0 && !data)) return -EINVAL;
     const char *sub = 0;
     const vfs_mount_t *m = mount_for_path(path, &sub);
     if (!m) return -ENOENT;
-    if (m->fs == VFS_FS_RAMFS) return ramfs_write_at(sub, offset, data, size);
-    if (m->fs == VFS_FS_EXT2) return ext2_write_at(sub, offset, data, size);
+    if (m->fs == VFS_FS_RAMFS) {
+        int rc = ramfs_write_at(sub, offset, data, size);
+        if (rc == 0) *written = size;
+        return rc;
+    }
+    if (m->fs == VFS_FS_EXT2) return ext2_write_at(sub, offset, data, size, written);
     return -EROFS;
 }
 
