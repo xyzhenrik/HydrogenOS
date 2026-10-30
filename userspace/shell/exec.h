@@ -13,3 +13,8 @@ int exec_exit_requested(void);
 
 /* Interactive shells announce background jobs and finished jobs. */
 void exec_set_interactive(int interactive);
+
+/* A shell behind the desktop terminal emulator: the builtins that ask the
+ * desktop for something (clear, edit, files) are available. */
+void exec_set_terminal_host(int terminal_host);
+int exec_terminal_host(void);

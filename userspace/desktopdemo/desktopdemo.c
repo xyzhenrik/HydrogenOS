@@ -1,4 +1,5 @@
 #include "mini_libc.h"
+#include "app_terminal.h"
 #include "compositor.h"
 #include "gfx_effects.h"
 #include "icons.h"
@@ -12,10 +13,10 @@
 #define LINE_H    16
 #define TASKBAR_H 56
 #define MAX_APPS  8
+/* Rows a wheel notch scrolls the terminal by. */
+#define TERMINAL_WHEEL_ROWS 3
 /* Width of TIME_FORMAT_SHORT ("Thu 29 Oct 14:05") in 8px glyphs. */
 #define CLOCK_W   (16 * 8)
-
-#define COL_INPUT     0x0080FF80u
 
 /* The user's preferences and the palette derived from them. g_applied is what
    the session currently shows, so a change is detected by diffing against it. */
@@ -29,8 +30,6 @@ static int g_settings_save_failed;
 #define COL_TITLE     (g_th.title)
 #define COL_TITLE_F   (g_th.title_focus)
 #define COL_TEXT      (g_th.title_text)
-#define COL_TERM_TEXT (g_th.terminal_text)
-#define COL_PROMPT    (g_th.terminal_prompt)
 #define COL_DIM       (g_th.terminal_dim)
 #define COL_MENU      (g_th.menu)
 #define COL_CLOSE     (g_th.close)
@@ -60,11 +59,7 @@ typedef struct App {
     int rx, ry, rw, rh;
     char title[24];
     /* terminal */
-    char scroll[96][128];
-    int scroll_count;
-    int scroll_off;
-    char input[256];
-    int input_len;
+    Terminal *term;
     /* editor */
     char text[8192];
     int text_len;
@@ -177,14 +172,6 @@ static void str_copy_to(char *dst, const char *src, int cap) {
     if (!dst || cap <= 0) return;
     while (src && src[i] && i + 1 < cap) { dst[i] = src[i]; ++i; }
     dst[i] = 0;
-}
-
-static void append_num(char *line, int *z, int v) {
-    if (v < 0) { line[(*z)++] = '-'; v = -v; }
-    char tmp[12]; int n = 0;
-    if (v == 0) tmp[n++] = '0';
-    while (v > 0) { tmp[n++] = (char)('0' + v % 10); v /= 10; }
-    while (n > 0) line[(*z)++] = tmp[--n];
 }
 
 /* ---------------- icons ---------------- */
@@ -386,214 +373,22 @@ static void close_menu(void) {
 
 /* ---------------- terminal app ---------------- */
 
-static void term_puts(App *a, const char *text) {
-    if (!text) return;
-    char line[128];
-    int li = 0, i = 0;
-    for (;;) {
-        char c = text[i++];
-        if (c == '\n' || c == 0) {
-            line[li] = 0;
-            if (a->scroll_count < 96) {
-                int k = 0;
-                while (line[k] && k < 127) { a->scroll[a->scroll_count][k] = line[k]; ++k; }
-                a->scroll[a->scroll_count][k] = 0;
-                a->scroll_count++;
-            } else {
-                for (int r = 1; r < 96; ++r) {
-                    int k = 0;
-                    while (a->scroll[r][k] && k < 127) { a->scroll[r-1][k] = a->scroll[r][k]; ++k; }
-                    a->scroll[r-1][k] = 0;
-                }
-                int k = 0;
-                while (line[k] && k < 127) { a->scroll[95][k] = line[k]; ++k; }
-                a->scroll[95][k] = 0;
-            }
-            li = 0;
-            if (c == 0) break;
-            continue;
-        }
-        if (li < 127) line[li++] = c;
-    }
-}
-
 static void editor_load_path(App *e, const char *path);
 
 static int app_open_new(int kind);
 
-static void term_execute(App *a) {
-    char cmd[256];
-    int i = 0;
-    while (a->input[i] && i < 255) { cmd[i] = a->input[i]; ++i; }
-    cmd[i] = 0;
-    char *p = cmd;
-    while (*p == ' ') ++p;
-    char *arg = p;
-    while (*arg && *arg != ' ') ++arg;
-    if (*arg) { *arg = 0; arg++; while (*arg == ' ') ++arg; } else arg = (char *)"";
-
-    if (!cmd[0]) return;
-    if (str_eq(cmd, "help")) {
-        term_puts(a, "Commands: help version uptime time date ls [path] cat <path> pwd cd <path>");
-        term_puts(a, "  mkdir rm touch mv cp echo clear run <path> edit [path] files");
-    } else if (str_eq(cmd, "version")) {
-        term_puts(a, "HydrogenOS desktop v0");
-    } else if (str_eq(cmd, "uptime")) {
-        char line[48]; int z = 0;
-        const char *pre = "uptime: ";
-        while (pre[z]) { line[z] = pre[z]; ++z; }
-        append_num(line, &z, (int)(time_ms() / 1000));
-        line[z++] = 's'; line[z] = 0;
-        term_puts(a, line);
-    } else if (str_eq(cmd, "time")) {
-        char line[48]; int z = 0;
-        const char *pre = "time_ms: ";
-        while (pre[z]) { line[z] = pre[z]; ++z; }
-        append_num(line, &z, (int)time_ms());
-        line[z] = 0;
-        term_puts(a, line);
-    } else if (str_eq(cmd, "date")) {
-        char line[48];
-        CivilTime now;
-        if (wallclock_now(&now, 0, 0) == 0 &&
-            time_format(line, sizeof(line), TIME_FORMAT_LONG, &now) > 0)
-            term_puts(a, line);
-        else
-            term_puts(a, "date: wall clock unavailable");
-    } else if (str_eq(cmd, "pwd")) {
-        char cwd[128];
-        if (getcwd(cwd, sizeof(cwd))) term_puts(a, cwd); else term_puts(a, "pwd: failed");
-    } else if (str_eq(cmd, "cd")) {
-        if (chdir(arg) != 0) term_puts(a, "cd: no such directory");
-    } else if (str_eq(cmd, "clear")) {
-        a->scroll_count = 0;
-    } else if (str_eq(cmd, "ls")) {
-        const char *target = (arg && *arg) ? arg : ".";
-        int pos = 0, any = 0;
-        dirent_t de;
-        while (readdir_pos(target, pos, &de) == 1) { term_puts(a, de.d_name); any = 1; ++pos; }
-        if (!any) term_puts(a, "ls: empty");
-    } else if (str_eq(cmd, "cat")) {
-        if (!*arg) { term_puts(a, "usage: cat <path>"); return; }
-        int fd = (int)open(arg, 0);
-        if (fd < 0) { term_puts(a, "cat: open failed"); return; }
-        char buf[256];
-        long n = read(fd, buf, sizeof(buf) - 1);
-        close(fd);
-        if (n < 0) { term_puts(a, "cat: read failed"); return; }
-        buf[n] = 0;
-        term_puts(a, buf);
-    } else if (str_eq(cmd, "mkdir")) {
-        if (!*arg) { term_puts(a, "usage: mkdir <path>"); return; }
-        term_puts(a, sys_mkdir(arg) == 0 ? "mkdir: ok" : "mkdir: failed");
-    } else if (str_eq(cmd, "rm")) {
-        if (!*arg) { term_puts(a, "usage: rm <path>"); return; }
-        term_puts(a, sys_unlink(arg) == 0 ? "rm: ok" : "rm: failed");
-    } else if (str_eq(cmd, "touch")) {
-        if (!*arg) { term_puts(a, "usage: touch <path>"); return; }
-        term_puts(a, sys_writef(arg, "", 0) == 0 ? "touch: ok" : "touch: failed");
-    } else if (str_eq(cmd, "mv")) {
-        char *dst = arg;
-        while (*dst && *dst != ' ') ++dst;
-        if (!*dst) { term_puts(a, "usage: mv <src> <dst>"); return; }
-        *dst++ = 0; while (*dst == ' ') ++dst;
-        term_puts(a, sys_rename(arg, dst) == 0 ? "mv: ok" : "mv: failed");
-    } else if (str_eq(cmd, "cp")) {
-        char *dst = arg;
-        while (*dst && *dst != ' ') ++dst;
-        if (!*dst) { term_puts(a, "usage: cp <src> <dst>"); return; }
-        *dst++ = 0; while (*dst == ' ') ++dst;
-        int fd = (int)open(arg, 0);
-        if (fd < 0) { term_puts(a, "cp: open failed"); return; }
-        static char data[4096];
-        long n = read(fd, data, sizeof(data));
-        close(fd);
-        if (n < 0) { term_puts(a, "cp: read failed"); return; }
-        term_puts(a, sys_writef(dst, data, (unsigned long)n) == 0 ? "cp: ok" : "cp: failed");
-    } else if (str_eq(cmd, "echo")) {
-        term_puts(a, arg);
-    } else if (str_eq(cmd, "edit")) {
-        int idx = app_open_new(APP_EDIT);
-        if (idx >= 0 && *arg) editor_load_path(&g_apps[idx], arg);
-    } else if (str_eq(cmd, "files")) {
+/* Carries out what a program in a terminal asked the desktop for. */
+static void handle_terminal_request(const TerminalRequest *request) {
+    if (request->kind == TERMINAL_REQUEST_FILES) {
         app_open_new(APP_FILES);
-    } else if (str_eq(cmd, "run")) {
-        if (!*arg) { term_puts(a, "usage: run <path>"); return; }
-        long pid = spawn(arg);
-        if (pid < 0) { term_puts(a, "run: spawn failed"); return; }
-        int st = 0;
-        wait_pid((int)pid, &st);
-        char line[48]; int z = 0;
-        const char *pre = "run: status ";
-        while (pre[z]) { line[z] = pre[z]; ++z; }
-        append_num(line, &z, st);
-        line[z] = 0;
-        term_puts(a, line);
-    } else if (str_eq(cmd, "df")) {
-        sysinfo_t si;
-        if (sys_sysinfo(&si) != 0) { term_puts(a, "df: unavailable"); return; }
-        char line[128]; int z = 0;
-        if (si.fs_type == 1) { const char *p2 = "ext2 on /: "; while (*p2) line[z++] = *p2++; }
-        else { const char *p2 = "ramfs on /: "; while (*p2) line[z++] = *p2++; }
-        unsigned long total_mb = (unsigned long)si.total_blocks * si.block_size / (1024UL * 1024UL);
-        unsigned long free_mb = (unsigned long)si.free_blocks * si.block_size / (1024UL * 1024UL);
-        const char *t = "total "; while (*t) line[z++] = *t++;
-        append_num(line, &z, (int)total_mb);
-        const char *m = " MB, free "; while (*m) line[z++] = *m++;
-        append_num(line, &z, (int)free_mb);
-        const char *e = " MB"; while (*e) line[z++] = *e;
-        line[z] = 0;
-        term_puts(a, line);
-    } else if (str_eq(cmd, "free")) {
-        sysinfo_t si;
-        if (sys_sysinfo(&si) != 0) { term_puts(a, "free: unavailable"); return; }
-        unsigned long free_mb = (unsigned long)si.free_pages * si.page_size / (1024UL * 1024UL);
-        unsigned long total_mb = (unsigned long)si.total_pages * si.page_size / (1024UL * 1024UL);
-        char line[96]; int z = 0;
-        const char *p2 = "free: "; while (*p2) line[z++] = *p2++;
-        append_num(line, &z, (int)free_mb);
-        const char *m = " MB of "; while (*m) line[z++] = *m++;
-        append_num(line, &z, (int)total_mb);
-        const char *e = " MB"; while (*e) line[z++] = *e;
-        line[z] = 0;
-        term_puts(a, line);
-    } else if (str_eq(cmd, "mount")) {
-        sysinfo_t si;
-        if (sys_sysinfo(&si) != 0) { term_puts(a, "mount: unavailable"); return; }
-        if (si.fs_type == 1) term_puts(a, "ext2 on / (disk, rw)");
-        else term_puts(a, "ramfs on / (memory, fallback)");
-    } else if (str_eq(cmd, "write")) {
-        char *path = arg;
-        char *text = path;
-        while (*text && *text != ' ') ++text;
-        if (!*text) { term_puts(a, "usage: write <path> <text>"); return; }
-        *text++ = 0;
-        unsigned long n = strlen(text);
-        term_puts(a, sys_writef(path, text, n) == 0 ? "write: ok" : "write: failed");
-    } else {
-        term_puts(a, "unknown command; try 'help'");
+        return;
     }
-}
-
-static int term_key(App *a, char c) {
-    if (c == '\r' || c == '\n') {
-        a->input[a->input_len] = 0;
-        if (a->input_len > 0) term_puts(a, a->input);
-        term_execute(a);
-        a->input_len = 0;
-        a->input[0] = 0;
-        return 1;
-    }
-    if (c == '\b' || c == 0x7F) {
-        if (a->input_len > 0) a->input[--a->input_len] = 0;
-        return 0;
-    }
-    if (c < 0x20 || c > 0x7E) return 0;
-    if (a->input_len < 255) {
-        a->input[a->input_len++] = c;
-        a->input[a->input_len] = 0;
-    }
-    return 0;
+    int idx = app_open_new(APP_EDIT);
+    if (idx < 0 || !request->argument[0]) return;
+    App *e = &g_apps[idx];
+    editor_load_path(e, request->argument);
+    draw_app_content(e);
+    comp_damage_rect(g_bg, e->win->x, e->win->y, e->win->w, e->win->h);
 }
 
 /* ---------------- editor app ---------------- */
@@ -601,20 +396,7 @@ static int term_key(App *a, char c) {
 static void editor_save(App *a) {
     a->text[a->text_len] = 0;
     const char *path = a->path[0] ? a->path : "/notes.txt";
-    if (sys_writef(path, a->text, (unsigned long)a->text_len) == 0) {
-        /* status in the first terminal */
-        for (int i = 0; i < MAX_APPS; ++i) {
-            if (g_apps[i].used && g_apps[i].kind == APP_TERM) {
-                term_puts(&g_apps[i], "editor: saved");
-                if (!g_apps[i].minimized && g_apps[i].win && g_apps[i].win->visible) {
-                    draw_terminal(&g_apps[i]);
-                    comp_damage_rect(g_bg, g_apps[i].win->x, g_apps[i].win->y,
-                                     g_apps[i].win->w, g_apps[i].win->h);
-                }
-                break;
-            }
-        }
-    }
+    sys_writef(path, a->text, (unsigned long)a->text_len);
 }
 
 static void editor_load_path(App *e, const char *path) {
@@ -672,33 +454,11 @@ static void draw_titlebar(App *a) {
 
 static void draw_terminal(App *a) {
     Window *w = a->win;
+    AppTerminalTheme theme;
     fill_rect(w, 0, TITLE_H, w->w, w->h - TITLE_H, COL_WIN);
     draw_titlebar(a);
-    int cols = (w->w - 2 * PAD) / 8; if (cols < 1) cols = 1;
-    int rows = (w->h - TITLE_H - PAD) / LINE_H; if (rows < 1) rows = 1;
-
-    /* Prompt pinned to the top; command output flows below it. */
-    int prompt_y = TITLE_H + PAD / 2;
-    fill_rect(w, 0, prompt_y, w->w, LINE_H, COL_WIN);
-    comp_text_render(w, PAD, prompt_y, "hydrogen$ ", COL_PROMPT);
-    char in[256];
-    int ik = 0;
-    for (int i = 0; i < a->input_len && ik < cols - 10 && ik < 255; ++i) in[ik++] = a->input[i];
-    in[ik] = 0;
-    comp_text_render(w, PAD + 10 * 8, prompt_y, in, COL_INPUT);
-    int cx = PAD + (10 + a->input_len) * 8;
-    if (cx < w->w - 4) fill_rect(w, cx, prompt_y, 2, LINE_H, COL_INPUT);
-
-    int out_rows = rows - 1;
-    int first = a->scroll_count - out_rows - a->scroll_off;
-    if (first < 0) first = 0;
-    int row = 0;
-    for (int i = first; i < a->scroll_count && row < out_rows; ++i, ++row) {
-        char tmp[128]; int k = 0;
-        while (a->scroll[i][k] && k < cols && k < 127) { tmp[k] = a->scroll[i][k]; ++k; }
-        tmp[k] = 0;
-        comp_text_render(w, PAD, TITLE_H + PAD / 2 + (row + 1) * LINE_H, tmp, COL_TERM_TEXT);
-    }
+    app_terminal_theme(&g_th, &theme);
+    app_terminal_draw(a->term, w, TITLE_H, g_focus >= 0 && &g_apps[g_focus] == a, &theme);
 }
 
 static void editor_cursor_line_col(App *a, int *out_line, int *out_col) {
@@ -804,8 +564,13 @@ static void focus_app(App *a) {
     for (int i = 0; i < MAX_APPS; ++i) {
         App *o = &g_apps[i];
         if (o->used && o->win && o->win->visible && !o->minimized) {
-            draw_titlebar(o);
-            comp_damage_rect(g_bg, o->win->x, o->win->y, o->win->w, TITLE_H);
+            if (o->kind == APP_TERM) {
+                draw_terminal(o);
+                comp_damage_rect(g_bg, o->win->x, o->win->y, o->win->w, o->win->h);
+            } else {
+                draw_titlebar(o);
+                comp_damage_rect(g_bg, o->win->x, o->win->y, o->win->w, TITLE_H);
+            }
         }
     }
 }
@@ -825,6 +590,10 @@ static void app_minimize(App *a) {
 
 static void app_close(App *a) {
     if (!a->used) return;
+    if (a->term) {
+        terminal_destroy(a->term);
+        a->term = 0;
+    }
     if (a->win) {
         comp_damage_rect(g_bg, a->win->x, a->win->y, a->win->w, a->win->h);
         comp_destroy_window(a->win);
@@ -922,8 +691,13 @@ static int app_open_new(int kind) {
     str_copy_to(a->title, t, sizeof(a->title));
 
     if (kind == APP_TERM) {
-        term_puts(a, "HydrogenOS shell app");
-        term_puts(a, "Type 'help'. Drag the title bar to move.");
+        a->term = app_terminal_open(a->win, TITLE_H);
+        if (!a->term) {
+            comp_destroy_window(a->win);
+            a->win = 0;
+            a->used = 0;
+            return -1;
+        }
     } else if (kind == APP_EDIT) {
         a->path[0] = 0;
     } else if (kind == APP_FILES) {
@@ -940,6 +714,31 @@ static int app_open_new(int kind) {
     comp_damage_rect(g_bg, x, y, w, h);
     comp_damage_rect(g_bg, 0, SH - TASKBAR_H, SW, TASKBAR_H);
     return idx;
+}
+
+/* Moves shell output into the terminal windows and serves their requests. A
+   shell that ended cleanly closes its window; one that failed keeps it, with
+   the status, until Enter starts a new shell. */
+static int terminal_service_all(void) {
+    int redrawn = 0;
+    for (int i = 0; i < MAX_APPS; ++i) {
+        App *a = &g_apps[i];
+        if (!a->used || a->kind != APP_TERM || !a->term) continue;
+        unsigned events = terminal_pump(a->term);
+        TerminalRequest request;
+        while (terminal_take_request(a->term, &request)) handle_terminal_request(&request);
+        if ((events & TERMINAL_EVENT_EXITED) && terminal_exit_status(a->term) == 0) {
+            app_close(a);
+            redrawn = 1;
+            continue;
+        }
+        if (events && !a->minimized && a->win->visible) {
+            draw_terminal(a);
+            comp_damage_rect(g_bg, a->win->x, a->win->y, a->win->w, a->win->h);
+            redrawn = 1;
+        }
+    }
+    return redrawn;
 }
 
 /* ---------------- settings ---------------- */
@@ -1262,6 +1061,7 @@ int main(void) {
 
     for (;;) {
         int dirty = settings_service_all();
+        dirty |= terminal_service_all();
 
         for (int guard = 0; guard < 64; ++guard) {
             long k = sys_kbd_read();
@@ -1270,16 +1070,9 @@ int main(void) {
             if (g_focus >= 0 && g_apps[g_focus].used && !g_apps[g_focus].minimized) {
                 App *a = &g_apps[g_focus];
                 if (a->kind == APP_TERM) {
-                    int full = term_key(a, c);
-                    Window *w = a->win;
-                    if (full) {
-                        draw_terminal(a);
-                        comp_damage_rect(g_bg, w->x, w->y, w->w, w->h);
-                    } else {
-                        draw_terminal(a);
-                        int py = TITLE_H + PAD / 2;
-                        comp_damage_rect(g_bg, w->x, w->y + py, w->w, LINE_H);
-                    }
+                    terminal_key(a->term, (int)k);
+                    draw_terminal(a);
+                    comp_damage_rect(g_bg, a->win->x, a->win->y, a->win->w, a->win->h);
                     dirty = 1;
                 } else if (a->kind == APP_EDIT) {
                     editor_key(a, c);
@@ -1306,9 +1099,7 @@ int main(void) {
             if (wheel != 0 && g_focus >= 0 && g_apps[g_focus].used && !g_apps[g_focus].minimized) {
                 App *fa = &g_apps[g_focus];
                 if (fa->kind == APP_TERM) {
-                    fa->scroll_off += wheel;
-                    if (fa->scroll_off < 0) fa->scroll_off = 0;
-                    if (fa->scroll_off > fa->scroll_count) fa->scroll_off = fa->scroll_count;
+                    terminal_scroll(fa->term, wheel * TERMINAL_WHEEL_ROWS);
                     draw_terminal(fa);
                     comp_damage_rect(g_bg, fa->win->x, fa->win->y, fa->win->w, fa->win->h);
                     dirty = 1;

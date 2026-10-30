@@ -1,5 +1,7 @@
 #include "env.h"
 #include "exec.h"
+#include "input.h"
+#include "interrupt.h"
 #include "jobs.h"
 #include "line_editor.h"
 #include "mini_libc.h"
@@ -112,7 +114,7 @@ static int load_script(int fd) {
 
 static int run_interactive(void) {
     exec_set_interactive(1);
-    out_set_color(1);
+    out_set_color(OUT_COLOR_CONSOLE);
     tty_set_color(TTY_COLOR_CYAN, TTY_COLOR_BLACK);
     out_str(1, "HydrogenOS");
     out_flush();
@@ -129,8 +131,56 @@ static int run_interactive(void) {
     }
 }
 
+/* The prompt of a shell behind a terminal emulator. Besides the visible text
+ * it carries two private sequences (docs/TERMINAL.md): OSC 7 reports the
+ * working directory for path completion, and OSC 133;B tells the emulator
+ * that the shell now waits for a line, so it knows where input starts. */
+static void print_terminal_prompt(void) {
+    char cwd[SHELL_PATH_MAX];
+    if (!getcwd(cwd, sizeof(cwd)))
+        memcpy(cwd, "/", 2);
+    jobs_print(1);
+    out_str(1, "\x1b]7;");
+    out_str(1, cwd);
+    out_str(1, "\a\x1b[32mhydrogen\x1b[0m \x1b[94m");
+    out_str(1, cwd);
+    out_str(1, "\x1b[0m$ \x1b]133;B\a");
+    out_flush();
+}
+
+/* Reads commands from stdin, which the terminal emulator feeds one finished
+ * line at a time, and writes to pipes it renders. Ctrl+C arrives as SIGINT
+ * and is passed on to the foreground command. End of input ends the shell. */
+static int run_terminal(void) {
+    int status;
+    exec_set_interactive(1);
+    exec_set_terminal_host(1);
+    out_set_color(OUT_COLOR_ANSI);
+    interrupt_install();
+    out_str(1, "HydrogenOS shell. Type 'help' for a list of commands.\n");
+    for (;;) {
+        int length;
+        print_terminal_prompt();
+        length = input_read_line(line_buffer, (int)sizeof(line_buffer));
+        if (length < 0) {
+            out_str(1, "exit\n");
+            out_flush();
+            break;
+        }
+        interrupt_clear();
+        if (length == 0)
+            continue;
+        exec_line(line_buffer);
+        if (exec_exit_requested())
+            break;
+    }
+    status = exec_last_status();
+    jobs_terminate_all();
+    return status;
+}
+
 static int usage(void) {
-    out_error("shell", 0, "usage: shell [-c command | -s | script]");
+    out_error("shell", 0, "usage: shell [-c command | -s | -i | script]");
     return STATUS_USAGE;
 }
 
@@ -147,6 +197,8 @@ int main(int argc, char **argv, char **envp) {
         return run_interactive();
     if (str_eq(argv[1], "-c"))
         return argc == 3 ? run_string(argv[2]) : usage();
+    if (str_eq(argv[1], "-i"))
+        return argc == 2 ? run_terminal() : usage();
     if (str_eq(argv[1], "-s")) {
         if (argc != 2)
             return usage();

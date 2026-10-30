@@ -1,8 +1,10 @@
 #include "builtins.h"
 
+#include "builtin_names.h"
 #include "diag.h"
 #include "env.h"
 #include "exec.h"
+#include "interrupt.h"
 #include "jobs.h"
 #include "mini_libc.h"
 #include "output.h"
@@ -50,7 +52,9 @@ static int builtin_help(int argc, char **argv) {
     (void)argv;
     out_str(1,
             "Builtins: cat cd cp echo env exit export false help jobs kill ln ls\n"
-            "          mkdir mv pwd readlink rm sleep time touch true unset wait\n"
+            "          mkdir mv pwd readlink rm sleep time touch true unset uptime\n"
+            "          version wait\n"
+            "Desktop terminal only: clear edit [file] files\n"
             "Diagnostics: pipe piperun pipenoinherit pipeblock pipefull\n"
             "          pipebroken pipeeof pollpipe pollwaitpipe pollmanypipe\n"
             "Syntax:   a | b   a && b   a || b   a ; b   a &\n"
@@ -81,7 +85,7 @@ static int copy_fd_to_stdout(int fd) {
     for (;;) {
         long n = read(fd, io_buffer, sizeof(io_buffer));
         if (n < 0)
-            return -1;
+            return interrupt_pending() ? 0 : -1;
         if (n == 0)
             return 0;
         out_write(1, io_buffer, (size_t)n);
@@ -409,7 +413,126 @@ static int builtin_sleep(int argc, char **argv) {
             return usage("sleep", "usage: sleep [milliseconds]");
     }
     out_flush();
-    sleep_ms((unsigned long)ms);
+    if (!interrupt_pending())
+        sleep_ms((unsigned long)ms);
+    return 0;
+}
+
+static void format_uptime(char *out, size_t cap, unsigned long seconds) {
+    unsigned long hours = seconds / 3600;
+    unsigned long minutes = seconds / 60 % 60;
+    seconds %= 60;
+    if (hours > 0)
+        snprintf(out, cap, "%luh %02lum %02lus", hours, minutes, seconds);
+    else if (minutes > 0)
+        snprintf(out, cap, "%lum %02lus", minutes, seconds);
+    else
+        snprintf(out, cap, "%lus", seconds);
+}
+
+static int builtin_uptime(int argc, char **argv) {
+    char text[32];
+    (void)argv;
+    if (argc > 1)
+        return usage("uptime", "usage: uptime");
+    format_uptime(text, sizeof(text), time_ms() / 1000);
+    out_str(1, "up ");
+    out_str(1, text);
+    out_char(1, '\n');
+    return 0;
+}
+
+static int builtin_version(int argc, char **argv) {
+    char text[128];
+    long fd;
+    long length;
+    (void)argv;
+    if (argc > 1)
+        return usage("version", "usage: version");
+    fd = open("/proc/version", OPEN_READ);
+    if (fd < 0) {
+        out_error("version", 0, "version information unavailable");
+        return STATUS_FAILURE;
+    }
+    length = read((int)fd, text, sizeof(text) - 1);
+    close((int)fd);
+    if (length <= 0) {
+        out_error("version", 0, "version information unavailable");
+        return STATUS_FAILURE;
+    }
+    out_write(1, text, (size_t)length);
+    if (text[length - 1] != '\n')
+        out_char(1, '\n');
+    return 0;
+}
+
+/* The commands below ask the desktop terminal that hosts the shell to do
+ * something that only the desktop can: they print a private escape sequence
+ * (see docs/TERMINAL.md) instead of acting themselves. */
+static int require_terminal_host(const char *name) {
+    if (exec_terminal_host())
+        return 0;
+    out_error(name, 0, "only available in the desktop terminal");
+    return STATUS_FAILURE;
+}
+
+static int builtin_clear(int argc, char **argv) {
+    (void)argv;
+    if (argc > 1)
+        return usage("clear", "usage: clear");
+    if (require_terminal_host("clear") != 0)
+        return STATUS_FAILURE;
+    out_str(1, "\x1b[2J\x1b[H");
+    return 0;
+}
+
+/* The editor runs in the desktop process, whose working directory is not the
+ * shell's, so the file is named by an absolute path. */
+static int builtin_edit(int argc, char **argv) {
+    char path[COPY_PATH_MAX];
+    if (argc > 2)
+        return usage("edit", "usage: edit [file]");
+    if (require_terminal_host("edit") != 0)
+        return STATUS_FAILURE;
+    path[0] = 0;
+    if (argc == 2) {
+        const char *name = argv[1];
+        int length;
+        if (name[0] == '/') {
+            length = snprintf(path, sizeof(path), "%s", name);
+        } else {
+            char cwd[COPY_PATH_MAX];
+            if (!getcwd(cwd, sizeof(cwd))) {
+                out_error("edit", 0, "cannot determine working directory");
+                return STATUS_FAILURE;
+            }
+            length = snprintf(path, sizeof(path), "%s%s%s", cwd,
+                              cwd[1] ? "/" : "", name);
+        }
+        if (length < 0 || length >= (int)sizeof(path)) {
+            out_error("edit", name, "path too long");
+            return STATUS_FAILURE;
+        }
+        for (const char *c = path; *c; ++c) {
+            if ((unsigned char)*c < 0x20) {
+                out_error("edit", name, "invalid file name");
+                return STATUS_FAILURE;
+            }
+        }
+    }
+    out_str(1, "\x1b]7770;edit;");
+    out_str(1, path);
+    out_char(1, '\a');
+    return 0;
+}
+
+static int builtin_files(int argc, char **argv) {
+    (void)argv;
+    if (argc > 1)
+        return usage("files", "usage: files");
+    if (require_terminal_host("files") != 0)
+        return STATUS_FAILURE;
+    out_str(1, "\x1b]7770;files\a");
     return 0;
 }
 
@@ -571,31 +694,10 @@ typedef struct BuiltinEntry {
     BuiltinFn fn;
 } BuiltinEntry;
 
+#define BUILTIN_ENTRY(name) {#name, builtin_##name},
+
 static const BuiltinEntry builtins[] = {
-    {"cat", builtin_cat},
-    {"cd", builtin_cd},
-    {"cp", builtin_cp},
-    {"echo", builtin_echo},
-    {"env", builtin_env},
-    {"exit", builtin_exit},
-    {"export", builtin_export},
-    {"false", builtin_false},
-    {"help", builtin_help},
-    {"jobs", builtin_jobs},
-    {"kill", builtin_kill},
-    {"ln", builtin_ln},
-    {"ls", builtin_ls},
-    {"mkdir", builtin_mkdir},
-    {"mv", builtin_mv},
-    {"pwd", builtin_pwd},
-    {"readlink", builtin_readlink},
-    {"rm", builtin_rm},
-    {"sleep", builtin_sleep},
-    {"time", builtin_time},
-    {"touch", builtin_touch},
-    {"true", builtin_true},
-    {"unset", builtin_unset},
-    {"wait", builtin_wait},
+    SHELL_BUILTIN_NAMES(BUILTIN_ENTRY)
 };
 
 BuiltinFn builtin_find(const char *name) {

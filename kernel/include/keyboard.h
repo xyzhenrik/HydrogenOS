@@ -13,6 +13,8 @@ enum {
   KEY_HOME,
   KEY_END,
   KEY_DEL,
+  KEY_PGUP,
+  KEY_PGDN,
 };
 
 int keyboard_read_char(void); // returns -1 if none

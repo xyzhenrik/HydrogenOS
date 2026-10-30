@@ -159,6 +159,13 @@ int jobs_signal(int id, int sig) {
     return 0;
 }
 
+void jobs_terminate_all(void) {
+    for (int slot = 0; slot < JOBS_MAX; ++slot) {
+        if (jobs[slot].used)
+            jobs_signal(slot + 1, SIGTERM);
+    }
+}
+
 int jobs_exit_code(int wait_status) {
     if (WIFSIGNALED(wait_status))
         return 128 + WTERMSIG(wait_status);

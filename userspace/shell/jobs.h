@@ -31,6 +31,10 @@ int jobs_wait_pid(int pid, int *status);
  * such job exists. */
 int jobs_signal(int id, int sig);
 
+/* Sends SIGTERM to every unfinished job, as a shell does when its terminal
+ * goes away. */
+void jobs_terminate_all(void);
+
 /* Shell exit code for a wait status: 128 + signal number for a process that
  * was killed by a signal, the status itself otherwise. */
 int jobs_exit_code(int wait_status);

@@ -126,6 +126,8 @@ void keyboard_handle_scancode(uint8_t scancode) {
             case 0x47: code = KEY_HOME; break;
             case 0x4F: code = KEY_END; break;
             case 0x53: code = KEY_DEL; break;
+            case 0x49: code = KEY_PGUP; break;
+            case 0x51: code = KEY_PGDN; break;
             default: break;
         }
         if (code) buffer_put(code);
@@ -175,6 +177,8 @@ static void virtio_feed_key(int code, int value) {
             case 106: extended = 1; scancode = 0x4D; break; /* KEY_RIGHT */
             case 107: extended = 1; scancode = 0x4F; break; /* KEY_END */
             case 108: extended = 1; scancode = 0x50; break; /* KEY_DOWN */
+            case 104: extended = 1; scancode = 0x49; break; /* KEY_PAGEUP */
+            case 109: extended = 1; scancode = 0x51; break; /* KEY_PAGEDOWN */
             case 111: extended = 1; scancode = 0x53; break; /* KEY_DELETE */
             default: return;
         }
