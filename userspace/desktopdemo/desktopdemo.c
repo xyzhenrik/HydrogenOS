@@ -1,6 +1,7 @@
 #include "mini_libc.h"
 #include "app_editor.h"
 #include "compositor.h"
+#include "filemanager.h"
 #include "gfx_effects.h"
 #include "icons.h"
 #include "kbd_keys.h"
@@ -77,8 +78,7 @@ typedef struct App {
     /* editor */
     Editor *editor;
     /* files */
-    char cwd[128];
-    int sel;
+    FileManager files;
     /* settings */
     SettingsUi settings_ui;
 } App;
@@ -694,35 +694,8 @@ static void draw_editor(App *a) {
 }
 
 static void draw_files(App *a) {
-    Window *w = a->win;
-    fill_rect(w, 0, TITLE_H, w->w, w->h - TITLE_H, COL_EDIT_BG);
+    fm_draw(&a->files, a->win);
     draw_titlebar(a);
-    comp_text_render(w, PAD, TITLE_H + 6, a->cwd, COL_EDIT_FG);
-    int row = 0;
-    int y0 = TITLE_H + 28;
-    int show_dotdot = !str_eq(a->cwd, "/");
-    if (show_dotdot) {
-        fill_rect(w, 0, y0 + row * 20, w->w, 20, a->sel == -2 ? COL_SELECTION : COL_EDIT_BG);
-        comp_text_render(w, PAD, y0 + row * 20 + 2, "../", COL_EDIT_FG);
-        row++;
-    }
-    int pos = 0, idx = 0;
-    dirent_t de;
-    while (readdir_pos(a->cwd, pos, &de) == 1) {
-        uint32_t bgc = (a->sel == idx) ? COL_SELECTION : COL_EDIT_BG;
-        fill_rect(w, 0, y0 + row * 20, w->w, 20, bgc);
-        char label[300];
-        int k = 0;
-        if (de.d_type == 4) { label[k++] = '['; }
-        for (int i = 0; de.d_name[i] && k < 250; ++i) label[k++] = de.d_name[i];
-        if (de.d_type == 4) label[k++] = ']';
-        label[k] = 0;
-        comp_text_render(w, PAD, y0 + row * 20 + 2, label, COL_EDIT_FG);
-        row++; idx++; pos++;
-        if (y0 + row * 20 > w->h - 24) break;
-    }
-    if (idx == 0 && !show_dotdot)
-        comp_text_render(w, PAD, y0 + 2, "(empty)", COL_DIM);
 }
 
 static void draw_settings(App *a) {
@@ -841,6 +814,7 @@ static void app_close(App *a) {
     }
     editor_destroy(a->editor);
     a->editor = 0;
+    if (a->kind == APP_FILES) fm_destroy(&a->files);
     a->used = 0;
     a->minimized = 0;
     a->dragging = 0;
@@ -920,8 +894,8 @@ static int find_free_slot(void) {
 
 static uint32_t app_background(int kind) {
     switch (kind) {
-    case APP_EDIT:
-    case APP_FILES: return COL_EDIT_BG;
+    case APP_EDIT: return COL_EDIT_BG;
+    case APP_FILES:
     case APP_SETTINGS: return g_th.surface;
     default: return COL_WIN;
     }
@@ -939,7 +913,7 @@ static int app_open_new(int kind) {
     if (w > SW - 120) w = SW - 120;
     if (h < 420) h = 420;
     if (h > work.h - 80) h = work.h - 80;
-    if (kind == APP_FILES) { w = 620; h = 460; }
+    if (kind == APP_FILES) { w = 760; h = 500; }
     if (kind == APP_SETTINGS) { w = 700; h = 480; }
     if (w > SW) w = SW;
     if (h > work.h) h = work.h;
@@ -975,8 +949,14 @@ static int app_open_new(int kind) {
             return -1;
         }
     } else if (kind == APP_FILES) {
-        getcwd(a->cwd, sizeof(a->cwd));
-        a->sel = 0;
+        char cwd[FM_PATH_CAP];
+        if (!getcwd(cwd, sizeof(cwd))) cwd[0] = 0;
+        if (fm_init(&a->files, &g_th, TITLE_H, cwd) != 0) {
+            comp_destroy_window(a->win);
+            a->win = 0;
+            a->used = 0;
+            return -1;
+        }
     } else if (kind == APP_SETTINGS) {
         settings_ui_init(&a->settings_ui, &g_settings, &g_th, draw_icon_os, TITLE_H);
     }
@@ -1027,6 +1007,49 @@ static void settings_startup(void) {
     sys_set_layout(g_settings.layout);
     g_applied = g_settings;
     settings_palette(&g_settings, &g_th);
+}
+
+/* ---------------- files ---------------- */
+
+#define MAX_PROGRAMS 8
+
+/* Processes started from Files that have not been reaped yet; 0 is a free slot. */
+static int g_programs[MAX_PROGRAMS];
+
+/* Starts a program without a console; finished ones are reaped here. */
+static int program_launch(const char *path) {
+    int slot = -1;
+
+    for (int i = 0; i < MAX_PROGRAMS; ++i) {
+        if (g_programs[i] && try_wait_pid(g_programs[i], 0) != 0) g_programs[i] = 0;
+        if (!g_programs[i] && slot < 0) slot = i;
+    }
+    if (slot < 0) return -1;
+    long pid = spawn_with_stdio(path, SPAWN_STDIO_NULL, SPAWN_STDIO_NULL, SPAWN_STDIO_NULL);
+    if (pid <= 0) return -1;
+    g_programs[slot] = (int)pid;
+    return 0;
+}
+
+/* Carries out what a Files event asked for: opening a file and repainting. */
+static void files_apply(App *a, unsigned int result) {
+    if (result & FM_ACTION) {
+        char path[FM_PATH_CAP];
+        int action = fm_take_action(&a->files, path, sizeof(path));
+        if (action == FM_ACTION_RUN) {
+            if (program_launch(path) != 0) fm_report(&a->files, "The program could not be started.");
+        } else if (action == FM_ACTION_OPEN_TEXT) {
+            int e = app_open_new(APP_EDIT);
+            if (e >= 0) {
+                editor_open(g_apps[e].editor, path);
+                draw_app_content(&g_apps[e]);
+            }
+        }
+    }
+    if (result & FM_REDRAW) {
+        draw_files(a);
+        comp_damage_rect(g_bg, a->win->x, a->win->y, a->win->w, a->win->h);
+    }
 }
 
 /* ---------------- hit testing ---------------- */
@@ -1119,46 +1142,8 @@ static void handle_press(int mx, int my) {
 
         /* app-specific clicks */
         if (a->kind == APP_FILES) {
-            int y0 = TITLE_H + 28;
-            int row = (ly - y0) / 20;
-            int show_dotdot = !str_eq(a->cwd, "/");
-            int sel_idx = show_dotdot ? row - 1 : row;
-            if (row >= 0) {
-                a->sel = sel_idx;
-                if (show_dotdot && row == 0) {
-                    chdir("..");
-                    getcwd(a->cwd, sizeof(a->cwd));
-                    a->sel = 0;
-                } else {
-                    int pos = 0, idx = 0;
-                    dirent_t de;
-                    while (readdir_pos(a->cwd, pos, &de) == 1) {
-                        if (idx == sel_idx) {
-                            if (de.d_type == 4) {
-                                chdir(de.d_name);
-                                getcwd(a->cwd, sizeof(a->cwd));
-                                a->sel = 0;
-                            } else {
-                                int e = app_open_new(APP_EDIT);
-                                if (e >= 0) {
-                                    char full[256];
-                                    int k = 0;
-                                    if (str_eq(a->cwd, "/")) full[k++] = '/';
-                                    else { str_copy_to(full, a->cwd, sizeof(full)); k = 0; while (full[k]) k++; full[k++] = '/'; }
-                                    str_copy_to(full + k, de.d_name, (int)sizeof(full) - k);
-                                    editor_open(g_apps[e].editor, full);
-                                    draw_app_content(&g_apps[e]);
-                                }
-                            }
-                            break;
-                        }
-                        idx++; pos++;
-                    }
-                }
-                draw_app_content(a);
-                comp_damage_rect(g_bg, w->x, w->y, w->w, w->h);
-                return;
-            }
+            files_apply(a, fm_click(&a->files, w, lx, ly));
+            return;
         } else if (a->kind == APP_EDIT) {
             editor_mouse_press(a->editor, lx, ly, time_ms());
             draw_editor(a);
@@ -1194,8 +1179,9 @@ static void handle_drag(int mx, int my) {
         } else if (a->resizing) {
             int nw = mx - w->x;
             int nh = my - w->y;
-            int min_w = a->kind == APP_SETTINGS ? SETTINGS_UI_MIN_WIDTH : 320;
-            int min_h = a->kind == APP_SETTINGS ? SETTINGS_UI_MIN_HEIGHT : 200;
+            int min_w = 320, min_h = 200;
+            if (a->kind == APP_SETTINGS) { min_w = SETTINGS_UI_MIN_WIDTH; min_h = SETTINGS_UI_MIN_HEIGHT; }
+            if (a->kind == APP_FILES) { min_w = FM_MIN_WIDTH; min_h = FM_MIN_HEIGHT; }
             CompRect work = work_area();
             if (w->x + nw > work.x + work.w) nw = work.x + work.w - w->x;
             if (w->y + nh > work.y + work.h) nh = work.y + work.h - w->y;
@@ -1208,7 +1194,7 @@ static void handle_drag(int mx, int my) {
     }
 }
 
-/* Hover highlights follow the pointer over the topmost window only. */
+/* Hover highlights of Files and Settings follow the pointer over the topmost window only. */
 static void settings_track_pointer(int mx, int my) {
     App *top = app_at(mx, my);
     int under = top ? app_index_of(top) : -1;
@@ -1217,9 +1203,14 @@ static void settings_track_pointer(int mx, int my) {
 
     for (int i = 0; i < MAX_APPS; ++i) {
         App *a = &g_apps[i];
-        if (!a->used || a->kind != APP_SETTINGS || a->minimized || !a->win) continue;
+        if (!a->used || a->minimized || !a->win) continue;
         int lx = i == under ? mx - a->win->x : -1;
         int ly = i == under ? my - a->win->y : -1;
+        if (a->kind == APP_FILES) {
+            files_apply(a, fm_hover(&a->files, a->win, lx, ly));
+            continue;
+        }
+        if (a->kind != APP_SETTINGS) continue;
         if (settings_ui_hover(&a->settings_ui, a->win, lx, ly) & SETTINGS_UI_REDRAW) {
             draw_app_content(a);
             comp_damage_rect(g_bg, a->win->x, a->win->y, a->win->w, a->win->h);
@@ -1333,6 +1324,9 @@ int main(void) {
                         comp_damage_rect(g_bg, w->x, w->y + py, w->w, LINE_H);
                     }
                     dirty = 1;
+                } else if (a->kind == APP_FILES) {
+                    files_apply(a, fm_key(&a->files, a->win, (int)k));
+                    dirty = 1;
                 } else if (a->kind == APP_EDIT) {
                     editor_key(a->editor, (int)k);
                     draw_editor(a);
@@ -1363,6 +1357,9 @@ int main(void) {
                     if (fa->scroll_off > fa->scroll_count) fa->scroll_off = fa->scroll_count;
                     draw_terminal(fa);
                     comp_damage_rect(g_bg, fa->win->x, fa->win->y, fa->win->w, fa->win->h);
+                    dirty = 1;
+                } else if (fa->kind == APP_FILES) {
+                    files_apply(fa, fm_wheel(&fa->files, fa->win, wheel));
                     dirty = 1;
                 } else if (fa->kind == APP_EDIT) {
                     editor_scroll(fa->editor, -wheel * EDITOR_WHEEL_LINES);
