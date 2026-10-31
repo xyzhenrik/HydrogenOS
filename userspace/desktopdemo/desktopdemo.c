@@ -1236,7 +1236,11 @@ int main(void) {
                         draw_resize_cursor(front, SW, SH, g_mx, g_my);
                     else
                         draw_cursor(front, SW, SH, g_mx, g_my);
-                    sys_fb_blit_strided(g_mx, g_my, 14, 17, front + (long)g_my * SW + g_mx, SW * 4);
+                    /* The kernel validates the whole source range, so a cursor
+                       near the bottom edge must not read past the buffer. */
+                    int blit_w = SW - g_mx < 14 ? SW - g_mx : 14;
+                    int blit_h = SH - g_my < 17 ? SH - g_my : 17;
+                    sys_fb_blit_strided(g_mx, g_my, blit_w, blit_h, front + (long)g_my * SW + g_mx, SW * 4);
                 }
             }
             g_prev_mx = g_mx;

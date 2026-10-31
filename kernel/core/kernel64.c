@@ -8,6 +8,7 @@
 #include "drivers/ata.h"
 #include "drivers/pci.h"
 #include "drivers/block.h"
+#include "drivers/virtio_input.h"
 #include "elf64.h"
 #include "elf_loader.h"
 #include "errno.h"
@@ -626,6 +627,7 @@ void kmain64(uint64_t magic, uint64_t multiboot_info_addr) {
   block_cache_init();
   bootsplash_stage(BOOTSPLASH_STAGE_STORAGE);
   net_init();
+  virtio_input_init();
   initrd_setup((uintptr_t)multiboot_info_addr);
   vfs_init();
   crash_init();

@@ -40,6 +40,7 @@ if [ "$ARCH" = "x86_64" ] && [ "$BOOT_MODE" = "kernel" ]; then
     -initrd "$ROOT_DIR/build/$ARCH/initrd.cpio" \
     -drive if=virtio,format=raw,file="$ROOT_DIR/build/$ARCH/disk.img" \
     -netdev user,id=n0 -device virtio-net-pci,netdev=n0 \
+    -device virtio-tablet-pci \
     -m 256M \
     -vga std \
     -serial stdio \
@@ -51,6 +52,7 @@ elif [ "$ARCH" = "x86_64" ]; then
     -cdrom "$ROOT_DIR/build/$ARCH/hydrogen.iso" \
     -drive if=virtio,format=raw,file="$ROOT_DIR/build/$ARCH/disk.img" \
     -netdev user,id=n0 -device virtio-net-pci,netdev=n0 \
+    -device virtio-tablet-pci \
     -m 256M \
     -serial stdio \
     -display none \

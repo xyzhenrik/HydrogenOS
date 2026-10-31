@@ -12,9 +12,12 @@ to 108 bytes.
   uitest.py key QEMU_KEY         e.g. ret, esc, ctrl-c, alt-tab
   uitest.py move DX DY           relative mouse move (guest cursor tracks 1:1)
   uitest.py click | down | up    left button
+  uitest.py abs X Y              absolute pointer: cursor lands exactly on pixel (X, Y)
+  uitest.py tap X Y              abs X Y, then a left click there
+  uitest.py absdown | absup      left button via the tablet (for drags after abs)
   uitest.py cmd 'monitor cmd'... raw QEMU monitor commands
 """
-import os, socket, struct, sys, time, zlib
+import json, os, socket, struct, sys, time, zlib
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 RUN_DIR = os.environ.get('UITEST_DIR') or os.path.join(ROOT, 'build', 'uitest')
@@ -48,6 +51,48 @@ def monitor(cmds, delay=0.4):
             pass
     s.close()
     return out
+
+
+def qmp(commands, delay=0.05):
+    """Run QMP commands over qmp.sock (the virtio tablet is only reachable through QMP)."""
+    os.chdir(RUN_DIR)
+    s = socket.socket(socket.AF_UNIX)
+    s.connect('qmp.sock')
+    f = s.makefile('rw')
+    f.readline()  # greeting
+    for c in [{'execute': 'qmp_capabilities'}] + commands:
+        f.write(json.dumps(c) + '\n')
+        f.flush()
+        while True:
+            reply = json.loads(f.readline())
+            if 'event' not in reply:
+                break
+        if 'error' in reply:
+            sys.exit('qmp: ' + reply['error']['desc'])
+        time.sleep(delay)
+    s.close()
+
+
+# The tablet reports 0..0x7fff across the whole screen, like QEMU's own UI frontends:
+# pixel * 2^15 / size, which the guest rounds back to the same pixel.
+TABLET_SPAN = 0x8000
+
+
+def abs_events(x, y, w, h):
+    return {'execute': 'input-send-event', 'arguments': {'events': [
+        {'type': 'abs', 'data': {'axis': 'x', 'value': x * TABLET_SPAN // w}},
+        {'type': 'abs', 'data': {'axis': 'y', 'value': y * TABLET_SPAN // h}}]}}
+
+
+def button_event(down):
+    return {'execute': 'input-send-event', 'arguments': {'events': [
+        {'type': 'btn', 'data': {'button': 'left', 'down': down}}]}}
+
+
+def move_abs(x, y):
+    w, h, _ = screendump()
+    os.remove(os.path.join(RUN_DIR, '_shot.ppm'))
+    qmp([abs_events(x, y, w, h)])
 
 
 def read_ppm(path):
@@ -108,6 +153,12 @@ def main(argv):
     elif a == 'click': monitor(['mouse_button 1', 'mouse_button 0'], 0.1)
     elif a == 'down': monitor(['mouse_button 1'], 0.1)
     elif a == 'up': monitor(['mouse_button 0'], 0.1)
+    elif a == 'abs': move_abs(int(argv[2]), int(argv[3]))
+    elif a == 'tap':
+        move_abs(int(argv[2]), int(argv[3]))
+        qmp([button_event(True), button_event(False)], 0.1)
+    elif a == 'absdown': qmp([button_event(True)])
+    elif a == 'absup': qmp([button_event(False)])
     elif a == 'cmd': print(''.join(monitor(argv[2:])))
     else: sys.exit(__doc__)
 
