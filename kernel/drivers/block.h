@@ -9,6 +9,8 @@ typedef struct block_dev {
     uint32_t sector_count;
     int (*read)(uint32_t lba, uint8_t count, void *buffer);
     int (*write)(uint32_t lba, uint8_t count, void *buffer);
+    /* Makes completed writes durable; NULL if the device has no volatile cache. */
+    int (*flush)(void);
 } block_dev_t;
 
 void block_init(void);
@@ -16,4 +18,6 @@ void block_cache_init(void);
 const block_dev_t *block_primary(void);
 int block_read(uint32_t lba, uint8_t count, void *buffer);
 int block_write(uint32_t lba, uint8_t count, void *buffer);
+/* Returns 0 when everything written so far is durable (or the device needs no flush). */
+int block_flush(void);
 int block_read_cached(uint32_t lba, uint8_t count, void *buffer);

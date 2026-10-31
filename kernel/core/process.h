@@ -2,10 +2,15 @@
 
 #include <stdint.h>
 
+#include "credentials.h"
 #include "isr.h"
+#include "signal.h"
 #include "vmm_user.h"
+#include "waitq.h"
 
 struct kernel_pipe;
+struct net_socket;
+struct exit_record;
 
 enum {
     PROCESS_MAX_HANDLE = 64,
@@ -16,6 +21,7 @@ enum {
     PROCESS_HANDLE_FLAG_INHERIT = 1u << 0,
     PROCESS_HANDLE_FLAG_READ = 1u << 1,
     PROCESS_HANDLE_FLAG_WRITE = 1u << 2,
+    PROCESS_HANDLE_FLAG_CLOEXEC = 1u << 3,
 };
 
 /* Mirrors the OPEN_* flags of the sys_open ABI. */
@@ -33,6 +39,12 @@ enum {
 enum {
     PROCESS_DUP3_INHERIT = 1u << 0,
     PROCESS_DUP3_CLOSE_ON_SPAWN = 1u << 1,
+    PROCESS_DUP3_CLOEXEC = 1u << 2,
+};
+
+/* dst_fd value for process_dup3_fd(): the lowest free non-stdio fd. */
+enum {
+    PROCESS_DUP3_ANY_SLOT = -1,
 };
 
 typedef enum process_state {
@@ -43,6 +55,7 @@ typedef enum process_state {
     PROCESS_BLOCKED_POLL = 4,
     PROCESS_SLEEPING = 5,
     PROCESS_BLOCKED_KERNEL = 6,
+    PROCESS_BLOCKED_SOCKET = 7,
 } process_state_t;
 
 typedef enum process_priority {
@@ -61,6 +74,7 @@ typedef enum process_handle_type {
     PROCESS_HANDLE_NULL_WRITER = 5,
     PROCESS_HANDLE_CONSOLE_READER = 6,
     PROCESS_HANDLE_CONSOLE_WRITER = 7,
+    PROCESS_HANDLE_SOCKET = 8,
 } process_handle_type_t;
 
 enum {
@@ -76,6 +90,9 @@ enum {
     PROCESS_RESOURCE_NO_KERNEL_RESOURCE = -3,
     PROCESS_RESOURCE_IO_ERROR = -4,
     PROCESS_RESOURCE_INVALID = -5,
+    PROCESS_RESOURCE_ACCESS = -6,
+    PROCESS_RESOURCE_NO_SPACE = -7,
+    PROCESS_RESOURCE_TOO_BIG = -8,
 };
 
 enum {
@@ -99,6 +116,7 @@ typedef struct process_handle_entry {
     union {
         process_file_handle_t *file;
         struct kernel_pipe *pipe;
+        struct net_socket *socket;
     } resource;
 } process_handle_entry_t;
 
@@ -118,6 +136,7 @@ typedef struct process {
     uint64_t *pml4;
     uint32_t pid;
     uint32_t parent_pid;
+    credentials_t cred;          /* inherited from the creating process */
     char name[PROCESS_NAME_CAP]; /* executable basename, for diagnostics only */
     char cwd[PROCESS_CWD_CAP];  /* current working directory, always absolute, default "/" */
     process_handle_entry_t handles[PROCESS_MAX_HANDLE];
@@ -128,12 +147,16 @@ typedef struct process {
     uint8_t state;
     uint8_t priority;        /* process_priority_t */
     uint32_t timeslice_ms;   /* remaining time this timeslice */
-    uint32_t sleep_until_ms; /* if > 0: sleeping until time_ms() >= sleep_until_ms */
+    uint64_t sleep_until_ms; /* if > 0: sleeping until time_ms() >= sleep_until_ms */
     uint32_t waiting_for_pid;
     uintptr_t waiting_status_ptr;
     uint32_t wait_result_pid;
     int wait_status;
     uint8_t wait_ready;
+    /* Reserved at creation for this process's own exit, and the exits of its
+     * children that have not been waited for. */
+    struct exit_record *own_exit_record;
+    struct exit_record *child_exit_records;
     int waiting_handle;
     uint8_t waiting_is_stdio;
     struct kernel_pipe *waiting_pipe;
@@ -143,7 +166,22 @@ typedef struct process {
     uint32_t waiting_poll_count;
     uint64_t waiting_poll_deadline_ms;
     uint8_t waiting_poll_has_deadline;
+    int waiting_socket_fd;
+    uint8_t waiting_socket_kind; /* net_wait_kind_t of the blocked socket call */
+    /* Wait-queue registrations of the blocked syscall. block_wait covers a
+     * pipe read or write, a socket receive and a child wait; a poll gets one
+     * entry in poll_waits per pipe or socket it watches. The queues wake
+     * these entries without looking at the address space of their owner. */
+    WaitEntry block_wait;
+    WaitEntry poll_waits[PROCESS_POLL_MAX_FDS];
+    uint32_t poll_wait_count;
+    /* Parent blocked in SYS_WAIT for this process to exit. */
+    WaitQueue exit_waiters;
     VmmUserSpace vm;
+    signal_state_t signals;
+    uint64_t user_cycles;   /* TSC ticks spent in user mode */
+    uint64_t kernel_cycles; /* TSC ticks spent in the kernel on its behalf */
+    uint8_t perf_was_blocked; /* blocked since it last ran; see perf_sched_dispatch() */
     process_kernel_wait_fn kernel_wait_fn;
     uintptr_t kernel_wait_arg;
     struct process *next;
@@ -159,6 +197,8 @@ typedef struct process_info {
     uint8_t is_current;
     uint32_t handle_count;
     uint32_t user_pages;
+    uint64_t user_cycles;
+    uint64_t kernel_cycles;
     char name[PROCESS_NAME_CAP];
     char cwd[PROCESS_CWD_CAP];
 } process_info_t;
@@ -166,6 +206,9 @@ typedef struct process_info {
 void process_init(uint64_t *kernel_pml4);
 process_t *process_create(uint64_t *pml4, uint32_t parent_pid);
 process_t *process_find_by_pid(uint32_t pid);
+/* Walks the process table: pass NULL for the first entry, then each result.
+ * Returns NULL at the end. The table must not change during the walk. */
+process_t *process_table_next(const process_t *after);
 void process_set_name(process_t *p, const char *path);
 int process_get_info(uint32_t pid, process_info_t *out);
 int process_next_info(uint32_t after_pid, process_info_t *out);
@@ -181,6 +224,13 @@ int process_bind_stdio_from_fd(process_t *dst, int stdio_fd,
 int process_wait(process_t *waiter, uint32_t pid, int *out_status);
 int process_begin_wait(process_t *waiter, uint32_t pid, uintptr_t status_ptr);
 void process_set_frame(process_t *p, const regs_t *frame);
+/* Makes new_pml4 (already holding the new image) the address space of p, which
+ * is the running process, and frees the old one including its mmap regions.
+ * Then closes the close-on-exec handles, resets caught signals to their
+ * default action and renames p after path. Everything else, namely pid,
+ * parent, cwd, priority, remaining handles, blocked and pending signals, is
+ * kept. */
+void process_exec_commit(process_t *p, uint64_t *new_pml4, const char *path);
 int process_resolve_path(const process_t *p, const char *path, char *out,
                          uint32_t out_sz);
 int process_handle_open_file(process_t *p, const char *path, uint32_t flags);
@@ -188,6 +238,8 @@ int process_handle_create_pipe(process_t *p, int *out_read_handle,
                                int *out_write_handle);
 int process_dup_fd(process_t *p, int src_fd);
 int process_dup2_fd(process_t *p, int src_fd, int dst_fd);
+/* Returns dst_fd, -1 (bad fd), -2 (bad flags or src_fd == dst_fd) or -3 (no
+ * free slot for PROCESS_DUP3_ANY_SLOT). */
 int process_dup3_fd(process_t *p, int src_fd, int dst_fd, uint32_t flags);
 int process_fd_set_inherit(process_t *p, int fd, int inherit);
 int process_begin_pipe_read_wait(process_t *p, int handle);
@@ -200,12 +252,30 @@ int process_begin_fd_poll_wait(process_t *p, int fd, uint32_t events,
                                int64_t timeout_ms);
 int process_begin_poll_many_wait(process_t *p, uintptr_t array_ptr,
                                  uint32_t count, int64_t timeout_ms);
+/* Takes over the caller's reference to socket on success and returns its fd.
+ * Returns PROCESS_RESOURCE_NO_HANDLE_SLOT when the handle table is full; the
+ * caller then still owns the reference. */
+int process_handle_attach_socket(process_t *p, struct net_socket *socket);
+/* 0, -1 for an invalid fd, -2 when the fd is not a socket. */
+int process_fd_socket(process_t *p, int fd, struct net_socket **out);
+/* Blocks p until the socket behind fd is ready for the operation 'kind' (a
+ * net_wait_kind_t); the scheduler then repeats the pending syscall with the
+ * registers saved at syscall entry. */
+int process_begin_socket_wait(process_t *p, int fd, uint8_t kind);
 int process_fd_seek(process_t *p, int fd, int64_t off, int whence,
                     uint64_t *out_pos);
+/* Resizes the regular file behind a writable fd; the file offset is not
+ * moved. Returns 0 or a negative errno value (-EBADF for an invalid or
+ * read-only fd, -EINVAL when the fd is not a file). */
+int process_fd_truncate(process_t *p, int fd, uint32_t length);
 int process_fd_poll(process_t *p, int fd, uint32_t events,
                     uint32_t *out_ready);
 int process_poll_many(process_t *p, process_poll_fd_t *fds, uint32_t count,
                       uint32_t *out_ready_count);
+/* process_poll_many() on a poll list in the current process' user memory;
+   returns 0 or a negative errno. */
+int process_poll_many_user(process_t *p, uintptr_t user_fds, uint32_t count,
+                           uint32_t *out_ready_count);
 int process_fd_read(process_t *p, int fd, uint8_t *out, uint32_t out_sz,
                     uint32_t *out_len);
 int process_fd_write(process_t *p, int fd, const uint8_t *in, uint32_t in_sz,
@@ -220,9 +290,12 @@ int process_stdio_read(process_t *p, int stdio_fd, uint8_t *out, uint32_t out_sz
 int process_stdio_write(process_t *p, int stdio_fd, const uint8_t *in,
                         uint32_t in_sz, uint32_t *out_len);
 int process_stdio_close(process_t *p, int stdio_fd);
-int process_has_runnable_other_than(process_t *p);
+int process_has_runnable_other_than(const process_t *p);
 void process_set_priority(process_t *p, uint8_t prio);
 void process_begin_sleep(process_t *p, uint32_t ms);
+/* Aborts the blocking syscall p is in so that it returns -EINTR. Returns 1 if
+ * a wait was aborted; a wait that already completed is left to finish. */
+int process_interrupt_wait(process_t *p);
 int process_begin_kernel_wait(process_t *p, process_kernel_wait_fn fn,
                               uintptr_t arg);
 void process_wake_sleepers(void);

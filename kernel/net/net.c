@@ -1,5 +1,6 @@
 #include "net.h"
 
+#include "core/perf.h"
 #include "drivers/virtio_net.h"
 #include "errno.h"
 #include "ethernet.h"
@@ -15,31 +16,55 @@
 #define NET_STATIC_NETMASK NET_IPV4_ADDR(255, 255, 255, 0)
 #define NET_STATIC_GATEWAY NET_IPV4_ADDR(10, 0, 2, 2)
 
-#define NET_IPV4_LOOPBACK_NET  NET_IPV4_ADDR(127, 0, 0, 0)
-#define NET_IPV4_LOOPBACK_MASK NET_IPV4_ADDR(255, 0, 0, 0)
-#define NET_IPV4_MULTICAST_NET  NET_IPV4_ADDR(224, 0, 0, 0)
-#define NET_IPV4_MULTICAST_MASK NET_IPV4_ADDR(240, 0, 0, 0)
-
 static net_interface_t net_iface;
+/* Set while a frame from the link is being processed. */
+static int net_receiving_from_link;
 
 const net_interface_t *net_interface(void) {
     return &net_iface;
 }
 
 void net_count_rx_drop(void) {
-    net_iface.rx_dropped++;
+    if (net_receiving_from_link)
+        net_iface.rx_dropped++;
+}
+
+uint32_t net_entropy(void) {
+    uint32_t low;
+    uint32_t high;
+
+    __asm__ volatile("rdtsc" : "=a"(low), "=d"(high));
+    return (low ^ (high * 0x9E3779B1u)) * 2654435761u;
+}
+
+int net_ipv4_is_own(uint32_t ipv4) {
+    return ipv4 == net_iface.ipv4 || net_ipv4_is_loopback(ipv4);
+}
+
+int net_ipv4_is_unicast_destination(uint32_t ipv4) {
+    uint32_t host_bits = ~net_iface.netmask;
+    int on_link = (ipv4 & net_iface.netmask) == (net_iface.ipv4 & net_iface.netmask);
+
+    return ipv4 != 0 && ipv4 != 0xFFFFFFFFu && !net_ipv4_is_multicast(ipv4) &&
+           !(on_link && ((ipv4 & host_bits) == host_bits ||
+                         (ipv4 & host_bits) == 0));
 }
 
 int net_link_transmit(const uint8_t *frame, size_t len) {
     int rc = virtio_net_transmit(frame, len);
-    if (rc == 0)
+    if (rc == 0) {
         net_iface.tx_frames++;
+        perf_count_net_tx((uint32_t)len);
+    }
     return rc;
 }
 
 static void net_deliver(const uint8_t *frame, size_t len) {
     net_iface.rx_frames++;
+    perf_count_net_rx((uint32_t)len);
+    net_receiving_from_link = 1;
     ethernet_input(frame, len);
+    net_receiving_from_link = 0;
 }
 
 void net_poll(void) {
@@ -86,6 +111,10 @@ void net_init(void) {
     serial_write("/24\n");
 }
 
+int net_link_up(void) {
+    return net_iface.up && virtio_net_link_up();
+}
+
 int net_get_info(net_info_t *out) {
     if (!net_iface.up)
         return -ENODEV;
@@ -111,13 +140,9 @@ int net_ping_begin(uint32_t dst, uint32_t timeout_ms) {
     if (timeout_ms == 0 || timeout_ms > NET_PING_TIMEOUT_MAX_MS)
         return -EINVAL;
 
-    uint32_t host_bits = ~net_iface.netmask;
-    int on_link = (dst & net_iface.netmask) == (net_iface.ipv4 & net_iface.netmask);
-    if (dst == 0 || dst == 0xFFFFFFFFu ||
-        (dst & NET_IPV4_MULTICAST_MASK) == NET_IPV4_MULTICAST_NET ||
-        (on_link && ((dst & host_bits) == host_bits || (dst & host_bits) == 0)))
+    if (!net_ipv4_is_unicast_destination(dst))
         return -EINVAL;
-    if ((dst & NET_IPV4_LOOPBACK_MASK) == NET_IPV4_LOOPBACK_NET)
+    if (net_ipv4_is_loopback(dst))
         return -ENETUNREACH;
 
     net_poll();

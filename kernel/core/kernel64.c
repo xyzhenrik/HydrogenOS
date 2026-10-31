@@ -1,12 +1,17 @@
 #include <stdint.h>
 
 #include "console.h"
+#include "core/cmdline.h"
+#include "core/crash.h"
+#include "core/perf.h"
 #include "core/time.h"
 #include "drivers/ata.h"
 #include "drivers/pci.h"
 #include "drivers/block.h"
+#include "drivers/virtio_input.h"
 #include "elf64.h"
 #include "elf_loader.h"
+#include "errno.h"
 #include "framebuffer.h"
 #include "fs/vfs.h"
 #include "gdt.h"
@@ -32,6 +37,7 @@
 #include "syscall_arch.h"
 #include "syscall.h"
 #include "tty.h"
+#include "video/bootsplash.h"
 #include "video/fb_console.h"
 #include "fs/ramfs.h"
 #include "net/net.h"
@@ -207,6 +213,61 @@ static void enter_usermode(uintptr_t entry, uintptr_t user_stack_top) {
       : "rax", "memory");
 }
 
+/* Maps the ELF segments, the stack guard page and the stack into user_pml4,
+ * which must be the active address space, and fills in the entry registers.
+ * Returns 0, -ENOEXEC for an unusable image or -ENOMEM. */
+static int build_user_image(uint64_t *user_pml4, const uint8_t *elf,
+                            size_t elf_size, regs_t *initial) {
+  int load_rc = elf64_load_image(elf, elf_size);
+  if (load_rc != 0) {
+    kputs("user: load failed\n");
+    return load_rc == -2 ? -ENOMEM : -ENOEXEC;
+  }
+
+  const uintptr_t user_stack = 0x0000000080100000;
+  const size_t stack_pages = 16;
+  /* A PROT_NONE page below the stack makes an overflow fault instead of
+   * running into whatever lies beneath, so the image must not reach it. */
+  for (size_t i = 0; i <= stack_pages; ++i) {
+    if (paging_is_mapped(user_stack - 0x1000 + i * 0x1000)) {
+      kputs("user: image overlaps stack guard\n");
+      return -ENOEXEC;
+    }
+  }
+  uintptr_t guard_phys = pmm_alloc_page();
+  if (!guard_phys ||
+      paging_user_map_page(user_pml4, user_stack - 0x1000, guard_phys,
+                           PAGE_PROT_NONE) != 0) {
+    if (guard_phys)
+      pmm_free_page(guard_phys);
+    kputs("user: no memory for stack guard\n");
+    return -ENOMEM;
+  }
+  for (size_t i = 0; i < stack_pages; ++i) {
+    uintptr_t phys = pmm_alloc_page();
+    if (!phys) {
+      kputs("user: no memory for stack\n");
+      return -ENOMEM;
+    }
+    paging_map_region(phys, user_stack + i * 0x1000, 0x1000,
+                      PAGE_USER | PAGE_RW);
+    uint8_t *page = (uint8_t *)(uintptr_t)phys;
+    for (size_t j = 0; j < 4096; ++j)
+      page[j] = 0;
+  }
+  paging_user_protect_range(user_pml4, user_stack, stack_pages * 0x1000,
+                            PAGE_RW | PAGE_NO_EXEC);
+  const elf64_ehdr_t *eh = (const elf64_ehdr_t *)elf;
+  regs_t entry = {0};
+  entry.rip = (uint64_t)(uintptr_t)eh->e_entry;
+  entry.cs = GDT_USER_CODE_SELECTOR;
+  entry.rflags = 0x202;
+  entry.rsp = user_stack + stack_pages * 0x1000 - 16;
+  entry.ss = GDT_USER_DATA_SELECTOR;
+  *initial = entry;
+  return 0;
+}
+
 static process_t *load_user_process(const uint8_t *elf, size_t elf_size,
                                     const char *name) {
   if (elf64_validate(elf, elf_size) != 0) {
@@ -224,41 +285,18 @@ static process_t *load_user_process(const uint8_t *elf, size_t elf_size,
   process_t *proc = process_create(user_pml4, prev_proc ? prev_proc->pid : 0);
   if (!proc) {
     kputs("user: no proc\n");
+    paging_destroy_user_pml4(user_pml4);
     return 0;
   }
   process_set_name(proc, name);
   paging_switch(user_pml4);
 
-  if (elf64_load_image(elf, elf_size) != 0) {
-    kputs("user: load failed\n");
+  regs_t initial;
+  if (build_user_image(user_pml4, elf, elf_size, &initial) != 0) {
     paging_switch(prev_pml4);
     process_destroy(proc);
     return 0;
   }
-
-  const uintptr_t user_stack = 0x0000000080100000;
-  const size_t stack_pages = 16;
-  for (size_t i = 0; i < stack_pages; ++i) {
-    uintptr_t phys = pmm_alloc_page();
-    if (!phys) {
-      kputs("user: no memory for stack\n");
-      paging_switch(prev_pml4);
-      process_destroy(proc);
-      return 0;
-    }
-    paging_map_region(phys, user_stack + i * 0x1000, 0x1000,
-                      PAGE_USER | PAGE_RW);
-    uint8_t *page = (uint8_t *)(uintptr_t)phys;
-    for (size_t j = 0; j < 4096; ++j)
-      page[j] = 0;
-  }
-  const elf64_ehdr_t *eh = (const elf64_ehdr_t *)elf;
-  regs_t initial = {0};
-  initial.rip = (uint64_t)(uintptr_t)eh->e_entry;
-  initial.cs = 0x23;
-  initial.rflags = 0x202;
-  initial.rsp = user_stack + stack_pages * 0x1000 - 16;
-  initial.ss = 0x1B;
   process_set_frame(proc, &initial);
   paging_switch(prev_pml4);
   return proc;
@@ -299,25 +337,42 @@ static int run_user_from_vfs(const char *path) {
   return rc;
 }
 
+/* Reads the regular file at path into a kernel buffer that the caller frees.
+ * Returns 0 or a negative errno. */
+static int read_executable(const char *path, uint8_t **out_buf,
+                           uint32_t *out_size) {
+  if (!path || !vfs_is_ready())
+    return -ENOENT;
+  vfs_stat_t st;
+  if (vfs_stat(path, &st) != 0)
+    return -ENOENT;
+  if (st.type != 1)
+    return -EACCES;
+  if (st.size == 0)
+    return -ENOEXEC;
+  uint8_t *buf = (uint8_t *)kalloc(st.size);
+  if (!buf)
+    return -ENOMEM;
+  uint32_t got = 0;
+  if (vfs_read_file(path, buf, st.size, &got) != 0 || got == 0) {
+    kfree(buf);
+    return -EIO;
+  }
+  *out_buf = buf;
+  *out_size = got;
+  return 0;
+}
+
 static int spawn_from_vfs(const char *path, const spawn_args_t *args,
                           int bind_stdio, int stdin_fd, int stdout_fd,
                           int stderr_fd, uint64_t *out_pid) {
   process_t *parent = process_current();
   if (out_pid)
     *out_pid = 0;
-  if (!path || !vfs_is_ready())
-    return USER_SPAWN_ERR_EXEC;
-  vfs_stat_t st;
-  if (vfs_stat(path, &st) != 0 || st.type != 1 || st.size == 0)
-    return USER_SPAWN_ERR_EXEC;
-  uint8_t *buf = (uint8_t *)kalloc(st.size);
-  if (!buf)
-    return USER_SPAWN_ERR_EXEC;
+  uint8_t *buf = 0;
   uint32_t got = 0;
-  if (vfs_read_file(path, buf, st.size, &got) != 0 || got == 0) {
-    kfree(buf);
+  if (read_executable(path, &buf, &got) != 0)
     return USER_SPAWN_ERR_EXEC;
-  }
   process_t *proc = load_user_process(buf, got, path);
   kfree(buf);
   if (!proc)
@@ -363,6 +418,44 @@ int user_spawn_args_from_vfs(const char *path, const spawn_args_t *args,
                              uint64_t *out_pid, int stdin_fd, int stdout_fd,
                              int stderr_fd) {
   return spawn_from_vfs(path, args, 1, stdin_fd, stdout_fd, stderr_fd, out_pid);
+}
+
+int user_exec_from_vfs(process_t *proc, const char *path,
+                       const spawn_args_t *args, regs_t *frame) {
+  if (!proc || proc == process_kernel() || !path || !args || !frame)
+    return -EINVAL;
+  uint8_t *elf = 0;
+  uint32_t elf_size = 0;
+  int rc = read_executable(path, &elf, &elf_size);
+  if (rc != 0)
+    return rc;
+  if (elf64_validate(elf, elf_size) != 0) {
+    kfree(elf);
+    return -ENOEXEC;
+  }
+
+  /* The new image is built beside the old one, which is only released once
+   * nothing can fail any more. */
+  uint64_t *old_pml4 = proc->pml4;
+  uint64_t *new_pml4 = paging_create_user_pml4();
+  if (!new_pml4) {
+    kfree(elf);
+    return -ENOMEM;
+  }
+  paging_switch(new_pml4);
+  regs_t entry;
+  rc = build_user_image(new_pml4, elf, elf_size, &entry);
+  kfree(elf);
+  if (rc == 0 && spawn_args_place(new_pml4, &entry, args) != 0)
+    rc = -E2BIG;
+  if (rc != 0) {
+    paging_switch(old_pml4);
+    paging_destroy_user_pml4(new_pml4);
+    return rc;
+  }
+  process_exec_commit(proc, new_pml4, path);
+  *frame = entry;
+  return 0;
 }
 
 static void cmd_user(void) {
@@ -488,6 +581,7 @@ void kmain64(uint64_t magic, uint64_t multiboot_info_addr) {
   serial_init();
   console_init(0x0B); // cyan on black
   console_write("HydrogenOS x86_64 bootet...\n");
+  cmdline_init((uintptr_t)multiboot_info_addr);
 
   pmm_init((uintptr_t)multiboot_info_addr);
 
@@ -510,6 +604,7 @@ void kmain64(uint64_t magic, uint64_t multiboot_info_addr) {
   if (fb_ok == 0) {
     fb_clear(0x00101010);
     fb_console_clear();
+    bootsplash_start(BOOTSPLASH_STAGE_PCI, !cmdline_has_flag("verbose"));
   }
 
   idt_install();
@@ -519,6 +614,7 @@ void kmain64(uint64_t magic, uint64_t multiboot_info_addr) {
   pic_remap(0x20, 0x28);
   pit_init(100);
   time_init(100);
+  perf_init();
   acpi_init();
   if (rtc_init() != 0)
     serial_write("[RTC] CMOS clock unreadable, wall time unavailable\n");
@@ -529,12 +625,16 @@ void kmain64(uint64_t magic, uint64_t multiboot_info_addr) {
   ata_init();
   block_init();
   block_cache_init();
+  bootsplash_stage(BOOTSPLASH_STAGE_STORAGE);
   net_init();
+  virtio_input_init();
   initrd_setup((uintptr_t)multiboot_info_addr);
   vfs_init();
+  crash_init();
   serial_write("[VFS] root: ");
   serial_write(vfs_root_name());
   serial_write("\n");
+  bootsplash_stage(BOOTSPLASH_STAGE_FILESYSTEM);
   if (fb_ok == 0) {
     mouse_set_bounds((int)framebuffer.width, (int)framebuffer.height);
   } else {
@@ -542,9 +642,11 @@ void kmain64(uint64_t magic, uint64_t multiboot_info_addr) {
   }
   tty_init();
   sti();
-  if (run_user_from_vfs("/init") != 0) {
+  bootsplash_stage(BOOTSPLASH_STAGE_INIT);
+  if (run_user_from_vfs("/sbin/init") != 0) {
+    bootsplash_abort();
     kputs("userspace init missing, trying direct userspace shell fallback\n");
-    if (run_user_from_vfs("/shell") == 0) {
+    if (run_user_from_vfs("/bin/shell") == 0) {
       return;
     }
     kputs("userspace shell missing, falling back to kernel shell\n");

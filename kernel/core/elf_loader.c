@@ -1,10 +1,19 @@
 #include "elf64.h"
 #include "console.h"
+#include "oom.h"
 #include "paging.h"
 #include "pmm.h"
+#include "vmm_user.h"
 
 #include <stddef.h>
 #include <stdint.h>
+
+/* The kernel identity map (1 GiB of supervisor 2 MiB pages) counts as mapped
+ * in every address space, so a segment inside it would be written over kernel
+ * memory instead of getting its own pages. */
+#define ELF_USER_IMAGE_MIN 0x40000000ULL
+/* Segments stay below the region handed out by sys_mmap. */
+#define ELF_USER_IMAGE_LIMIT VMM_USER_MMAP_BASE
 
 int elf64_validate(const void *image, size_t size) {
     if (!image || size < sizeof(elf64_ehdr_t))
@@ -26,14 +35,58 @@ void elf64_dump_info(const void *image) {
     console_write("\n");
 }
 
+/* Permissions of one page: the union over every segment that touches it, so
+   that two segments sharing a page never lose each other's access. */
+static uint64_t elf64_page_flags(const elf64_phdr_t *ph, uint16_t count,
+                                 uintptr_t page) {
+    uint64_t flags = PAGE_NO_EXEC;
+    for (uint16_t i = 0; i < count; ++i) {
+        if (ph[i].p_type != ELF64_PT_LOAD || ph[i].p_memsz == 0)
+            continue;
+        uintptr_t first = (uintptr_t)ph[i].p_vaddr & ~0xFFFULL;
+        uintptr_t last = ((uintptr_t)ph[i].p_vaddr +
+                          (uintptr_t)ph[i].p_memsz - 1) & ~0xFFFULL;
+        if (page < first || page > last)
+            continue;
+        if (ph[i].p_flags & ELF64_PF_W)
+            flags |= PAGE_RW;
+        if (ph[i].p_flags & ELF64_PF_X)
+            flags &= ~PAGE_NO_EXEC;
+    }
+    return flags;
+}
+
+/* Segments are filled through writable mappings; only once every segment is
+   in place do read-only and non-executable pages get their final rights. */
+static void elf64_protect_segments(const elf64_phdr_t *ph, uint16_t count) {
+    uint64_t *pml4 = paging_current_pml4();
+    for (uint16_t i = 0; i < count; ++i) {
+        if (ph[i].p_type != ELF64_PT_LOAD || ph[i].p_memsz == 0)
+            continue;
+        uintptr_t first = (uintptr_t)ph[i].p_vaddr & ~0xFFFULL;
+        uintptr_t end = ((uintptr_t)ph[i].p_vaddr +
+                         (uintptr_t)ph[i].p_memsz + 0xFFF) & ~0xFFFULL;
+        for (uintptr_t page = first; page < end; page += 0x1000)
+            paging_user_protect_range(pml4, page, 0x1000,
+                                      elf64_page_flags(ph, count, page));
+    }
+}
+
 int elf64_load_image(const void *image, size_t size) {
     if (elf64_validate(image, size) != 0)
         return -1;
     const elf64_ehdr_t *eh = (const elf64_ehdr_t *)image;
+    if (eh->e_phoff > size ||
+        (uint64_t)eh->e_phnum * sizeof(elf64_phdr_t) > size - eh->e_phoff)
+        return -1;
     const elf64_phdr_t *ph = (const elf64_phdr_t *)((const uint8_t *)image + eh->e_phoff);
     for (uint16_t i = 0; i < eh->e_phnum; ++i) {
         if (ph[i].p_type != ELF64_PT_LOAD)
             continue;
+        /* The file bytes of a segment must exist; they are copied unchecked. */
+        if (ph[i].p_offset > size || ph[i].p_filesz > size - ph[i].p_offset ||
+            ph[i].p_filesz > ph[i].p_memsz)
+            return -1;
         uintptr_t vaddr = (uintptr_t)ph[i].p_vaddr;
         uintptr_t seg_base = vaddr & ~0xFFFULL;
         uintptr_t seg_off = vaddr - seg_base;
@@ -41,13 +94,16 @@ int elf64_load_image(const void *image, size_t size) {
         uintptr_t filesz = (uintptr_t)ph[i].p_filesz;
         if (memsz == 0)
             continue;
+        if (vaddr < ELF_USER_IMAGE_MIN || vaddr >= ELF_USER_IMAGE_LIMIT ||
+            memsz > ELF_USER_IMAGE_LIMIT - vaddr)
+            return -1;
 
         size_t pages = (size_t)((seg_off + memsz + 0xFFF) / 0x1000);
         for (size_t p = 0; p < pages; ++p) {
             uintptr_t page_virt = seg_base + p * 0x1000;
             if (paging_is_mapped(page_virt))
                 continue;
-            uintptr_t phys = pmm_alloc_page();
+            uintptr_t phys = oom_alloc_page();
             if (!phys)
                 return -2;
             paging_map_region(phys, page_virt, 0x1000, PAGE_RW | PAGE_USER);
@@ -66,5 +122,6 @@ int elf64_load_image(const void *image, size_t size) {
             dst[b] = 0;
         }
     }
+    elf64_protect_segments(ph, eh->e_phnum);
     return 0;
 }

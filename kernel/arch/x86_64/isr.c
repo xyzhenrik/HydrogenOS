@@ -1,6 +1,8 @@
 #include "isr.h"
 #include "apic.h"
 #include "console.h"
+#include "core/crash.h"
+#include "core/perf.h"
 #include "core/time.h"
 #include "keyboard.h"
 #include "mouse.h"
@@ -59,17 +61,41 @@ static void irq_eoi(uint8_t irq) {
     lapic_eoi();
 }
 
-regs_t *isr_handler(regs_t *r) {
+static regs_t *isr_reschedule(regs_t *r) {
+    regs_t *next = process_schedule(r);
+    if (next != r) {
+        paging_switch(process_current()->pml4);
+    }
+    return next;
+}
+
+/* A fault in user mode is the process's own: it gets a signal (and dies by
+ * default) instead of taking the kernel down. Returns 0 if r is not one. */
+static int isr_user_fault(const regs_t *r) {
+    process_t *proc = process_current();
+    int sig;
+    if ((r->cs & 3) != 3 || proc == process_kernel())
+        return 0;
+    sig = signal_from_exception(r->int_no);
+    if (sig == 0)
+        return 0;
+    signal_raise_fault(proc, sig, r->int_no, r->err_code,
+                       r->int_no == 14 ? read_cr2() : 0);
+    return 1;
+}
+
+static regs_t *isr_dispatch(regs_t *r) {
     if (r->int_no == 128) {
+        uint64_t number = r->rax;
         r->rax = syscall_handle(r);
+        perf_syscall_done(number);
         if (process_current() != process_kernel()) {
-            regs_t *next = process_schedule(r);
-            if (next != r) {
-                paging_switch(process_current()->pml4);
-            }
-            return next;
+            return isr_reschedule(r);
         }
         return r;
+    }
+    if (r->int_no < 32 && isr_user_fault(r)) {
+        return isr_reschedule(r);
     }
     if (r->int_no < 32) {
         console_write("EXCEPTION: ");
@@ -96,6 +122,7 @@ regs_t *isr_handler(regs_t *r) {
         console_write("  RSP: ");
         console_write_hex64(r->rsp);
         console_write("\n");
+        crash_note_trap_frame(r);
         PANIC("CPU EXCEPTION");
     }
 
@@ -104,7 +131,9 @@ regs_t *isr_handler(regs_t *r) {
         if (irq == 0) {
             time_on_tick();
             irq0_ticks++;
-            if (process_current() != process_kernel()) {
+            /* Only a frame that interrupted user mode may become a process's
+               saved frame; a kernel-mode frame has to resume where it is. */
+            if ((r->cs & 3) == 3 && process_current() != process_kernel()) {
                 regs_t *next = process_schedule(r);
                 if (next != r) {
                     paging_switch(process_current()->pml4);
@@ -123,4 +152,11 @@ regs_t *isr_handler(regs_t *r) {
     }
 
     return r;
+}
+
+regs_t *isr_handler(regs_t *r) {
+    int from_user = perf_trap_enter(r);
+    regs_t *next = isr_dispatch(r);
+    perf_trap_exit(from_user, next);
+    return next;
 }

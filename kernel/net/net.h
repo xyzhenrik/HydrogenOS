@@ -24,6 +24,9 @@ typedef struct net_info {
  * kernel continues and every network call reports -ENODEV. */
 void net_init(void);
 
+/* 1 when a network device is present and reports link. */
+int net_link_up(void);
+
 /* 0, or -ENODEV without a network device. */
 int net_get_info(net_info_t *out);
 

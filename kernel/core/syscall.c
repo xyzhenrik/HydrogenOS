@@ -9,10 +9,12 @@ int fb_console_blit(int x, int y, int w, int h, const unsigned int *src);
 int fb_console_blit_strided(int x, int y, int w, int h, const unsigned int *src, int src_stride_bytes);
 void fb_console_set_cursor_visible(int visible);
 void fb_console_clear(void);
+#include "core/crash.h"
+#include "core/perf.h"
 #include "core/time.h"
 #include "fs/vfs.h"
 #include "fs/ext2.h"
-#include "higher_half.h"
+#include "fs/vfs_access.h"
 #include "paging.h"
 #include "pmm.h"
 #include "mm/pmm.h"
@@ -21,18 +23,26 @@ void fb_console_clear(void);
 #include "user_exec.h"
 #include "vmm_user.h"
 #include "tty.h"
+#include "usercopy.h"
 #include "stat.h"
 #include "dirent.h"
 #include "rtc.h"
 #include "power.h"
+#include "mm/meminfo.h"
 #include "net/net.h"
+#include "net/socket.h"
+#include "net/udp.h"
+#include "video/bootsplash.h"
+#include "socket_syscall.h"
 
 #include <stddef.h>
 #include <stdint.h>
 
 #include "errno.h"
+#include "gdt.h"
+#include "core/signal.h"
 
-static process_t *bootstrap_proc = 0;
+static uint32_t bootstrap_pid = 0;
 static uintptr_t user_return_rip = 0;
 static uintptr_t user_return_rsp = 0;
 
@@ -41,30 +51,20 @@ static int poll_events_valid(uint32_t events) {
     return (events & ~known) == 0;
 }
 
+/* Source buffers that are read in place; destinations must use
+   user_range_validate(..., USER_ACCESS_WRITE) or copy_to_user(). */
 static int user_range_ok(const void *ptr, size_t len) {
-    if (!ptr) return 0;
-    uintptr_t start = (uintptr_t)ptr;
-    if (start < 0x1000) return 0;
-    if (len == 0) return 1;
-    uintptr_t end = start + len - 1;
-    if (end < start) return 0;
-    if (end >= (uintptr_t)KERNEL_VMA_BASE) return 0;
-    return 1;
+    return user_range_validate(ptr, len, USER_ACCESS_READ) == 0;
 }
 
-static int user_str_copy(const char *uptr, char *dst, size_t dst_sz) {
-    if (!dst || dst_sz == 0) return -1;
-    if (!user_range_ok(uptr, 1)) return -1;
-    for (size_t i = 0; i < dst_sz - 1; ++i) {
-        if (!user_range_ok(uptr + i, 1)) return -1;
-        char c = uptr[i];
-        dst[i] = c;
-        if (c == 0) {
-            return 0;
-        }
-    }
-    dst[dst_sz - 1] = 0;
-    return -1;
+/* 0 and the socket behind fd, or -EBADF / -ENOTSOCK. */
+static int socket_from_fd(process_t *proc, int fd, net_socket_t **out) {
+    int rc = process_fd_socket(proc, fd, out);
+    if (rc == -1)
+        return -EBADF;
+    if (rc == -2)
+        return -ENOTSOCK;
+    return 0;
 }
 
 /* Minimal string helpers for syscall.c (kernel has no string.h) */
@@ -82,23 +82,20 @@ static int copy_user_string_vector(const char *const *uvec, spawn_args_t *args,
     if (!uvec)
         return 0;
     for (;;) {
-        if (!user_range_ok(&uvec[count], sizeof(uvec[count])))
+        const char *ustr;
+        if (copy_from_user(&ustr, &uvec[count], sizeof(ustr)) != 0)
             return -EFAULT;
-        const char *ustr = uvec[count];
         if (!ustr)
             break;
         if (args->argc + args->envc + count >= SPAWN_ARGS_MAX_ENTRIES)
             return -E2BIG;
-        for (size_t i = 0;; ++i) {
-            if (!user_range_ok(ustr + i, 1))
-                return -EFAULT;
-            if (args->bytes >= SPAWN_ARGS_MAX_BYTES)
-                return -E2BIG;
-            char c = ustr[i];
-            args->strings[args->bytes++] = c;
-            if (c == 0)
-                break;
-        }
+        long len = strncpy_from_user(&args->strings[args->bytes], ustr,
+                                     SPAWN_ARGS_MAX_BYTES - args->bytes);
+        if (len == -ERANGE)
+            return -E2BIG;
+        if (len < 0)
+            return (int)len;
+        args->bytes += (uint32_t)len + 1;
         count++;
     }
     *out_count = count;
@@ -122,16 +119,35 @@ static int copy_user_spawn_args(const char *const *uargv,
     return 0;
 }
 
+/* Returns 0 or a negative errno value. */
 static int copy_resolved_user_path(process_t *proc, const char *uptr,
                                    char *dst, size_t dst_sz) {
     char raw[PROCESS_CWD_CAP];
     if (!proc || !uptr || !dst || dst_sz == 0)
-        return -1;
-    if (user_str_copy(uptr, raw, sizeof(raw)) != 0)
-        return -1;
+        return -EFAULT;
+    long len = strncpy_from_user(raw, uptr, sizeof(raw));
+    if (len == -ERANGE)
+        return -ENAMETOOLONG;
+    if (len < 0)
+        return -EFAULT;
     if (process_resolve_path(proc, raw, dst, (uint32_t)dst_sz) != 0)
-        return -1;
+        return -ENAMETOOLONG;
     return 0;
+}
+
+/* Like copy_resolved_user_path, but also expands symlinks (see vfs_resolve).
+   Returns 0 or a negative errno value. */
+static int copy_followed_user_path(process_t *proc, const char *uptr,
+                                   char *dst, size_t dst_sz, int follow_final) {
+    int copy_rc = copy_resolved_user_path(proc, uptr, dst, dst_sz);
+    if (copy_rc != 0)
+        return copy_rc;
+    if (!vfs_is_ready())
+        return 0;
+    int rc = vfs_resolve(dst, follow_final, dst, (uint32_t)dst_sz);
+    if (rc == 0 || rc == -ELOOP || rc == -ENAMETOOLONG)
+        return rc;
+    return -EIO;
 }
 
 /* Filesystem drivers return negative errno values; anything outside the
@@ -147,18 +163,35 @@ static uint64_t fs_status(int rc) {
     case -EISDIR:
     case -ENOTEMPTY:
     case -ENOSPC:
+    case -EFBIG:
     case -EINVAL:
     case -EBUSY:
     case -EROFS:
     case -EMLINK:
+    case -EXDEV:
+    case -ELOOP:
+    case -ENAMETOOLONG:
+    case -EOPNOTSUPP:
         return (uint64_t)(int64_t)rc;
     default:
         return (uint64_t)-EIO;
     }
 }
 
+/* For the attribute calls, which report a refused permission as -EPERM or
+   -EACCES instead of treating the former as the VFS' generic failure. */
+static uint64_t attribute_status(int rc) {
+    if (rc == -EPERM || rc == -EACCES)
+        return (uint64_t)(int64_t)rc;
+    return fs_status(rc);
+}
+
 void syscall_set_bootstrap(process_t *proc) {
-    bootstrap_proc = proc;
+    bootstrap_pid = proc ? proc->pid : 0;
+}
+
+int syscall_is_bootstrap(const process_t *proc) {
+    return proc && bootstrap_pid != 0 && proc->pid == bootstrap_pid;
 }
 
 void syscall_set_user_return(uintptr_t rip, uintptr_t rsp) {
@@ -166,48 +199,63 @@ void syscall_set_user_return(uintptr_t rip, uintptr_t rsp) {
     user_return_rsp = rsp;
 }
 
-static void user_return_to_kernel(regs_t *r, uint64_t status) {
+static int user_return_to_kernel(regs_t *r, uint64_t status) {
     if (!r || user_return_rip == 0 || user_return_rsp == 0)
-        return;
+        return 0;
     process_set_current(process_kernel());
     paging_switch(paging_kernel_pml4());
     r->rdi = status;
     r->rip = user_return_rip;
-    r->cs = 0x08;
+    r->cs = GDT_KERNEL_CODE_SELECTOR;
     r->rflags = 0x202;
     r->rsp = user_return_rsp;
-    r->ss = 0x10;
+    r->ss = GDT_KERNEL_DATA_SELECTOR;
     user_return_rip = 0;
     user_return_rsp = 0;
+    return 1;
+}
+
+int syscall_bootstrap_exited(const process_t *exited, regs_t *r,
+                             uint64_t status) {
+    if (!syscall_is_bootstrap(exited) || process_has_runnable_other_than(exited))
+        return 0;
+    bootstrap_pid = 0;
+    return user_return_to_kernel(r, status);
 }
 
 uint64_t syscall_handle(regs_t *r) {
     switch (r->rax) {
     case SYS_EXIT: {
         process_t *exiting = process_current();
-        int is_bootstrap = (exiting == bootstrap_proc);
-        process_mark_exited(exiting, (int)r->rdi);
-        if (is_bootstrap && !process_has_runnable_other_than(exiting)) {
-            bootstrap_proc = 0;
-            user_return_to_kernel(r, r->rdi);
+        /* Only the low byte is a status: the bits above are reserved for the
+           kernel's own encoding of a death by signal. */
+        uint64_t status = r->rdi & SIGNAL_EXIT_STATUS_MASK;
+        process_mark_exited(exiting, (int)status);
+        if (syscall_bootstrap_exited(exiting, r, status))
             process_destroy(exiting);
-        }
         return 0;
     }
+    case SYS_CRASH:
+        return (uint64_t)crash_syscall(r->rdi, (void *)(uintptr_t)r->rsi,
+                                       (size_t)r->rdx);
+    case SYS_MEMINFO:
+        return (uint64_t)meminfo_read_user((void *)(uintptr_t)r->rdi,
+                                           (size_t)r->rsi);
+    case SYS_PERF_READ:
+        return (uint64_t)perf_read_user((void *)(uintptr_t)r->rdi, (size_t)r->rsi);
     case SYS_SET_LAYOUT: {
         keyboard_set_layout((int)r->rdi);
         return (uint64_t)keyboard_get_layout();
     }
     case SYS_RTC_TIME: {
         hydrogen_rtc_time_t *out = (hydrogen_rtc_time_t *)(uintptr_t)r->rdi;
-        if (!user_range_ok(out, sizeof(*out)))
+        if (user_range_validate(out, sizeof(*out), USER_ACCESS_WRITE) != 0)
             return (uint64_t)-EFAULT;
         hydrogen_rtc_time_t now;
         int rc = rtc_now(&now);
         if (rc != 0)
             return (uint64_t)(int64_t)rc;
-        *out = now;
-        return 0;
+        return (uint64_t)(int64_t)copy_to_user(out, &now, sizeof(now));
     }
     case SYS_SHUTDOWN: {
         if (r->rdi != 0)
@@ -220,9 +268,8 @@ uint64_t syscall_handle(regs_t *r) {
         return (uint64_t)(int64_t)power_reboot();
     }
     case SYS_SYSINFO: {
-        uint32_t *o = (uint32_t *)(uintptr_t)r->rdi;
-        if (!o || !user_range_ok(o, sizeof(uint32_t) * 9))
-            return (uint64_t)-EFAULT;
+        void *out = (void *)(uintptr_t)r->rdi;
+        uint32_t o[9];
         ext2_info_t ei;
         int ext2_root = (ext2_is_mounted() && ext2_info(&ei) == 0);
         o[0] = ext2_root ? 1u : 2u;
@@ -234,7 +281,7 @@ uint64_t syscall_handle(regs_t *r) {
         o[6] = (uint32_t)pmm_free_page_count();
         o[7] = 4096u;
         o[8] = (uint32_t)pmm_total_page_count();
-        return 0;
+        return (uint64_t)(int64_t)copy_to_user(out, o, sizeof(o));
     }
     case SYS_FB_CLEAR: {
         fb_console_clear();
@@ -251,36 +298,44 @@ uint64_t syscall_handle(regs_t *r) {
         int h = (int)r->r10;
         const uint32_t *src = (const uint32_t *)(uintptr_t)r->r8;
         int stride = (int)r->r9;
-        if (w <= 0 || h <= 0 || stride <= 0)
+        if (w <= 0 || h <= 0 || stride <= 0 || (stride & 3) ||
+            stride / 4 < w)
             return (uint64_t)-EINVAL;
-        if (!src || !user_range_ok(src, (size_t)stride * (size_t)h))
+        /* The last row is read only up to its w-th pixel, not its full stride. */
+        if (!user_range_ok(src, (size_t)stride * (size_t)(h - 1) +
+                                    (size_t)w * sizeof(uint32_t)))
             return (uint64_t)-EFAULT;
         if (!framebuffer.addr || framebuffer.bpp != 32)
             return (uint64_t)-EIO;
+        if (bootsplash_filter_blit(x, y, w, h, src, (size_t)stride))
+            return 0;
         if (fb_console_blit_strided(x, y, w, h, src, stride) != 0)
             return (uint64_t)-EIO;
         return 0;
     }
     case SYS_KBD_READ: {
-        int c = keyboard_read_char();
+        int c = keyboard_read_event();
         return (uint64_t)(int64_t)c;
     }
     case SYS_MOUSE_STATE: {
-        int *out = (int *)(uintptr_t)r->rdi;
-        if (!out || !user_range_ok(out, sizeof(int) * 4))
+        void *out = (void *)(uintptr_t)r->rdi;
+        int state[4];
+        /* Taking the wheel delta consumes it, so reject a bad pointer first. */
+        if (user_range_validate(out, sizeof(state), USER_ACCESS_WRITE) != 0)
             return (uint64_t)-EFAULT;
         mouse_poll();
         int mx = 0, my = 0;
         mouse_get_pos(&mx, &my);
-        out[0] = mx;
-        out[1] = my;
-        out[2] = (int)mouse_get_buttons();
-        out[3] = mouse_take_wheel();
-        return 0;
+        state[0] = mx;
+        state[1] = my;
+        state[2] = (int)mouse_get_buttons();
+        state[3] = mouse_take_wheel();
+        return (uint64_t)(int64_t)copy_to_user(out, state, sizeof(state));
     }
     case SYS_FB_INFO: {
-        uint32_t *info = (uint32_t *)(uintptr_t)r->rdi;
-        if (!info || !user_range_ok(info, sizeof(uint32_t) * 4))
+        void *out = (void *)(uintptr_t)r->rdi;
+        uint32_t info[4];
+        if (user_range_validate(out, sizeof(info), USER_ACCESS_WRITE) != 0)
             return (uint64_t)-EFAULT;
         if (!framebuffer.addr || framebuffer.width == 0 ||
             framebuffer.height == 0)
@@ -289,7 +344,7 @@ uint64_t syscall_handle(regs_t *r) {
         info[1] = framebuffer.height;
         info[2] = framebuffer.pitch;
         info[3] = framebuffer.bpp;
-        return 0;
+        return (uint64_t)(int64_t)copy_to_user(out, info, sizeof(info));
     }
     case SYS_FB_BLIT: {
         int x = (int)r->rdi;
@@ -299,10 +354,13 @@ uint64_t syscall_handle(regs_t *r) {
         const uint32_t *src = (const uint32_t *)(uintptr_t)r->r8;
         if (w <= 0 || h <= 0)
             return (uint64_t)-EINVAL;
-        if (!src || !user_range_ok(src, (size_t)w * (size_t)h * sizeof(uint32_t)))
+        if (!user_range_ok(src, (size_t)w * (size_t)h * sizeof(uint32_t)))
             return (uint64_t)-EFAULT;
         if (!framebuffer.addr || framebuffer.bpp != 32)
             return (uint64_t)-EIO;
+        if (bootsplash_filter_blit(x, y, w, h, src,
+                                   (size_t)w * sizeof(uint32_t)))
+            return 0;
         if (fb_console_blit(x, y, w, h, src) != 0)
             return (uint64_t)-EIO;
         return 0;
@@ -315,32 +373,32 @@ uint64_t syscall_handle(regs_t *r) {
         const char *buf = (const char *)(uintptr_t)r->rsi;
         size_t len = (size_t)r->rdx;
         process_t *proc = process_current();
-        if (!buf || len == 0)
+        if (len == 0)
             return 0;
         if (!user_range_ok(buf, len))
             return (uint64_t)-EFAULT;
         if (fd < 0 || fd == 0)
             return (uint64_t)-EBADF;
+        uint64_t socket_result;
+        if (socket_syscall_stream_io(proc, r, 1, &socket_result))
+            return socket_result;
         uint32_t wrote = 0;
         int rc = process_fd_write(proc, fd, (const uint8_t *)buf,
                                   (uint32_t)len, &wrote);
         if (rc == 1) {
-            if (!process_has_runnable_other_than(proc)) {
-                do {
-                    __asm__ volatile("sti\n\thlt\n\tcli");
-                    rc = process_fd_write(proc, fd, (const uint8_t *)buf,
-                                          (uint32_t)len, &wrote);
-                } while (rc == 1);
-            } else if (process_begin_fd_write_wait(proc, fd) == 0) {
-                return 0;
-            } else {
+            /* The scheduler completes the write once the pipe has room. */
+            if (process_begin_fd_write_wait(proc, fd) != 0)
                 return (uint64_t)-EIO;
-            }
+            return 0;
         }
         if (rc == -2)
             return (uint64_t)-EPIPE;
         if (rc == PROCESS_RESOURCE_IO_ERROR)
             return (uint64_t)-EIO;
+        if (rc == PROCESS_RESOURCE_NO_SPACE)
+            return (uint64_t)-ENOSPC;
+        if (rc == PROCESS_RESOURCE_TOO_BIG)
+            return (uint64_t)-EFBIG;
         if (rc != 0)
             return (uint64_t)-EBADF;
         return wrote;
@@ -350,25 +408,19 @@ uint64_t syscall_handle(regs_t *r) {
         char *buf = (char *)(uintptr_t)r->rsi;
         size_t len = (size_t)r->rdx;
         process_t *proc = process_current();
-        if (!buf || len == 0)
+        if (len == 0)
             return 0;
-        if (!user_range_ok(buf, len))
+        if (user_range_validate(buf, len, USER_ACCESS_WRITE) != 0)
             return (uint64_t)-EFAULT;
         if (fd < 0 || fd == 1 || fd == 2)
             return (uint64_t)-EBADF;
+        uint64_t socket_result;
+        if (socket_syscall_stream_io(proc, r, 0, &socket_result))
+            return socket_result;
         uint32_t got = 0;
         int rc = process_fd_read(proc, fd, (uint8_t *)buf, (uint32_t)len, &got);
         if (rc == 1) {
-            if (!process_has_runnable_other_than(proc)) {
-                do {
-                    __asm__ volatile("sti\n\thlt\n\tcli");
-                    rc = process_fd_read(proc, fd, (uint8_t *)buf,
-                                         (uint32_t)len, &got);
-                } while (rc == 1);
-                if (rc != 0)
-                    return (uint64_t)-EIO;
-                return got;
-            }
+            /* The scheduler completes the read once data or EOF arrives. */
             if (process_begin_fd_read_wait(proc, fd) != 0)
                 return (uint64_t)-EIO;
             return 0;
@@ -389,8 +441,9 @@ uint64_t syscall_handle(regs_t *r) {
             return (uint64_t)-ENOENT;
         process_t *proc = process_current();
         char kpath[PROCESS_HANDLE_PATH_CAP];
-        if (copy_resolved_user_path(proc, path, kpath, sizeof(kpath)) != 0)
-            return (uint64_t)-EFAULT;
+        int path_rc = copy_followed_user_path(proc, path, kpath, sizeof(kpath), 1);
+        if (path_rc != 0)
+            return (uint64_t)(int64_t)path_rc;
         int handle = process_handle_open_file(proc, kpath, flags);
         if (handle == PROCESS_RESOURCE_NO_HANDLE_SLOT)
             return (uint64_t)-EMFILE;
@@ -400,6 +453,8 @@ uint64_t syscall_handle(regs_t *r) {
             return (uint64_t)-EIO;
         if (handle == PROCESS_RESOURCE_NO_KERNEL_RESOURCE)
             return (uint64_t)-ENOMEM;
+        if (handle == PROCESS_RESOURCE_ACCESS)
+            return (uint64_t)-EACCES;
         if (handle < 0)
             return (uint64_t)-ENOENT;
         return (uint64_t)(handle + 3);
@@ -452,7 +507,6 @@ uint64_t syscall_handle(regs_t *r) {
         int64_t timeout_ms = (int64_t)r->rdx;
         process_t *proc = process_current();
         uint32_t ready = 0;
-        uint64_t start = 0;
 
         if (!poll_events_valid(events)) {
             return (uint64_t)-EINVAL;
@@ -467,21 +521,6 @@ uint64_t syscall_handle(regs_t *r) {
             return ready;
         }
 
-        if (!process_has_runnable_other_than(proc)) {
-            start = time_ms();
-            do {
-                __asm__ volatile("sti\n\thlt\n\tcli");
-                if (process_fd_poll(proc, fd, events, &ready) != 0) {
-                    return (uint64_t)-EBADF;
-                }
-                if (ready != 0) {
-                    return ready;
-                }
-            } while (timeout_ms == -1 ||
-                     (time_ms() - start) < (uint64_t)timeout_ms);
-            return 0;
-        }
-
         if (process_begin_fd_poll_wait(proc, fd, events, timeout_ms) != 0) {
             return (uint64_t)-EIO;
         }
@@ -493,7 +532,6 @@ uint64_t syscall_handle(regs_t *r) {
         int64_t timeout_ms = (int64_t)r->rdx;
         process_t *proc = process_current();
         uint32_t ready_count = 0;
-        uint64_t start = 0;
         int rc;
 
         if (timeout_ms < -1) {
@@ -502,38 +540,17 @@ uint64_t syscall_handle(regs_t *r) {
         if (count == 0 || count > PROCESS_POLL_MAX_FDS) {
             return (uint64_t)-EINVAL;
         }
-        if (!user_range_ok(fds, sizeof(process_poll_fd_t) * count)) {
+        if (user_range_validate(fds, sizeof(process_poll_fd_t) * count,
+                                USER_ACCESS_WRITE) != 0) {
             return (uint64_t)-EFAULT;
         }
 
-        rc = process_poll_many(proc, fds, count, &ready_count);
-        if (rc == -2) {
-            return (uint64_t)-EINVAL;
-        }
+        rc = process_poll_many_user(proc, (uintptr_t)fds, count, &ready_count);
         if (rc != 0) {
-            return (uint64_t)-EBADF;
+            return (uint64_t)(int64_t)rc;
         }
         if (ready_count != 0 || timeout_ms == 0) {
             return ready_count;
-        }
-
-        if (!process_has_runnable_other_than(proc)) {
-            start = time_ms();
-            do {
-                __asm__ volatile("sti\n\thlt\n\tcli");
-                rc = process_poll_many(proc, fds, count, &ready_count);
-                if (rc == -2) {
-                    return (uint64_t)-EINVAL;
-                }
-                if (rc != 0) {
-                    return (uint64_t)-EBADF;
-                }
-                if (ready_count != 0) {
-                    return ready_count;
-                }
-            } while (timeout_ms == -1 ||
-                     (time_ms() - start) < (uint64_t)timeout_ms);
-            return 0;
         }
 
         if (process_begin_poll_many_wait(proc, (uintptr_t)fds, count, timeout_ms) != 0) {
@@ -547,8 +564,12 @@ uint64_t syscall_handle(regs_t *r) {
         if (!path)
             return (uint64_t)-EFAULT;
         char kpath[PROCESS_CWD_CAP];
-        if (copy_resolved_user_path(proc, path, kpath, sizeof(kpath)) != 0)
-            return (uint64_t)-EFAULT;
+        int path_rc = copy_followed_user_path(proc, path, kpath, sizeof(kpath), 1);
+        if (path_rc != 0)
+            return (uint64_t)(int64_t)path_rc;
+        int access_rc = vfs_access_check(&proc->cred, kpath, VFS_ACCESS_EXEC);
+        if (access_rc != 0)
+            return (uint64_t)(int64_t)access_rc;
         uint64_t pid = 0;
         int rc = user_spawn_from_vfs(kpath, r, &pid);
         if (rc != 0)
@@ -564,8 +585,12 @@ uint64_t syscall_handle(regs_t *r) {
         if (!path)
             return (uint64_t)-EFAULT;
         char kpath[PROCESS_CWD_CAP];
-        if (copy_resolved_user_path(proc, path, kpath, sizeof(kpath)) != 0)
-            return (uint64_t)-EFAULT;
+        int path_rc = copy_followed_user_path(proc, path, kpath, sizeof(kpath), 1);
+        if (path_rc != 0)
+            return (uint64_t)(int64_t)path_rc;
+        int access_rc = vfs_access_check(&proc->cred, kpath, VFS_ACCESS_EXEC);
+        if (access_rc != 0)
+            return (uint64_t)(int64_t)access_rc;
         uint64_t pid = 0;
         int rc = user_spawn_with_stdio_from_vfs(kpath, r, &pid,
                                                 stdin_fd, stdout_fd, stderr_fd);
@@ -584,8 +609,12 @@ uint64_t syscall_handle(regs_t *r) {
         if (!path)
             return (uint64_t)-EFAULT;
         char kpath[PROCESS_CWD_CAP];
-        if (copy_resolved_user_path(proc, path, kpath, sizeof(kpath)) != 0)
-            return (uint64_t)-EFAULT;
+        int path_rc = copy_followed_user_path(proc, path, kpath, sizeof(kpath), 1);
+        if (path_rc != 0)
+            return (uint64_t)(int64_t)path_rc;
+        int access_rc = vfs_access_check(&proc->cred, kpath, VFS_ACCESS_EXEC);
+        if (access_rc != 0)
+            return (uint64_t)(int64_t)access_rc;
         spawn_args_t *args = (spawn_args_t *)kalloc(sizeof(spawn_args_t));
         if (!args)
             return (uint64_t)-ENOMEM;
@@ -604,6 +633,32 @@ uint64_t syscall_handle(regs_t *r) {
             return (uint64_t)-ENOENT;
         return pid;
     }
+    case SYS_EXECVE: {
+        const char *path = (const char *)(uintptr_t)r->rdi;
+        const char *const *argv = (const char *const *)(uintptr_t)r->rsi;
+        const char *const *envp = (const char *const *)(uintptr_t)r->rdx;
+        process_t *proc = process_current();
+        if (!proc || proc == process_kernel())
+            return (uint64_t)-EPERM;
+        if (!path)
+            return (uint64_t)-EFAULT;
+        char kpath[PROCESS_CWD_CAP];
+        int path_rc = copy_followed_user_path(proc, path, kpath, sizeof(kpath), 1);
+        if (path_rc != 0)
+            return (uint64_t)(int64_t)path_rc;
+        int access_rc = vfs_access_check(&proc->cred, kpath, VFS_ACCESS_EXEC);
+        if (access_rc != 0)
+            return (uint64_t)(int64_t)access_rc;
+        /* Everything is copied before the old image is touched. */
+        spawn_args_t *args = (spawn_args_t *)kalloc(sizeof(spawn_args_t));
+        if (!args)
+            return (uint64_t)-ENOMEM;
+        int rc = copy_user_spawn_args(argv, envp, args);
+        if (rc == 0)
+            rc = user_exec_from_vfs(proc, kpath, args, r);
+        kfree(args);
+        return (uint64_t)(int64_t)rc;
+    }
     case SYS_TRY_WAIT: {
         uint32_t pid = (uint32_t)r->rdi;
         int *status_ptr = (int *)(uintptr_t)r->rsi;
@@ -611,15 +666,17 @@ uint64_t syscall_handle(regs_t *r) {
         process_t *proc = process_current();
         if (pid == 0)
             return (uint64_t)-EINVAL;
-        if (status_ptr && !user_range_ok(status_ptr, sizeof(int)))
+        if (status_ptr &&
+            user_range_validate(status_ptr, sizeof(int), USER_ACCESS_WRITE) != 0)
             return (uint64_t)-EFAULT;
         int rc = process_wait(proc, pid, &status);
         if (rc < 0)
-            return (uint64_t)-ENOENT;
+            return (uint64_t)-ECHILD;
         if (rc > 0)
             return 0;
-        if (status_ptr)
-            *status_ptr = status;
+        if (status_ptr &&
+            copy_to_user(status_ptr, &status, sizeof(status)) != 0)
+            return (uint64_t)-EFAULT;
         return pid;
     }
     case SYS_WAIT: {
@@ -629,14 +686,16 @@ uint64_t syscall_handle(regs_t *r) {
         process_t *proc = process_current();
         if (pid == 0)
             return (uint64_t)-EINVAL;
-        if (status_ptr && !user_range_ok(status_ptr, sizeof(int)))
+        if (status_ptr &&
+            user_range_validate(status_ptr, sizeof(int), USER_ACCESS_WRITE) != 0)
             return (uint64_t)-EFAULT;
         int rc = process_wait(proc, pid, &status);
         if (rc < 0)
-            return (uint64_t)-ENOENT;
+            return (uint64_t)-ECHILD;
         if (rc == 0) {
-            if (status_ptr)
-                *status_ptr = status;
+            if (status_ptr &&
+                copy_to_user(status_ptr, &status, sizeof(status)) != 0)
+                return (uint64_t)-EFAULT;
             return pid;
         }
         if (process_begin_wait(proc, pid, (uintptr_t)status_ptr) != 0)
@@ -654,15 +713,6 @@ uint64_t syscall_handle(regs_t *r) {
         process_t *proc = process_current();
         if (ms == 0)
             return 0;
-        /* If we are the only runnable process, busy-wait with hlt */
-        if (!process_has_runnable_other_than(proc)) {
-            uint64_t start = time_ms();
-            while ((time_ms() - start) < (uint64_t)ms) {
-                __asm__ volatile("sti\n\thlt\n\tcli");
-            }
-            return 0;
-        }
-        /* Otherwise put the process to sleep; the scheduler will wake it */
         process_begin_sleep(proc, ms);
         return 0;
     }
@@ -676,15 +726,21 @@ uint64_t syscall_handle(regs_t *r) {
         process_t *proc = process_current();
         int read_handle = -1;
         int write_handle = -1;
-        if (!fds || !user_range_ok(fds, sizeof(int) * 2))
+        int out_fds[2];
+        if (user_range_validate(fds, sizeof(out_fds), USER_ACCESS_WRITE) != 0)
             return (uint64_t)-EFAULT;
         int rc = process_handle_create_pipe(proc, &read_handle, &write_handle);
         if (rc == PROCESS_RESOURCE_NO_HANDLE_SLOT)
             return (uint64_t)-EMFILE;
         if (rc != 0)
             return (uint64_t)-EIO;
-        fds[0] = read_handle + 3;
-        fds[1] = write_handle + 3;
+        out_fds[0] = read_handle + 3;
+        out_fds[1] = write_handle + 3;
+        if (copy_to_user(fds, out_fds, sizeof(out_fds)) != 0) {
+            process_handle_close(proc, read_handle);
+            process_handle_close(proc, write_handle);
+            return (uint64_t)-EFAULT;
+        }
         return 0;
     }
     case SYS_HANDLE_SET_INHERIT: {
@@ -724,6 +780,8 @@ uint64_t syscall_handle(regs_t *r) {
             return (uint64_t)-EBADF;
         if (rc == -2)
             return (uint64_t)-EINVAL;
+        if (rc == -3)
+            return (uint64_t)-EMFILE;
         return (uint64_t)rc;
     }
     case SYS_SET_PRIORITY: {
@@ -737,28 +795,30 @@ uint64_t syscall_handle(regs_t *r) {
     case SYS_STAT: {
         const char *path = (const char *)(uintptr_t)r->rdi;
         hydrogen_stat_t *buf = (hydrogen_stat_t *)(uintptr_t)r->rsi;
+        uint32_t flags = (uint32_t)r->rdx;
         process_t *proc = process_current();
         char kpath[PROCESS_CWD_CAP];
         if (!path)
             return (uint64_t)-EFAULT;
-        if (copy_resolved_user_path(proc, path, kpath, sizeof(kpath)) != 0)
-            return (uint64_t)-EFAULT;
-        if (!buf || !user_range_ok(buf, sizeof(hydrogen_stat_t)))
-            return (uint64_t)-EFAULT;
+        if ((flags & ~(uint32_t)STAT_NOFOLLOW) != 0)
+            return (uint64_t)-EINVAL;
+        int path_rc = copy_followed_user_path(proc, path, kpath, sizeof(kpath), (flags & STAT_NOFOLLOW) == 0);
+        if (path_rc != 0)
+            return (uint64_t)(int64_t)path_rc;
         if (!vfs_is_ready())
             return (uint64_t)-ENOENT;
+        int access_rc = vfs_access_check(&proc->cred, kpath, 0);
+        if (access_rc != 0)
+            return (uint64_t)(int64_t)access_rc;
         hydrogen_stat_t kst;
         if (vfs_stat_full(kpath, &kst) != 0)
             return (uint64_t)-ENOENT;
-        *buf = kst;
-        return 0;
+        return (uint64_t)(int64_t)copy_to_user(buf, &kst, sizeof(kst));
     }
     case SYS_FSTAT: {
         int fd = (int)r->rdi;
         hydrogen_stat_t *buf = (hydrogen_stat_t *)(uintptr_t)r->rsi;
         process_t *proc = process_current();
-        if (!buf || !user_range_ok(buf, sizeof(hydrogen_stat_t)))
-            return (uint64_t)-EFAULT;
         if (!vfs_is_ready())
             return (uint64_t)-ENOENT;
         if (fd < 3)
@@ -773,8 +833,7 @@ uint64_t syscall_handle(regs_t *r) {
         hydrogen_stat_t kst;
         if (vfs_stat_full(fpath, &kst) != 0)
             return (uint64_t)-ENOENT;
-        *buf = kst;
-        return 0;
+        return (uint64_t)(int64_t)copy_to_user(buf, &kst, sizeof(kst));
     }
     case SYS_READDIR: {
         const char *path = (const char *)(uintptr_t)r->rdi;
@@ -784,35 +843,34 @@ uint64_t syscall_handle(regs_t *r) {
         char kpath[PROCESS_CWD_CAP];
         if (!path)
             return (uint64_t)-EFAULT;
-        if (copy_resolved_user_path(proc, path, kpath, sizeof(kpath)) != 0)
-            return (uint64_t)-EFAULT;
-        if (!buf || !user_range_ok(buf, sizeof(hydrogen_dirent_t)))
-            return (uint64_t)-EFAULT;
+        int path_rc = copy_followed_user_path(proc, path, kpath, sizeof(kpath), 1);
+        if (path_rc != 0)
+            return (uint64_t)(int64_t)path_rc;
         if (!vfs_is_ready())
             return (uint64_t)-ENOENT;
+        int access_rc = vfs_access_check(&proc->cred, kpath, VFS_ACCESS_READ);
+        if (access_rc != 0)
+            return (uint64_t)(int64_t)access_rc;
         hydrogen_dirent_t kd;
         int rc = vfs_readdir(kpath, &pos, &kd);
         if (rc < 0)
             return (uint64_t)-ENOENT;
         if (rc == 0)
             return 0; /* end of directory */
-        *buf = kd;
+        if (copy_to_user(buf, &kd, sizeof(kd)) != 0)
+            return (uint64_t)-EFAULT;
         return 1;
     }
     case SYS_GETCWD: {
         char *buf = (char *)(uintptr_t)r->rdi;
         size_t size = (size_t)r->rsi;
-        if (!buf || size == 0)
+        if (size == 0)
             return (uint64_t)-EINVAL;
-        if (!user_range_ok(buf, size))
-            return (uint64_t)-EFAULT;
         process_t *proc = process_current();
         size_t cwd_len = k_strlen(proc->cwd) + 1;
         if (cwd_len > size)
             return (uint64_t)-ERANGE;
-        for (size_t i = 0; i < cwd_len; i++)
-            buf[i] = proc->cwd[i];
-        return 0;
+        return (uint64_t)(int64_t)copy_to_user(buf, proc->cwd, cwd_len);
     }
     case SYS_CHDIR: {
         const char *path = (const char *)(uintptr_t)r->rdi;
@@ -820,8 +878,9 @@ uint64_t syscall_handle(regs_t *r) {
         if (!path)
             return (uint64_t)-EFAULT;
         char newcwd[PROCESS_CWD_CAP];
-        if (copy_resolved_user_path(proc, path, newcwd, sizeof(newcwd)) != 0)
-            return (uint64_t)-EFAULT;
+        int path_rc = copy_followed_user_path(proc, path, newcwd, sizeof(newcwd), 1);
+        if (path_rc != 0)
+            return (uint64_t)(int64_t)path_rc;
         if (!vfs_is_ready())
             return (uint64_t)-ENOENT;
         vfs_stat_t st;
@@ -829,6 +888,9 @@ uint64_t syscall_handle(regs_t *r) {
             return (uint64_t)-ENOENT;
         if (st.type != 2)
             return (uint64_t)-ENOTDIR;
+        int access_rc = vfs_access_check(&proc->cred, newcwd, VFS_ACCESS_EXEC);
+        if (access_rc != 0)
+            return (uint64_t)(int64_t)access_rc;
         for (size_t i = 0; i < sizeof(proc->cwd); ++i) {
             proc->cwd[i] = newcwd[i];
             if (newcwd[i] == 0) {
@@ -844,11 +906,18 @@ uint64_t syscall_handle(regs_t *r) {
         if (!path)
             return (uint64_t)-EFAULT;
         char kpath[PROCESS_CWD_CAP];
-        if (copy_resolved_user_path(proc, path, kpath, sizeof(kpath)) != 0)
-            return (uint64_t)-EFAULT;
+        int path_rc = copy_followed_user_path(proc, path, kpath, sizeof(kpath), 0);
+        if (path_rc != 0)
+            return (uint64_t)(int64_t)path_rc;
         if (!vfs_is_ready())
             return (uint64_t)-EIO;
-        return fs_status(vfs_mkdir(kpath));
+        int access_rc = vfs_access_check_entry(&proc->cred, kpath);
+        if (access_rc != 0)
+            return (uint64_t)(int64_t)access_rc;
+        int rc = vfs_mkdir(kpath);
+        if (rc == 0)
+            rc = vfs_access_claim(&proc->cred, kpath);
+        return fs_status(rc);
     }
     case SYS_RMDIR: {
         const char *path = (const char *)(uintptr_t)r->rdi;
@@ -856,10 +925,14 @@ uint64_t syscall_handle(regs_t *r) {
         if (!path)
             return (uint64_t)-EFAULT;
         char kpath[PROCESS_CWD_CAP];
-        if (copy_resolved_user_path(proc, path, kpath, sizeof(kpath)) != 0)
-            return (uint64_t)-EFAULT;
+        int path_rc = copy_followed_user_path(proc, path, kpath, sizeof(kpath), 0);
+        if (path_rc != 0)
+            return (uint64_t)(int64_t)path_rc;
         if (!vfs_is_ready())
             return (uint64_t)-EIO;
+        int access_rc = vfs_access_check_entry(&proc->cred, kpath);
+        if (access_rc != 0)
+            return (uint64_t)(int64_t)access_rc;
         return fs_status(vfs_rmdir(kpath));
     }
     case SYS_UNLINK: {
@@ -868,10 +941,14 @@ uint64_t syscall_handle(regs_t *r) {
         if (!path)
             return (uint64_t)-EFAULT;
         char kpath[PROCESS_CWD_CAP];
-        if (copy_resolved_user_path(proc, path, kpath, sizeof(kpath)) != 0)
-            return (uint64_t)-EFAULT;
+        int path_rc = copy_followed_user_path(proc, path, kpath, sizeof(kpath), 0);
+        if (path_rc != 0)
+            return (uint64_t)(int64_t)path_rc;
         if (!vfs_is_ready())
             return (uint64_t)-EIO;
+        int access_rc = vfs_access_check_entry(&proc->cred, kpath);
+        if (access_rc != 0)
+            return (uint64_t)(int64_t)access_rc;
         return fs_status(vfs_unlink(kpath));
     }
     case SYS_RENAME: {
@@ -882,14 +959,130 @@ uint64_t syscall_handle(regs_t *r) {
             return (uint64_t)-EFAULT;
         char kold[PROCESS_CWD_CAP];
         char knew[PROCESS_CWD_CAP];
-        if (copy_resolved_user_path(proc, old_path, kold, sizeof(kold)) != 0)
-            return (uint64_t)-EFAULT;
-        if (copy_resolved_user_path(proc, new_path, knew, sizeof(knew)) != 0)
-            return (uint64_t)-EFAULT;
+        int old_rc = copy_followed_user_path(proc, old_path, kold, sizeof(kold), 0);
+        if (old_rc != 0)
+            return (uint64_t)(int64_t)old_rc;
+        int new_rc = copy_followed_user_path(proc, new_path, knew, sizeof(knew), 0);
+        if (new_rc != 0)
+            return (uint64_t)(int64_t)new_rc;
         if (!vfs_is_ready())
             return (uint64_t)-EIO;
+        int access_rc = vfs_access_check_entry(&proc->cred, kold);
+        if (access_rc == 0)
+            access_rc = vfs_access_check_entry(&proc->cred, knew);
+        if (access_rc != 0)
+            return (uint64_t)(int64_t)access_rc;
         return fs_status(vfs_rename(kold, knew));
     }
+    case SYS_LINK: {
+        const char *old_path = (const char *)(uintptr_t)r->rdi;
+        const char *new_path = (const char *)(uintptr_t)r->rsi;
+        process_t *proc = process_current();
+        if (!old_path || !new_path)
+            return (uint64_t)-EFAULT;
+        char kold[PROCESS_CWD_CAP];
+        char knew[PROCESS_CWD_CAP];
+        int old_rc = copy_followed_user_path(proc, old_path, kold, sizeof(kold), 0);
+        if (old_rc != 0)
+            return (uint64_t)(int64_t)old_rc;
+        int new_rc = copy_followed_user_path(proc, new_path, knew, sizeof(knew), 0);
+        if (new_rc != 0)
+            return (uint64_t)(int64_t)new_rc;
+        if (!vfs_is_ready())
+            return (uint64_t)-EIO;
+        int access_rc = vfs_access_check(&proc->cred, kold, 0);
+        if (access_rc == 0)
+            access_rc = vfs_access_check_entry(&proc->cred, knew);
+        if (access_rc != 0)
+            return (uint64_t)(int64_t)access_rc;
+        return fs_status(vfs_link(kold, knew));
+    }
+    case SYS_SYMLINK: {
+        const char *target = (const char *)(uintptr_t)r->rdi;
+        const char *link_path = (const char *)(uintptr_t)r->rsi;
+        process_t *proc = process_current();
+        if (!target || !link_path)
+            return (uint64_t)-EFAULT;
+        /* The target is stored verbatim and only interpreted when followed. */
+        char ktarget[VFS_PATH_MAX];
+        char klink[PROCESS_CWD_CAP];
+        long target_len = strncpy_from_user(ktarget, target, sizeof(ktarget));
+        if (target_len == -ERANGE)
+            return (uint64_t)-ENAMETOOLONG;
+        if (target_len < 0)
+            return (uint64_t)-EFAULT;
+        int link_rc = copy_followed_user_path(proc, link_path, klink, sizeof(klink), 0);
+        if (link_rc != 0)
+            return (uint64_t)(int64_t)link_rc;
+        if (!vfs_is_ready())
+            return (uint64_t)-EIO;
+        int access_rc = vfs_access_check_entry(&proc->cred, klink);
+        if (access_rc != 0)
+            return (uint64_t)(int64_t)access_rc;
+        int rc = vfs_symlink(ktarget, klink);
+        if (rc == 0)
+            rc = vfs_access_claim(&proc->cred, klink);
+        return fs_status(rc);
+    }
+    case SYS_READLINK: {
+        const char *path = (const char *)(uintptr_t)r->rdi;
+        char *buf = (char *)(uintptr_t)r->rsi;
+        size_t cap = (size_t)r->rdx;
+        process_t *proc = process_current();
+        if (!path)
+            return (uint64_t)-EFAULT;
+        if (cap == 0)
+            return (uint64_t)-EINVAL;
+        char kpath[PROCESS_CWD_CAP];
+        int path_rc = copy_followed_user_path(proc, path, kpath, sizeof(kpath), 0);
+        if (path_rc != 0)
+            return (uint64_t)(int64_t)path_rc;
+        if (!vfs_is_ready())
+            return (uint64_t)-EIO;
+        int access_rc = vfs_access_check(&proc->cred, kpath, 0);
+        if (access_rc != 0)
+            return (uint64_t)(int64_t)access_rc;
+        char ktarget[VFS_PATH_MAX];
+        int len = vfs_readlink(kpath, ktarget, sizeof(ktarget));
+        if (len == -EINVAL || len == -ENOENT || len == -ENOTDIR)
+            return (uint64_t)(int64_t)len;
+        if (len < 0)
+            return (uint64_t)-EIO;
+        /* Like readlink(2), the result is truncated to the buffer and not
+           NUL-terminated. */
+        size_t copied = (size_t)len < cap ? (size_t)len : cap;
+        if (copy_to_user(buf, ktarget, copied) != 0)
+            return (uint64_t)-EFAULT;
+        return copied;
+    }
+    case SYS_TRUNCATE: {
+        const char *path = (const char *)(uintptr_t)r->rdi;
+        uint64_t length = r->rsi;
+        process_t *proc = process_current();
+        if (!path)
+            return (uint64_t)-EFAULT;
+        char kpath[PROCESS_CWD_CAP];
+        int path_rc = copy_followed_user_path(proc, path, kpath, sizeof(kpath), 1);
+        if (path_rc != 0)
+            return (uint64_t)(int64_t)path_rc;
+        int access_rc = vfs_access_check(&proc->cred, kpath, VFS_ACCESS_WRITE);
+        if (access_rc != 0)
+            return (uint64_t)(int64_t)access_rc;
+        if (!vfs_is_ready())
+            return (uint64_t)-EIO;
+        if (length > UINT32_MAX)
+            return (uint64_t)-EFBIG;
+        return fs_status(vfs_truncate(kpath, (uint32_t)length));
+    }
+    case SYS_FTRUNCATE: {
+        if (r->rsi > UINT32_MAX)
+            return (uint64_t)-EFBIG;
+        int rc = process_fd_truncate(process_current(), (int)r->rdi,
+                                     (uint32_t)r->rsi);
+        return rc == -EBADF ? (uint64_t)-EBADF : fs_status(rc);
+    }
+    case SYS_SYNC:
+        return vfs_is_ready() ? fs_status(vfs_sync()) : 0;
     case SYS_WRITEF: {
         const char *path = (const char *)(uintptr_t)r->rdi;
         const uint8_t *data = (const uint8_t *)(uintptr_t)r->rsi;
@@ -898,13 +1091,24 @@ uint64_t syscall_handle(regs_t *r) {
         if (!path)
             return (uint64_t)-EFAULT;
         char kpath[PROCESS_CWD_CAP];
-        if (copy_resolved_user_path(proc, path, kpath, sizeof(kpath)) != 0)
-            return (uint64_t)-EFAULT;
+        int path_rc = copy_followed_user_path(proc, path, kpath, sizeof(kpath), 1);
+        if (path_rc != 0)
+            return (uint64_t)(int64_t)path_rc;
         if (size > 0 && !user_range_ok(data, size))
             return (uint64_t)-EFAULT;
         if (!vfs_is_ready())
             return (uint64_t)-EIO;
-        return fs_status(vfs_write_file(kpath, data, size));
+        vfs_stat_t existing;
+        int created = vfs_stat(kpath, &existing) != 0;
+        int access_rc = created ? vfs_access_check_entry(&proc->cred, kpath)
+                                : vfs_access_check(&proc->cred, kpath,
+                                                   VFS_ACCESS_WRITE);
+        if (access_rc != 0)
+            return (uint64_t)(int64_t)access_rc;
+        int rc = vfs_write_file(kpath, data, size);
+        if (rc == 0 && created)
+            rc = vfs_access_claim(&proc->cred, kpath);
+        return fs_status(rc);
     }
     case SYS_MMAP: {
         process_t *proc = process_current();
@@ -926,16 +1130,25 @@ uint64_t syscall_handle(regs_t *r) {
                                                  (uintptr_t)r->rdi,
                                                  (size_t)r->rsi);
     }
+    case SYS_MPROTECT: {
+        process_t *proc = process_current();
+        if (!proc || !proc->pml4 || proc->pml4 == paging_kernel_pml4())
+            return (uint64_t)-EPERM;
+        return (uint64_t)(int64_t)vmm_user_protect(&proc->vm, proc->pml4,
+                                                   (uintptr_t)r->rdi,
+                                                   (size_t)r->rsi,
+                                                   (uint32_t)r->rdx,
+                                                   (uint32_t)r->r10);
+    }
     case SYS_NET_INFO: {
         net_info_t *out = (net_info_t *)(uintptr_t)r->rdi;
         net_info_t info;
-        if (!user_range_ok(out, sizeof(*out)))
+        if (user_range_validate(out, sizeof(*out), USER_ACCESS_WRITE) != 0)
             return (uint64_t)-EFAULT;
         int rc = net_get_info(&info);
         if (rc != 0)
             return (uint64_t)(int64_t)rc;
-        *out = info;
-        return 0;
+        return (uint64_t)(int64_t)copy_to_user(out, &info, sizeof(info));
     }
     case SYS_NET_PING: {
         uint32_t dst = (uint32_t)r->rdi;
@@ -951,15 +1164,143 @@ uint64_t syscall_handle(regs_t *r) {
         if (net_ping_wait_check((uintptr_t)ticket, &result))
             return result;
 
-        /* Block like poll_wait; with nothing else runnable wait in place. */
-        if (process_has_runnable_other_than(proc) &&
-            process_begin_kernel_wait(proc, net_ping_wait_check,
-                                      (uintptr_t)ticket) == 0)
-            return 0;
-        while (!net_ping_wait_check((uintptr_t)ticket, &result))
-            __asm__ volatile("sti\n\thlt\n\tcli");
-        return result;
+        if (process_begin_kernel_wait(proc, net_ping_wait_check,
+                                      (uintptr_t)ticket) != 0)
+            return (uint64_t)-EIO;
+        return 0;
     }
+    case SYS_SOCKET: {
+        process_t *proc = process_current();
+        net_socket_t *socket = 0;
+
+        int rc = net_socket_create((int)r->rdi, (int)r->rsi, (int)r->rdx, &socket);
+        if (rc != 0)
+            return (uint64_t)(int64_t)rc;
+        int fd = process_handle_attach_socket(proc, socket);
+        if (fd < 0) {
+            net_socket_release(socket);
+            return (uint64_t)-EMFILE;
+        }
+        return (uint64_t)fd;
+    }
+    case SYS_BIND: {
+        net_socket_t *socket = 0;
+        uint64_t port = r->rdx;
+
+        int rc = socket_from_fd(process_current(), (int)r->rdi, &socket);
+        if (rc != 0)
+            return (uint64_t)(int64_t)rc;
+        if (port > NET_PORT_MAX)
+            return (uint64_t)-EINVAL;
+        return (uint64_t)(int64_t)net_socket_bind(socket, (uint32_t)r->rsi,
+                                                  (uint16_t)port);
+    }
+    case SYS_SENDTO: {
+        process_t *proc = process_current();
+        net_socket_t *socket = 0;
+        const uint8_t *buf = (const uint8_t *)(uintptr_t)r->rsi;
+        size_t len = (size_t)r->rdx;
+        uint64_t port = r->r8;
+
+        int rc = socket_from_fd(proc, (int)r->rdi, &socket);
+        if (rc != 0)
+            return (uint64_t)(int64_t)rc;
+        if (len > UDP_PAYLOAD_MAX)
+            return (uint64_t)-EMSGSIZE;
+        if (!user_range_ok(buf, len))
+            return (uint64_t)-EFAULT;
+        if (port > NET_PORT_MAX)
+            return (uint64_t)-EINVAL;
+        rc = net_socket_sendto(socket, buf, len, (uint32_t)r->r10, (uint16_t)port);
+        if (rc < 0)
+            return (uint64_t)(int64_t)rc;
+        if (rc == 0)
+            return len;
+
+        /* The datagram waits for neighbour resolution; the scheduler
+         * completes the syscall with the datagram length or an error. */
+        if (process_begin_kernel_wait(proc, udp_send_wait_check, (uintptr_t)rc) != 0) {
+            udp_send_cancel(rc);
+            return (uint64_t)-EINVAL;
+        }
+        return 0;
+    }
+    case SYS_RECVFROM: {
+        process_t *proc = process_current();
+        net_socket_t *socket = 0;
+        uint8_t *buf = (uint8_t *)(uintptr_t)r->rsi;
+        size_t len = (size_t)r->rdx;
+        uint32_t flags = (uint32_t)r->r10;
+        net_sockaddr_t *from = (net_sockaddr_t *)(uintptr_t)r->r8;
+        uint32_t received = 0;
+
+        int rc = socket_from_fd(proc, (int)r->rdi, &socket);
+        if (rc != 0)
+            return (uint64_t)(int64_t)rc;
+        if ((r->r10 & ~(uint64_t)NET_MSG_DONTWAIT) != 0)
+            return (uint64_t)-EINVAL;
+        if (user_range_validate(buf, len, USER_ACCESS_WRITE) != 0)
+            return (uint64_t)-EFAULT;
+        if (from &&
+            user_range_validate(from, sizeof(*from), USER_ACCESS_WRITE) != 0)
+            return (uint64_t)-EFAULT;
+        rc = net_socket_recvfrom(socket, buf, len, from, &received);
+        if (rc == 0)
+            return received;
+        if (rc != -EAGAIN)
+            return (uint64_t)(int64_t)rc;
+        if ((flags & NET_MSG_DONTWAIT) != 0)
+            return (uint64_t)-EAGAIN;
+        if (process_begin_socket_wait(proc, (int)r->rdi, NET_WAIT_RECV) != 0)
+            return (uint64_t)-EBADF;
+        return 0;
+    }
+    case SYS_GETUID:
+        return process_current()->cred.uid;
+    case SYS_GETGID:
+        return process_current()->cred.gid;
+    case SYS_SETUID:
+        return (uint64_t)(int64_t)credentials_set_uid(&process_current()->cred,
+                                                      (uint32_t)r->rdi);
+    case SYS_SETGID:
+        return (uint64_t)(int64_t)credentials_set_gid(&process_current()->cred,
+                                                      (uint32_t)r->rdi);
+    case SYS_CHMOD:
+    case SYS_CHOWN: {
+        const char *path = (const char *)(uintptr_t)r->rdi;
+        process_t *proc = process_current();
+        if (!path)
+            return (uint64_t)-EFAULT;
+        char kpath[PROCESS_CWD_CAP];
+        int path_rc = copy_followed_user_path(proc, path, kpath, sizeof(kpath), 1);
+        if (path_rc != 0)
+            return (uint64_t)(int64_t)path_rc;
+        if (!vfs_is_ready())
+            return (uint64_t)-EIO;
+        int rc = r->rax == SYS_CHMOD
+                     ? vfs_access_chmod(&proc->cred, kpath, (uint32_t)r->rsi)
+                     : vfs_access_chown(&proc->cred, kpath, (uint32_t)r->rsi,
+                                        (uint32_t)r->rdx);
+        return attribute_status(rc);
+    }
+    case SYS_CONNECT:
+    case SYS_LISTEN:
+    case SYS_ACCEPT:
+    case SYS_SHUTDOWN_SOCK:
+        return socket_syscall_dispatch(process_current(), r);
+    case SYS_KILL:
+        return (uint64_t)signal_kill((uint32_t)r->rdi, (int)r->rsi);
+    case SYS_SIGACTION:
+        return (uint64_t)signal_sigaction(process_current(), (int)r->rdi,
+                                          r->rsi, r->rdx);
+    case SYS_SIGPROCMASK:
+        return (uint64_t)signal_sigprocmask(process_current(), (int)r->rdi,
+                                            r->rsi, r->rdx);
+    case SYS_SIGRETURN:
+        /* The restored rax becomes the result of the interrupted code. */
+        if (signal_return(process_current(), r) != 0)
+            return (uint64_t)-EFAULT;
+        return r->rax;
     default:
         return (uint64_t)-1;
     }

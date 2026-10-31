@@ -1,96 +1,61 @@
 #include "mini_libc.h"
+#include "anim.h"
+#include "app_editor.h"
+#include "app_terminal.h"
 #include "compositor.h"
+#include "filemanager.h"
 #include "gfx_effects.h"
-#include "icons.h"
+#include "iconset.h"
+#include "kbd_keys.h"
+#include "logo_ui.h"
+#include "settings.h"
+#include "settings_ui.h"
+#include "spotlight.h"
 #include "syscall.h"
 #include "wallclock.h"
-
-extern void comp_text_render(Window *win, int x, int y, const char *text, uint32_t color);
+#include "window_geometry.h"
+#include "window_motion.h"
 
 #define TITLE_H   30
 #define PAD       12
 #define LINE_H    16
 #define TASKBAR_H 56
+/* Height of the top bar; windows maximize and drag below it. */
+#define TOPBAR_H  28
+/* Side margin of the top bar's contents. */
+#define TOPBAR_PAD 16
 #define MAX_APPS  8
+/* Rows a wheel notch scrolls the terminal by. */
+#define TERMINAL_WHEEL_ROWS 3
 /* Width of TIME_FORMAT_SHORT ("Thu 29 Oct 14:05") in 8px glyphs. */
 #define CLOCK_W   (16 * 8)
 
-#define COL_ACCENT    0x00306090u
-#define COL_WIN       0x00101820u
-#define COL_TITLE     0x00304050u
-#define COL_TITLE_F   0x00425870u
-#define COL_TEXT      0x00D0D8E0u
-#define COL_PROMPT    0x0060C060u
-#define COL_DIM       0x008090A0u
-#define COL_MENU      0x00202834u
-#define COL_MENU_HI   0x00384A60u
-#define COL_CLOSE     0x00E06060u
-#define COL_MIN       0x00E0B050u
-#define COL_MAX       0x0060C060u
-#define COL_EDIT_BG   0x00F0F3F6u
-#define COL_EDIT_FG   0x00203040u
-#define COL_INPUT     0x0080FF80u
+/* The user's preferences and the palette derived from them. g_applied is what
+   the session currently shows, so a change is detected by diffing against it. */
+static Settings g_settings;
+static Settings g_applied;
+static SettingsPalette g_th;
+static int g_settings_save_failed;
 
-typedef struct DesktopTheme {
-    uint32_t bg_top, bg_bottom, taskbar, accent;
-    uint32_t win, title, title_focus, text, prompt, dim;
-    uint32_t menu, menu_hi, close, min, max, edit_bg, edit_fg;
-} DesktopTheme;
-
-static const DesktopTheme g_theme_dark = {
-    0x00162030u, 0x000C121Cu, 0x001B222Cu, 0x00306090u,
-    0x00101820u, 0x00304050u, 0x00425870u, 0x00D0D8E0u, 0x0060C060u, 0x008090A0u,
-    0x00202834u, 0x00384A60u, 0x00E06060u, 0x00E0B050u, 0x0060C060u,
-    0x00F0F3F6u, 0x00203040u
-};
-
-static const DesktopTheme g_theme_light = {
-    0x00E8EEF4u, 0x00C8D4E0u, 0x00D0D8E0u, 0x004080C0u,
-    0x00101820u, 0x00304050u, 0x00425870u, 0x00D0D8E0u, 0x0060C060u, 0x008090A0u,
-    0x00202834u, 0x00384A60u, 0x00E06060u, 0x00E0B050u, 0x0060C060u,
-    0x00F0F3F6u, 0x00203040u
-};
-
-static DesktopTheme g_th;
-
-#undef COL_ACCENT
-#undef COL_WIN
-#undef COL_TITLE
-#undef COL_TITLE_F
-#undef COL_TEXT
-#undef COL_PROMPT
-#undef COL_DIM
-#undef COL_MENU
-#undef COL_MENU_HI
-#undef COL_CLOSE
-#undef COL_MIN
-#undef COL_MAX
-#undef COL_EDIT_BG
-#undef COL_EDIT_FG
-#define COL_ACCENT   (g_th.accent)
-#define COL_WIN      (g_th.win)
-#define COL_TITLE    (g_th.title)
-#define COL_TITLE_F  (g_th.title_focus)
-#define COL_TEXT     (g_th.text)
-#define COL_PROMPT   (g_th.prompt)
-#define COL_DIM      (g_th.dim)
-#define COL_MENU     (g_th.menu)
-#define COL_MENU_HI  (g_th.menu_hi)
-#define COL_CLOSE    (g_th.close)
-#define COL_MIN      (g_th.min)
-#define COL_MAX      (g_th.max)
-#define COL_EDIT_BG  (g_th.edit_bg)
-#define COL_EDIT_FG  (g_th.edit_fg)
-#define COL_BG_TOP   (g_th.bg_top)
-#define COL_BG_BOTTOM (g_th.bg_bottom)
-#define COL_TASKBAR  (g_th.taskbar)
-
-static int g_theme;
-
-static void apply_theme(int light) {
-    g_theme = light ? 1 : 0;
-    g_th = light ? g_theme_light : g_theme_dark;
-}
+#define COL_ACCENT    (g_th.accent)
+#define COL_WIN       (g_th.terminal_bg)
+#define COL_TITLE     (g_th.title)
+#define COL_TITLE_F   (g_th.title_focus)
+#define COL_TEXT      (g_th.title_text)
+#define COL_DIM       (g_th.terminal_dim)
+#define COL_MENU      (g_th.menu)
+#define COL_CLOSE     (g_th.close)
+#define COL_MIN       (g_th.minimize)
+#define COL_MAX       (g_th.maximize)
+#define COL_EDIT_BG   (g_th.document_bg)
+#define COL_EDIT_FG   (g_th.document_text)
+#define COL_SELECTION (g_th.document_selection)
+#define COL_BG_TOP    (g_th.wallpaper_top)
+#define COL_BG_BOTTOM (g_th.wallpaper_bottom)
+#define COL_TASKBAR   (g_th.taskbar)
+#define COL_CHROME_TEXT (g_th.chrome_text)
+#define COL_CHROME_DIM  (g_th.chrome_dim)
+#define COL_TITLE_BORDER (g_th.title_border)
 
 enum { APP_TERM = 0, APP_EDIT, APP_FILES, APP_SETTINGS, APP_KIND_COUNT };
 
@@ -100,40 +65,42 @@ typedef struct App {
     Window *win;
     int minimized;
     int maximized;
+    /* Order of the last focus; the highest stamp is the topmost window. */
+    unsigned long focus_stamp;
     int dragging;
     int resizing;
     int drag_ox, drag_oy;
     int rx, ry, rw, rh;
-    char title[24];
+    /* Opening, minimizing, restoring and resizing run as a pose of the window;
+       its geometry and flags above already hold the end state. */
+    WindowMotion motion;
+    char title[64];
     /* terminal */
-    char scroll[96][128];
-    int scroll_count;
-    int scroll_off;
-    char input[256];
-    int input_len;
+    Terminal *term;
+    char start_command[4 * FM_PATH_CAP + 4];  /* typed at the first prompt; empty once done */
     /* editor */
-    char text[8192];
-    int text_len;
-    int cursor;
-    int scroll_line;
-    char path[128];
+    Editor *editor;
     /* files */
-    char cwd[128];
-    int sel;
+    FileManager files;
+    /* settings */
+    SettingsUi settings_ui;
 } App;
 
 static App g_apps[MAX_APPS];
 static int g_focus = -1;
 static int SW, SH;
 static Window *g_bg;
+static Window *g_topbar;
 static Window *g_taskbar;
-static Window *g_menu;
-static int g_menu_open = 0;
+static Window *g_launcher;
 static int g_mx = -1, g_my = -1, g_btn = 0;
 static int g_prev_mx = -1, g_prev_my = -1;
 static unsigned long g_last_sec = 0;
-static int g_theme = 0;
-static int g_layout = 0; /* 0=DE, 1=US */
+static unsigned long g_focus_clock = 0;
+/* The previous title bar press, to recognise a double click. */
+static int g_click_app = -1;
+static int g_click_x, g_click_y;
+static unsigned long g_click_ms;
 
 static void draw_terminal(App *a);
 static void draw_editor(App *a);
@@ -154,11 +121,16 @@ static void fill_rect(Window *win, int x, int y, int w, int h, uint32_t color) {
             ((uint32_t *)win->surface)[yy * win->w + xx] = color;
 }
 
+static GfxCanvas window_canvas(Window *win) {
+    GfxCanvas canvas = { (uint32_t *)win->surface, win->w, win->h, win->w,
+                         win->style.material == COMP_MATERIAL_GLASS };
+    return canvas;
+}
+
 /* Anti-aliased rounded rectangle; a square with radius = size / 2 is a disc. */
 static void rounded_rect(Window *win, int x, int y, int w, int h, int r, uint32_t color) {
     if (!win || !win->surface) return;
-    GfxCanvas canvas = { (uint32_t *)win->surface, win->w, win->h, win->w,
-                         win->style.material == COMP_MATERIAL_GLASS };
+    GfxCanvas canvas = window_canvas(win);
     gfx_fill_round_rect(&canvas, x, y, w, h, r, color & 0x00FFFFFFu, 255);
 }
 
@@ -200,22 +172,13 @@ static void draw_resize_cursor(uint32_t *buf, int w, int h, int mx, int my) {
     }
 }
 
-static int cursor_over_resize(int mx, int my) {
-    for (int i = MAX_APPS - 1; i >= 0; --i) {
-        App *a = &g_apps[i];
-        if (!a->used || a->minimized || !a->win || !a->win->visible) continue;
-        Window *w = a->win;
-        if (mx < w->x || my < w->y || mx >= w->x + w->w || my >= w->y + w->h) continue;
-        int lx = mx - w->x, ly = my - w->y;
-        return (lx >= w->w - 16 && ly >= w->h - 16);
-    }
-    return 0;
-}
+static App *app_at(int mx, int my);
 
-static int str_eq(const char *a, const char *b) {
-    if (!a || !b) return 0;
-    while (*a && *b) { if (*a != *b) return 0; ++a; ++b; }
-    return *a == 0 && *b == 0;
+static int cursor_over_resize(int mx, int my) {
+    App *a = app_at(mx, my);
+    if (!a || a->maximized) return 0;
+    Window *w = a->win;
+    return mx - w->x >= w->w - 16 && my - w->y >= w->h - 16;
 }
 
 static void str_copy_to(char *dst, const char *src, int cap) {
@@ -225,69 +188,77 @@ static void str_copy_to(char *dst, const char *src, int cap) {
     dst[i] = 0;
 }
 
-static void append_num(char *line, int *z, int v) {
-    if (v < 0) { line[(*z)++] = '-'; v = -v; }
-    char tmp[12]; int n = 0;
-    if (v == 0) tmp[n++] = '0';
-    while (v > 0) { tmp[n++] = (char)('0' + v % 10); v /= 10; }
-    while (n > 0) line[(*z)++] = tmp[--n];
-}
-
 /* ---------------- icons ---------------- */
 
-static void blit_icon(Window *win, int x, int y, const uint32_t *icon, int size) {
-    if (!win || !win->surface || !icon || size <= 0) return;
-    uint32_t *dst = (uint32_t *)win->surface;
+/* Bilinear sample of one 8-bit channel (at bit offset shift) of four pixels;
+   wx and wy are 0..255 weights towards the right and lower neighbour. */
+static uint32_t icon_channel(uint32_t p00, uint32_t p10, uint32_t p01, uint32_t p11,
+                             uint32_t wx, uint32_t wy, int shift) {
+    uint32_t top = (((p00 >> shift) & 0xFF) * (256 - wx) + ((p10 >> shift) & 0xFF) * wx) >> 8;
+    uint32_t bottom = (((p01 >> shift) & 0xFF) * (256 - wx) + ((p11 >> shift) & 0xFF) * wx) >> 8;
+    return (top * (256 - wy) + bottom * wy) >> 8;
+}
+
+/* Composites ink of coverage `alpha` onto pixel (x, y) of the window: over the
+   glass on glass windows, mixed into the solid fill otherwise. */
+static void paint_ink(Window *win, int x, int y, uint32_t ink, uint32_t alpha) {
+    if (alpha == 0 || x < 0 || y < 0 || x >= win->w || y >= win->h) return;
+    uint32_t *dst = &((uint32_t *)win->surface)[y * win->w + x];
+    uint32_t rgb = ink & 0x00FFFFFFu;
+    if (win->style.material == COMP_MATERIAL_GLASS)
+        *dst = gfx_over(*dst, 0xFF000000u | rgb, alpha);
+    else
+        *dst = gfx_mix(*dst, rgb, alpha) & 0x00FFFFFFu;
+}
+
+/* Source position of destination pixel `index` of `size` in a source of
+   `source` pixels, as a base pixel and a 0..255 weight towards its successor. */
+static void sample_axis(int index, int size, int source, int *base, uint32_t *weight) {
+    int position = ((2 * index + 1) * source * 256) / (2 * size) - 128;
+    int whole = position >> 8;
+    *weight = (uint32_t)(position & 0xFF);
+    if (whole < 0) { whole = 0; *weight = 0; }
+    *base = whole;
+}
+
+/* The logo is the artwork's coverage bitmap, coloured with the artwork's
+   stroke gradient for the theme (light ink on dark surfaces, teal on light
+   ones). It is sampled from the smallest bitmap that is not smaller than the
+   target, so the common sizes are drawn 1:1 without resampling. */
+static void blit_logo(Window *win, int x, int y, int size) {
+    if (!win || !win->surface || size <= 0) return;
+    int pick = LOGO_SIZE_COUNT - 1;
+    for (int i = 0; i < LOGO_SIZE_COUNT; ++i) {
+        if (logo_sizes[i] >= size) { pick = i; break; }
+    }
+    const uint8_t *coverage = logo_coverage[pick];
+    int source = logo_sizes[pick];
+    const uint32_t *gradient = g_th.light ? logo_gradient_light : logo_gradient_dark;
     for (int py = 0; py < size; ++py) {
-        int sy16 = ((2 * py + 1) * ICON_SIZE * 256) / (2 * size) - 128;
-        int sy0 = sy16 >> 8;
-        int wy = sy16 & 0xFF;
-        if (sy0 < 0) { sy0 = 0; wy = 0; }
-        int sy1 = sy0 + 1;
-        if (sy1 >= ICON_SIZE) sy1 = ICON_SIZE - 1;
+        int sy0, sy1;
+        uint32_t wy;
+        sample_axis(py, size, source, &sy0, &wy);
+        sy1 = sy0 + 1 < source ? sy0 + 1 : source - 1;
+        uint32_t ink = logo_gradient_at(gradient, size, py);
         for (int px = 0; px < size; ++px) {
-            int sx16 = ((2 * px + 1) * ICON_SIZE * 256) / (2 * size) - 128;
-            int sx0 = sx16 >> 8;
-            int wx = sx16 & 0xFF;
-            if (sx0 < 0) { sx0 = 0; wx = 0; }
-            int sx1 = sx0 + 1;
-            if (sx1 >= ICON_SIZE) sx1 = ICON_SIZE - 1;
-            uint32_t p00 = icon[sy0 * ICON_SIZE + sx0];
-            uint32_t p10 = icon[sy0 * ICON_SIZE + sx1];
-            uint32_t p01 = icon[sy1 * ICON_SIZE + sx0];
-            uint32_t p11 = icon[sy1 * ICON_SIZE + sx1];
-            uint32_t a00 = (p00 >> 24) & 0xFF, a10 = (p10 >> 24) & 0xFF;
-            uint32_t a01 = (p01 >> 24) & 0xFF, a11 = (p11 >> 24) & 0xFF;
-            uint32_t a0 = (a00 * (256 - wx) + a10 * wx) >> 8;
-            uint32_t a1 = (a01 * (256 - wx) + a11 * wx) >> 8;
-            uint32_t a = (a0 * (256 - wy) + a1 * wy) >> 8;
-            if (a == 0) continue;
-            uint32_t r = ((((p00 >> 16) & 0xFF) * (256 - wx) + ((p10 >> 16) & 0xFF) * wx) >> 8);
-            uint32_t r2 = ((((p01 >> 16) & 0xFF) * (256 - wx) + ((p11 >> 16) & 0xFF) * wx) >> 8);
-            r = (r * (256 - wy) + r2 * wy) >> 8;
-            uint32_t g = ((((p00 >> 8) & 0xFF) * (256 - wx) + ((p10 >> 8) & 0xFF) * wx) >> 8);
-            uint32_t g2 = ((((p01 >> 8) & 0xFF) * (256 - wx) + ((p11 >> 8) & 0xFF) * wx) >> 8);
-            g = (g * (256 - wy) + g2 * wy) >> 8;
-            uint32_t b = (((p00 & 0xFF) * (256 - wx) + (p10 & 0xFF) * wx) >> 8);
-            uint32_t b2 = (((p01 & 0xFF) * (256 - wx) + (p11 & 0xFF) * wx) >> 8);
-            b = (b * (256 - wy) + b2 * wy) >> 8;
-            int dx = x + px, dy = y + py;
-            if (dx < 0 || dy < 0 || dx >= win->w || dy >= win->h) continue;
-            uint32_t *d = &dst[dy * win->w + dx];
-            uint32_t rgb = (r << 16) | (g << 8) | b;
-            if (win->style.material == COMP_MATERIAL_GLASS)
-                *d = gfx_over(*d, 0xFF000000u | rgb, a);
-            else
-                *d = gfx_mix(*d, rgb, a) & 0x00FFFFFFu;
+            int sx0, sx1;
+            uint32_t wx;
+            sample_axis(px, size, source, &sx0, &wx);
+            sx1 = sx0 + 1 < source ? sx0 + 1 : source - 1;
+            uint32_t alpha = icon_channel(coverage[sy0 * source + sx0], coverage[sy0 * source + sx1],
+                                          coverage[sy1 * source + sx0], coverage[sy1 * source + sx1],
+                                          wx, wy, 0);
+            paint_ink(win, x + px, y + py, ink, alpha);
         }
     }
 }
 
-static void draw_icon_os(Window *win, int x, int y, int s) { blit_icon(win, x, y, icon_os, s); }
-static void draw_icon_terminal(Window *win, int x, int y, int s) { blit_icon(win, x, y, icon_terminal, s); }
-static void draw_icon_editor(Window *win, int x, int y, int s) { blit_icon(win, x, y, icon_editor, s); }
-static void draw_icon_files(Window *win, int x, int y, int s) { blit_icon(win, x, y, icon_files, s); }
-static void draw_icon_settings(Window *win, int x, int y, int s) { blit_icon(win, x, y, icon_settings, s); }
+/* The drop is a thin outline in a padded square, so it is drawn a quarter
+   larger, centred on its slot, to match the visual weight of the other icons. */
+static void draw_icon_os(Window *win, int x, int y, int s) {
+    int grown = s + s / 4;
+    blit_logo(win, x - (grown - s) / 2, y - (grown - s) / 2, grown);
+}
 
 static void draw_clock(Window *win, int right_x, int y) {
     char buf[32];
@@ -297,7 +268,7 @@ static void draw_clock(Window *win, int right_x, int y) {
         unsigned long minutes = time_ms() / 60000;
         snprintf(buf, sizeof(buf), "up %02lu:%02lu", minutes / 60, minutes % 60);
     }
-    comp_text_render(win, right_x - (int)strlen(buf) * 8, y, buf, COL_TEXT);
+    comp_text_render(win, right_x - (int)strlen(buf) * 8, y, buf, COL_CHROME_TEXT);
 }
 
 /* ---------------- taskbar ---------------- */
@@ -306,51 +277,166 @@ static int tb_logo_x(void) { return 12; }
 static int tb_logo_y(void) { return SH - TASKBAR_H + 12; }
 static int tb_icon_x(int kind) { return 60 + kind * 44; }
 static int tb_y(void) { return SH - TASKBAR_H + 12; }
-static int tb_icon_s(void) { return 32; }
+static int tb_icon_s(void) { return ICON_SIZE_APP; }
+
+static const IconId g_app_icons[APP_KIND_COUNT] = {
+    [APP_TERM] = ICON_TERMINAL, [APP_EDIT] = ICON_EDITOR,
+    [APP_FILES] = ICON_FILES, [APP_SETTINGS] = ICON_SETTINGS,
+};
 
 static void draw_kind_icon(Window *win, int kind, int x, int y, int s) {
-    switch (kind) {
-    case APP_TERM: draw_icon_terminal(win, x, y, s); break;
-    case APP_EDIT: draw_icon_editor(win, x, y, s); break;
-    case APP_FILES: draw_icon_files(win, x, y, s); break;
-    default: draw_icon_settings(win, x, y, s); break;
+    GfxCanvas canvas = window_canvas(win);
+    icon_draw(&canvas, g_app_icons[kind], s, x, y, g_th.light, 255);
+}
+
+/* 0: no window of the app, 1: only minimized windows, 2: a window is open. */
+static int app_presence(int kind) {
+    int presence = 0;
+    for (int i = 0; i < MAX_APPS; ++i) {
+        if (!g_apps[i].used || g_apps[i].kind != kind) continue;
+        if (!g_apps[i].minimized) return 2;
+        presence = 1;
     }
+    return presence;
 }
 
-static int app_is_running(int kind) {
-    for (int i = 0; i < MAX_APPS; ++i)
-        if (g_apps[i].used && g_apps[i].kind == kind && !g_apps[i].minimized) return 1;
-    return 0;
-}
-
-/* The taskbar is its own glass window; surface alpha 0 is bare glass. */
+/* With glass on, the taskbar and the menu are glass windows whose surface
+   alpha 0 is bare glass; with glass off they are solid in their tint. */
 #define GLASS_CLEAR 0x00000000u
 #define GLASS_INK   0xFF000000u
 
-static void draw_taskbar(void) {
-    int ty = SH - TASKBAR_H;
-    fill_rect(g_taskbar, 0, 0, SW, TASKBAR_H, GLASS_CLEAR);
-    draw_icon_os(g_taskbar, tb_logo_x(), tb_logo_y() - ty, 32);
-    for (int k = 0; k < APP_KIND_COUNT; ++k) {
-        draw_kind_icon(g_taskbar, k, tb_icon_x(k), tb_y() - ty, tb_icon_s());
-        if (app_is_running(k))
-            fill_rect(g_taskbar, tb_icon_x(k), TASKBAR_H - 3, tb_icon_s(), 3, GLASS_INK | COL_ACCENT);
-    }
-    draw_clock(g_taskbar, SW - 16, 20);
+static uint32_t chrome_clear(uint32_t solid_tint) {
+    return g_settings.glass ? GLASS_CLEAR : solid_tint;
 }
 
-static void style_glass(Window *win, uint32_t tint, int radius, int shadow) {
+/* The launcher button and one icon per app kind. Each has a highlight under
+   the pointer and, for apps, an indicator that its windows are open; all of
+   them ease in and out as springs. */
+#define DOCK_ITEMS         (APP_KIND_COUNT + 1)
+#define DOCK_CELL_W        44
+#define DOCK_CELL_INSET    6
+#define DOCK_PAD           4
+#define DOCK_PAD_RADIUS    10
+#define DOCK_HOVER_OPACITY 40
+#define DOCK_INDICATOR_H   3
+
+typedef struct DockItem {
+    AnimSpring hover;    /* the pointer is over it, or the launcher is open */
+    AnimSpring shown;    /* the app has a window */
+    AnimSpring active;   /* ... that is not minimized */
+    /* What the taskbar surface currently shows, quantized as drawn. */
+    int painted_hover, painted_shown, painted_active;
+} DockItem;
+
+static DockItem g_dock[DOCK_ITEMS];
+
+/* Item 0 is the launcher button, item n + 1 the app of kind n. */
+static int dock_icon_x(int item) { return item == 0 ? tb_logo_x() : tb_icon_x(item - 1); }
+static int dock_icon_y(int item) { return item == 0 ? tb_logo_y() : tb_y(); }
+
+static int dock_hover_level(const DockItem *item) {
+    return (int)(((int64_t)anim_clamp_unit(item->hover.value) * DOCK_HOVER_OPACITY) >> 16);
+}
+
+static void dock_item_paint(int index) {
+    DockItem *item = &g_dock[index];
+    int ty = SH - TASKBAR_H;
+    int x = dock_icon_x(index);
+    int y = dock_icon_y(index) - ty;
+    GfxCanvas canvas = window_canvas(g_taskbar);
+
+    item->painted_hover = dock_hover_level(item);
+    item->painted_shown = anim_clamp_unit(item->shown.value) >> 8;
+    item->painted_active = anim_clamp_unit(item->active.value) >> 8;
+
+    if (item->painted_hover > 0)
+        gfx_fill_round_rect(&canvas, x - DOCK_PAD, y - DOCK_PAD, tb_icon_s() + 2 * DOCK_PAD,
+                            tb_icon_s() + 2 * DOCK_PAD, DOCK_PAD_RADIUS,
+                            COL_CHROME_TEXT & 0x00FFFFFFu, (unsigned int)item->painted_hover);
+    if (index == 0) {
+        draw_icon_os(g_taskbar, x, y, 32);
+        return;
+    }
+    draw_kind_icon(g_taskbar, index - 1, x, y, tb_icon_s());
+    if (item->painted_shown > 0) {
+        int width = (tb_icon_s() * item->painted_shown + 128) / 256;
+        uint32_t color = gfx_mix(COL_CHROME_DIM, COL_ACCENT, (unsigned int)item->painted_active);
+        unsigned int opacity = item->painted_shown > 255 ? 255u : (unsigned int)item->painted_shown;
+        if (width > 0)
+            gfx_fill_round_rect(&canvas, x + (tb_icon_s() - width) / 2, TASKBAR_H - DOCK_INDICATOR_H,
+                                width, DOCK_INDICATOR_H, 1, color & 0x00FFFFFFu, opacity);
+    }
+}
+
+static void draw_taskbar(void) {
+    fill_rect(g_taskbar, 0, 0, SW, TASKBAR_H, chrome_clear(COL_TASKBAR));
+    for (int i = 0; i < DOCK_ITEMS; ++i) dock_item_paint(i);
+}
+
+/* Repaints one item's cell of the taskbar: the surface is cleared there first,
+   so a shrinking highlight or indicator leaves nothing behind. */
+static void dock_item_refresh(int index) {
+    int cell_x = dock_icon_x(index) - DOCK_CELL_INSET;
+    fill_rect(g_taskbar, cell_x, 0, DOCK_CELL_W, TASKBAR_H, chrome_clear(COL_TASKBAR));
+    dock_item_paint(index);
+    comp_damage_rect(g_bg, cell_x, SH - TASKBAR_H, DOCK_CELL_W, TASKBAR_H);
+}
+
+static int dock_item_stale(int index) {
+    const DockItem *item = &g_dock[index];
+    return item->painted_hover != dock_hover_level(item) ||
+           item->painted_shown != (anim_clamp_unit(item->shown.value) >> 8) ||
+           item->painted_active != (anim_clamp_unit(item->active.value) >> 8);
+}
+
+/* The text of a top bar row sits centred between its edges. */
+#define TOPBAR_TEXT_Y ((TOPBAR_H - 16) / 2)
+
+static const char *app_kind_name(int kind) {
+    switch (kind) {
+    case APP_TERM: return "Terminal";
+    case APP_EDIT: return "Editor";
+    case APP_FILES: return "Files";
+    default: return "Settings";
+    }
+}
+
+/* The name of the focused app on the left, the clock on the right. */
+static void draw_topbar(void) {
+    const char *name = g_focus >= 0 && g_apps[g_focus].used && !g_apps[g_focus].minimized
+                           ? app_kind_name(g_apps[g_focus].kind)
+                           : "HydrogenOS";
+    fill_rect(g_topbar, 0, 0, SW, TOPBAR_H, chrome_clear(COL_TASKBAR));
+    comp_text_render(g_topbar, TOPBAR_PAD, TOPBAR_TEXT_Y, name, COL_CHROME_TEXT);
+    draw_clock(g_topbar, SW - TOPBAR_PAD, TOPBAR_TEXT_Y);
+    fill_rect(g_topbar, 0, TOPBAR_H - 1, SW, 1, GLASS_INK | COL_TITLE_BORDER);
+}
+
+static void style_chrome_window(Window *win, uint32_t tint, unsigned int tint_alpha, int radius, int shadow) {
     CompWindowStyle style;
-    comp_style_glass(&style);
-    style.glass_tint = tint;
+    if (g_settings.glass) {
+        comp_style_glass(&style);
+        style.glass_tint = tint;
+        style.glass_tint_alpha = tint_alpha;
+    } else {
+        comp_style_plain(&style);
+    }
     style.corner_radius = radius;
     style.shadow = shadow;
     comp_set_window_style(win, &style);
 }
 
+/* The launcher is read over whatever windows lie beneath it, so its glass is
+   denser than the taskbar's. */
+#define LAUNCHER_EXTRA_OPACITY 70
+#define LAUNCHER_MAX_OPACITY   240
+
 static void style_chrome(void) {
-    style_glass(g_taskbar, COL_TASKBAR, 0, 0);
-    style_glass(g_menu, COL_MENU, 12, 1);
+    unsigned int launcher_alpha = g_th.glass_alpha + LAUNCHER_EXTRA_OPACITY;
+    if (launcher_alpha > LAUNCHER_MAX_OPACITY) launcher_alpha = LAUNCHER_MAX_OPACITY;
+    style_chrome_window(g_topbar, COL_TASKBAR, g_th.glass_alpha, 0, 0);
+    style_chrome_window(g_taskbar, COL_TASKBAR, g_th.glass_alpha, 0, 0);
+    style_chrome_window(g_launcher, COL_MENU, launcher_alpha, 16, 1);
 }
 
 static void draw_background(void) {
@@ -366,331 +452,37 @@ static void draw_background(void) {
         uint32_t c = ((uint32_t)r << 16) | ((uint32_t)g << 8) | (uint32_t)b;
         for (int x = 0; x < SW; ++x) px[y * SW + x] = c;
     }
-    comp_text_render(g_bg, 24, 20, "HydrogenOS Desktop v0", COL_TEXT);
-    fill_rect(g_bg, 24, 42, 160, 2, COL_ACCENT);
     style_chrome();
+    draw_topbar();
     draw_taskbar();
 }
 
-/* ---------------- start menu ---------------- */
+/* ---------------- launcher ---------------- */
 
-#define MENU_W 300
-#define MENU_H 300
-#define MENU_ROW 44
+static int launcher_x(void) { return (SW - SPOTLIGHT_WIDTH) / 2; }
 
-static int menu_x(void) { return 12; }
-static int menu_y(void) { return SH - TASKBAR_H - MENU_H - 8; }
-
-static const char *menu_label(int i) {
-    switch (i) {
-    case 0: return "Terminal";
-    case 1: return "Editor";
-    case 2: return "Files";
-    case 3: return "Settings";
-    default: return "About HydrogenOS";
-    }
-}
-
-static void draw_menu(void) {
-    Window *w = g_menu;
-    fill_rect(w, 0, 0, MENU_W, MENU_H, GLASS_CLEAR);
-    comp_text_render(w, 16, 10, "Applications", COL_DIM);
-    for (int i = 0; i < 5; ++i) {
-        int y = 34 + i * MENU_ROW;
-        if (i < 4)
-            draw_kind_icon(w, i, 16, y + 4, 32);
-        else
-            draw_icon_os(w, 16, y + 4, 32);
-        comp_text_render(w, 60, y + 12, menu_label(i), COL_TEXT);
-    }
-}
-
-static void open_menu(void) {
-    g_menu_open = 1;
-    g_menu->visible = 1;
-    comp_raise(g_menu);
-    draw_menu();
-    comp_damage_rect(g_bg, g_menu->x, g_menu->y, g_menu->w, g_menu->h);
-}
-
-static void close_menu(void) {
-    if (!g_menu_open) return;
-    g_menu_open = 0;
-    g_menu->visible = 0;
-    comp_damage_rect(g_bg, g_menu->x, g_menu->y, g_menu->w, g_menu->h);
+/* A sixth of the way down, but never into the taskbar. */
+static int launcher_y(void) {
+    int y = SH - TASKBAR_H - SPOTLIGHT_HEIGHT - 8;
+    return SH / 6 < y ? SH / 6 : (y > 8 ? y : 8);
 }
 
 /* ---------------- terminal app ---------------- */
 
-static void term_puts(App *a, const char *text) {
-    if (!text) return;
-    char line[128];
-    int li = 0, i = 0;
-    for (;;) {
-        char c = text[i++];
-        if (c == '\n' || c == 0) {
-            line[li] = 0;
-            if (a->scroll_count < 96) {
-                int k = 0;
-                while (line[k] && k < 127) { a->scroll[a->scroll_count][k] = line[k]; ++k; }
-                a->scroll[a->scroll_count][k] = 0;
-                a->scroll_count++;
-            } else {
-                for (int r = 1; r < 96; ++r) {
-                    int k = 0;
-                    while (a->scroll[r][k] && k < 127) { a->scroll[r-1][k] = a->scroll[r][k]; ++k; }
-                    a->scroll[r-1][k] = 0;
-                }
-                int k = 0;
-                while (line[k] && k < 127) { a->scroll[95][k] = line[k]; ++k; }
-                a->scroll[95][k] = 0;
-            }
-            li = 0;
-            if (c == 0) break;
-            continue;
-        }
-        if (li < 127) line[li++] = c;
-    }
-}
-
-static void editor_load_path(App *e, const char *path);
-
 static int app_open_new(int kind);
 
-static void term_execute(App *a) {
-    char cmd[256];
-    int i = 0;
-    while (a->input[i] && i < 255) { cmd[i] = a->input[i]; ++i; }
-    cmd[i] = 0;
-    char *p = cmd;
-    while (*p == ' ') ++p;
-    char *arg = p;
-    while (*arg && *arg != ' ') ++arg;
-    if (*arg) { *arg = 0; arg++; while (*arg == ' ') ++arg; } else arg = (char *)"";
-
-    if (!cmd[0]) return;
-    if (str_eq(cmd, "help")) {
-        term_puts(a, "Commands: help version uptime time date ls [path] cat <path> pwd cd <path>");
-        term_puts(a, "  mkdir rm touch mv cp echo clear run <path> edit [path] files");
-    } else if (str_eq(cmd, "version")) {
-        term_puts(a, "HydrogenOS desktop v0");
-    } else if (str_eq(cmd, "uptime")) {
-        char line[48]; int z = 0;
-        const char *pre = "uptime: ";
-        while (pre[z]) { line[z] = pre[z]; ++z; }
-        append_num(line, &z, (int)(time_ms() / 1000));
-        line[z++] = 's'; line[z] = 0;
-        term_puts(a, line);
-    } else if (str_eq(cmd, "time")) {
-        char line[48]; int z = 0;
-        const char *pre = "time_ms: ";
-        while (pre[z]) { line[z] = pre[z]; ++z; }
-        append_num(line, &z, (int)time_ms());
-        line[z] = 0;
-        term_puts(a, line);
-    } else if (str_eq(cmd, "date")) {
-        char line[48];
-        CivilTime now;
-        if (wallclock_now(&now, 0, 0) == 0 &&
-            time_format(line, sizeof(line), TIME_FORMAT_LONG, &now) > 0)
-            term_puts(a, line);
-        else
-            term_puts(a, "date: wall clock unavailable");
-    } else if (str_eq(cmd, "pwd")) {
-        char cwd[128];
-        if (getcwd(cwd, sizeof(cwd))) term_puts(a, cwd); else term_puts(a, "pwd: failed");
-    } else if (str_eq(cmd, "cd")) {
-        if (chdir(arg) != 0) term_puts(a, "cd: no such directory");
-    } else if (str_eq(cmd, "clear")) {
-        a->scroll_count = 0;
-    } else if (str_eq(cmd, "ls")) {
-        const char *target = (arg && *arg) ? arg : ".";
-        int pos = 0, any = 0;
-        dirent_t de;
-        while (readdir_pos(target, pos, &de) == 1) { term_puts(a, de.d_name); any = 1; ++pos; }
-        if (!any) term_puts(a, "ls: empty");
-    } else if (str_eq(cmd, "cat")) {
-        if (!*arg) { term_puts(a, "usage: cat <path>"); return; }
-        int fd = (int)open(arg, 0);
-        if (fd < 0) { term_puts(a, "cat: open failed"); return; }
-        char buf[256];
-        long n = read(fd, buf, sizeof(buf) - 1);
-        close(fd);
-        if (n < 0) { term_puts(a, "cat: read failed"); return; }
-        buf[n] = 0;
-        term_puts(a, buf);
-    } else if (str_eq(cmd, "mkdir")) {
-        if (!*arg) { term_puts(a, "usage: mkdir <path>"); return; }
-        term_puts(a, sys_mkdir(arg) == 0 ? "mkdir: ok" : "mkdir: failed");
-    } else if (str_eq(cmd, "rm")) {
-        if (!*arg) { term_puts(a, "usage: rm <path>"); return; }
-        term_puts(a, sys_unlink(arg) == 0 ? "rm: ok" : "rm: failed");
-    } else if (str_eq(cmd, "touch")) {
-        if (!*arg) { term_puts(a, "usage: touch <path>"); return; }
-        term_puts(a, sys_writef(arg, "", 0) == 0 ? "touch: ok" : "touch: failed");
-    } else if (str_eq(cmd, "mv")) {
-        char *dst = arg;
-        while (*dst && *dst != ' ') ++dst;
-        if (!*dst) { term_puts(a, "usage: mv <src> <dst>"); return; }
-        *dst++ = 0; while (*dst == ' ') ++dst;
-        term_puts(a, sys_rename(arg, dst) == 0 ? "mv: ok" : "mv: failed");
-    } else if (str_eq(cmd, "cp")) {
-        char *dst = arg;
-        while (*dst && *dst != ' ') ++dst;
-        if (!*dst) { term_puts(a, "usage: cp <src> <dst>"); return; }
-        *dst++ = 0; while (*dst == ' ') ++dst;
-        int fd = (int)open(arg, 0);
-        if (fd < 0) { term_puts(a, "cp: open failed"); return; }
-        static char data[4096];
-        long n = read(fd, data, sizeof(data));
-        close(fd);
-        if (n < 0) { term_puts(a, "cp: read failed"); return; }
-        term_puts(a, sys_writef(dst, data, (unsigned long)n) == 0 ? "cp: ok" : "cp: failed");
-    } else if (str_eq(cmd, "echo")) {
-        term_puts(a, arg);
-    } else if (str_eq(cmd, "edit")) {
-        int idx = app_open_new(APP_EDIT);
-        if (idx >= 0 && *arg) editor_load_path(&g_apps[idx], arg);
-    } else if (str_eq(cmd, "files")) {
+/* Carries out what a program in a terminal asked the desktop for. */
+static void handle_terminal_request(const TerminalRequest *request) {
+    if (request->kind == TERMINAL_REQUEST_FILES) {
         app_open_new(APP_FILES);
-    } else if (str_eq(cmd, "run")) {
-        if (!*arg) { term_puts(a, "usage: run <path>"); return; }
-        long pid = spawn(arg);
-        if (pid < 0) { term_puts(a, "run: spawn failed"); return; }
-        int st = 0;
-        wait_pid((int)pid, &st);
-        char line[48]; int z = 0;
-        const char *pre = "run: status ";
-        while (pre[z]) { line[z] = pre[z]; ++z; }
-        append_num(line, &z, st);
-        line[z] = 0;
-        term_puts(a, line);
-    } else if (str_eq(cmd, "df")) {
-        sysinfo_t si;
-        if (sys_sysinfo(&si) != 0) { term_puts(a, "df: unavailable"); return; }
-        char line[128]; int z = 0;
-        if (si.fs_type == 1) { const char *p2 = "ext2 on /: "; while (*p2) line[z++] = *p2++; }
-        else { const char *p2 = "ramfs on /: "; while (*p2) line[z++] = *p2++; }
-        unsigned long total_mb = (unsigned long)si.total_blocks * si.block_size / (1024UL * 1024UL);
-        unsigned long free_mb = (unsigned long)si.free_blocks * si.block_size / (1024UL * 1024UL);
-        const char *t = "total "; while (*t) line[z++] = *t++;
-        append_num(line, &z, (int)total_mb);
-        const char *m = " MB, free "; while (*m) line[z++] = *m++;
-        append_num(line, &z, (int)free_mb);
-        const char *e = " MB"; while (*e) line[z++] = *e;
-        line[z] = 0;
-        term_puts(a, line);
-    } else if (str_eq(cmd, "free")) {
-        sysinfo_t si;
-        if (sys_sysinfo(&si) != 0) { term_puts(a, "free: unavailable"); return; }
-        unsigned long free_mb = (unsigned long)si.free_pages * si.page_size / (1024UL * 1024UL);
-        unsigned long total_mb = (unsigned long)si.total_pages * si.page_size / (1024UL * 1024UL);
-        char line[96]; int z = 0;
-        const char *p2 = "free: "; while (*p2) line[z++] = *p2++;
-        append_num(line, &z, (int)free_mb);
-        const char *m = " MB of "; while (*m) line[z++] = *m++;
-        append_num(line, &z, (int)total_mb);
-        const char *e = " MB"; while (*e) line[z++] = *e;
-        line[z] = 0;
-        term_puts(a, line);
-    } else if (str_eq(cmd, "mount")) {
-        sysinfo_t si;
-        if (sys_sysinfo(&si) != 0) { term_puts(a, "mount: unavailable"); return; }
-        if (si.fs_type == 1) term_puts(a, "ext2 on / (disk, rw)");
-        else term_puts(a, "ramfs on / (memory, fallback)");
-    } else if (str_eq(cmd, "write")) {
-        char *path = arg;
-        char *text = path;
-        while (*text && *text != ' ') ++text;
-        if (!*text) { term_puts(a, "usage: write <path> <text>"); return; }
-        *text++ = 0;
-        unsigned long n = strlen(text);
-        term_puts(a, sys_writef(path, text, n) == 0 ? "write: ok" : "write: failed");
-    } else {
-        term_puts(a, "unknown command; try 'help'");
-    }
-}
-
-static int term_key(App *a, char c) {
-    if (c == '\r' || c == '\n') {
-        a->input[a->input_len] = 0;
-        if (a->input_len > 0) term_puts(a, a->input);
-        term_execute(a);
-        a->input_len = 0;
-        a->input[0] = 0;
-        return 1;
-    }
-    if (c == '\b' || c == 0x7F) {
-        if (a->input_len > 0) a->input[--a->input_len] = 0;
-        return 0;
-    }
-    if (c < 0x20 || c > 0x7E) return 0;
-    if (a->input_len < 255) {
-        a->input[a->input_len++] = c;
-        a->input[a->input_len] = 0;
-    }
-    return 0;
-}
-
-/* ---------------- editor app ---------------- */
-
-static void editor_save(App *a) {
-    a->text[a->text_len] = 0;
-    const char *path = a->path[0] ? a->path : "/notes.txt";
-    if (sys_writef(path, a->text, (unsigned long)a->text_len) == 0) {
-        /* status in the first terminal */
-        for (int i = 0; i < MAX_APPS; ++i) {
-            if (g_apps[i].used && g_apps[i].kind == APP_TERM) {
-                term_puts(&g_apps[i], "editor: saved");
-                if (!g_apps[i].minimized && g_apps[i].win && g_apps[i].win->visible) {
-                    draw_terminal(&g_apps[i]);
-                    comp_damage_rect(g_bg, g_apps[i].win->x, g_apps[i].win->y,
-                                     g_apps[i].win->w, g_apps[i].win->h);
-                }
-                break;
-            }
-        }
-    }
-}
-
-static void editor_load_path(App *e, const char *path) {
-    str_copy_to(e->path, path, sizeof(e->path));
-    int fd = (int)open(path, 0);
-    if (fd < 0) return;
-    long n = read(fd, e->text, sizeof(e->text) - 1);
-    close(fd);
-    if (n < 0) return;
-    e->text_len = (int)n;
-    e->text[e->text_len] = 0;
-    e->cursor = e->text_len;
-}
-
-static void editor_key(App *a, char c) {
-    if (c == 0x13) { editor_save(a); return; }
-    if (c == 0x0F) { editor_load_path(a, a->path[0] ? a->path : "/notes.txt"); return; }
-    if (c == 0x0E) { a->text_len = 0; a->cursor = 0; a->text[0] = 0; return; }
-    if (c == '\r' || c == '\n') {
-        if (a->text_len < (int)sizeof(a->text) - 2) {
-            for (int i = a->text_len; i > a->cursor; --i) a->text[i] = a->text[i-1];
-            a->text[a->cursor] = '\n';
-            a->text_len++; a->cursor++;
-        }
         return;
     }
-    if (c == '\b' || c == 0x7F) {
-        if (a->cursor > 0) {
-            for (int i = a->cursor - 1; i < a->text_len - 1; ++i) a->text[i] = a->text[i+1];
-            a->text_len--; a->cursor--;
-        }
-        return;
-    }
-    if (c == '\t') c = ' ';
-    if (c < 0x20 || c > 0x7E) return;
-    if (a->text_len < (int)sizeof(a->text) - 2) {
-        for (int i = a->text_len; i > a->cursor; --i) a->text[i] = a->text[i-1];
-        a->text[a->cursor] = c;
-        a->text_len++; a->cursor++;
-    }
+    int idx = app_open_new(APP_EDIT);
+    if (idx < 0 || !request->argument[0]) return;
+    App *e = &g_apps[idx];
+    editor_open(e->editor, request->argument);
+    draw_app_content(e);
+    comp_damage_rect(g_bg, e->win->x, e->win->y, e->win->w, e->win->h);
 }
 
 /* ---------------- rendering per app ---------------- */
@@ -699,138 +491,47 @@ static void draw_titlebar(App *a) {
     Window *w = a->win;
     int focused = (g_focus >= 0 && &g_apps[g_focus] == a) && !a->minimized;
     fill_rect(w, 0, 0, w->w, TITLE_H, focused ? COL_TITLE_F : COL_TITLE);
-    fill_rect(w, 0, TITLE_H, w->w, 1, COL_ACCENT);
+    fill_rect(w, 0, TITLE_H, w->w, 1, COL_TITLE_BORDER);
     fill_circle(w, 18, 15, 6, COL_CLOSE);
     fill_circle(w, 38, 15, 6, COL_MIN);
     fill_circle(w, 58, 15, 6, COL_MAX);
     comp_text_render(w, 78, 7, a->title, COL_TEXT);
+    if (a->kind == APP_EDIT && a->editor && editor_modified(a->editor))
+        fill_circle(w, 78 + (int)strlen(a->title) * 8 + 12, 15, 4, COL_ACCENT);
 }
 
 static void draw_terminal(App *a) {
     Window *w = a->win;
+    AppTerminalTheme theme;
     fill_rect(w, 0, TITLE_H, w->w, w->h - TITLE_H, COL_WIN);
     draw_titlebar(a);
-    int cols = (w->w - 2 * PAD) / 8; if (cols < 1) cols = 1;
-    int rows = (w->h - TITLE_H - PAD) / LINE_H; if (rows < 1) rows = 1;
-
-    /* Prompt pinned to the top; command output flows below it. */
-    int prompt_y = TITLE_H + PAD / 2;
-    fill_rect(w, 0, prompt_y, w->w, LINE_H, COL_WIN);
-    comp_text_render(w, PAD, prompt_y, "hydrogen$ ", COL_PROMPT);
-    char in[256];
-    int ik = 0;
-    for (int i = 0; i < a->input_len && ik < cols - 10 && ik < 255; ++i) in[ik++] = a->input[i];
-    in[ik] = 0;
-    comp_text_render(w, PAD + 10 * 8, prompt_y, in, COL_INPUT);
-    int cx = PAD + (10 + a->input_len) * 8;
-    if (cx < w->w - 4) fill_rect(w, cx, prompt_y, 2, LINE_H, COL_INPUT);
-
-    int out_rows = rows - 1;
-    int first = a->scroll_count - out_rows - a->scroll_off;
-    if (first < 0) first = 0;
-    int row = 0;
-    for (int i = first; i < a->scroll_count && row < out_rows; ++i, ++row) {
-        char tmp[128]; int k = 0;
-        while (a->scroll[i][k] && k < cols && k < 127) { tmp[k] = a->scroll[i][k]; ++k; }
-        tmp[k] = 0;
-        comp_text_render(w, PAD, TITLE_H + PAD / 2 + (row + 1) * LINE_H, tmp, COL_TEXT);
-    }
-}
-
-static void editor_cursor_line_col(App *a, int *out_line, int *out_col) {
-    int line = 0, col = 0;
-    for (int i = 0; i < a->cursor && i < a->text_len; ++i) {
-        if (a->text[i] == '\n') { line++; col = 0; } else col++;
-    }
-    *out_line = line; *out_col = col;
+    app_terminal_theme(&g_th, &theme);
+    app_terminal_draw(a->term, w, TITLE_H, g_focus >= 0 && &g_apps[g_focus] == a, &theme);
 }
 
 static void draw_editor(App *a) {
-    Window *w = a->win;
-    fill_rect(w, 0, TITLE_H, w->w, w->h - TITLE_H, COL_EDIT_BG);
-    draw_titlebar(a);
-    int cols = (w->w - 2 * PAD) / 8; if (cols < 1) cols = 1;
-    int rows = (w->h - TITLE_H - PAD) / LINE_H;
-    int line = 0, start = 0, draw_row = 0;
-    for (int i = 0; i <= a->text_len && draw_row < rows; ++i) {
-        if (i == a->text_len || a->text[i] == '\n') {
-            if (line >= a->scroll_line) {
-                char tmp[160]; int k = 0, j = start;
-                while (j < i && k < cols && k < 159) tmp[k++] = a->text[j++];
-                tmp[k] = 0;
-                comp_text_render(w, PAD, TITLE_H + PAD / 2 + draw_row * LINE_H, tmp, COL_EDIT_FG);
-                draw_row++;
-            }
-            start = i + 1; line++;
-        }
-    }
-    editor_cursor_line_col(a, &line, &cols);
-    line -= a->scroll_line;
-    if (line >= 0 && line < rows) {
-        int cx = PAD + cols * 8;
-        int cy = TITLE_H + PAD / 2 + line * LINE_H;
-        fill_rect(w, cx, cy, 2, LINE_H, COL_EDIT_FG);
+    if (editor_draw(a->editor, a->win, &g_th, TITLE_H) & EDITOR_DRAW_TITLE) {
+        editor_title(a->editor, a->title, sizeof(a->title));
+        draw_titlebar(a);
+        comp_damage_rect(g_bg, a->win->x, a->win->y, a->win->w, TITLE_H);
     }
 }
 
 static void draw_files(App *a) {
-    Window *w = a->win;
-    fill_rect(w, 0, TITLE_H, w->w, w->h - TITLE_H, COL_EDIT_BG);
+    fm_draw(&a->files, a->win);
     draw_titlebar(a);
-    comp_text_render(w, PAD, TITLE_H + 6, a->cwd, COL_EDIT_FG);
-    int row = 0;
-    int y0 = TITLE_H + 28;
-    int show_dotdot = !str_eq(a->cwd, "/");
-    if (show_dotdot) {
-        fill_rect(w, 0, y0 + row * 20, w->w, 20, a->sel == -2 ? COL_MENU_HI : COL_EDIT_BG);
-        comp_text_render(w, PAD, y0 + row * 20 + 2, "../", COL_EDIT_FG);
-        row++;
-    }
-    int pos = 0, idx = 0;
-    dirent_t de;
-    while (readdir_pos(a->cwd, pos, &de) == 1) {
-        uint32_t bgc = (a->sel == idx) ? COL_MENU_HI : COL_EDIT_BG;
-        fill_rect(w, 0, y0 + row * 20, w->w, 20, bgc);
-        char label[300];
-        int k = 0;
-        if (de.d_type == 4) { label[k++] = '['; }
-        for (int i = 0; de.d_name[i] && k < 250; ++i) label[k++] = de.d_name[i];
-        if (de.d_type == 4) label[k++] = ']';
-        label[k] = 0;
-        comp_text_render(w, PAD, y0 + row * 20 + 2, label, COL_EDIT_FG);
-        row++; idx++; pos++;
-        if (y0 + row * 20 > w->h - 24) break;
-    }
-    if (idx == 0 && !show_dotdot)
-        comp_text_render(w, PAD, y0 + 2, "(empty)", COL_DIM);
 }
 
 static void draw_settings(App *a) {
-    Window *w = a->win;
-    fill_rect(w, 0, TITLE_H, w->w, w->h - TITLE_H, COL_EDIT_BG);
+    a->settings_ui.save_failed = g_settings_save_failed;
+    settings_ui_draw(&a->settings_ui, a->win);
     draw_titlebar(a);
-    comp_text_render(w, PAD, TITLE_H + 16, "Appearance", COL_EDIT_FG);
-    rounded_rect(w, PAD, TITLE_H + 44, w->w - 2 * PAD, 40, 6, COL_MENU_HI);
-    comp_text_render(w, PAD + 12, TITLE_H + 56,
-                     g_theme == 0 ? "Background: Dark (click)" : "Background: Light (click)",
-                     COL_EDIT_FG);
-    comp_text_render(w, PAD, TITLE_H + 110, "Keyboard layout", COL_EDIT_FG);
-    comp_text_render(w, PAD, TITLE_H + 136, g_layout == 0 ? "DE" : "US", COL_EDIT_FG);
-    {
-        char line[64]; int z = 0;
-        const char *pre = "Resolution: ";
-        while (pre[z]) { line[z] = pre[z]; ++z; }
-        append_num(line, &z, SW); line[z++] = 'x';
-        append_num(line, &z, SH); line[z] = 0;
-        comp_text_render(w, PAD, TITLE_H + 176, line, COL_EDIT_FG);
-    }
-    comp_text_render(w, PAD, TITLE_H + 202, "HydrogenOS Desktop v0", COL_DIM);
 }
 
 static void draw_app_content(App *a) {
     switch (a->kind) {
     case APP_TERM: draw_terminal(a); break;
-    case APP_EDIT: draw_editor(a); break;
+    case APP_EDIT: editor_invalidate(a->editor); draw_editor(a); break;
     case APP_FILES: draw_files(a); break;
     default: draw_settings(a); break;
     }
@@ -847,86 +548,451 @@ static int app_index_of(App *a) {
     return -1;
 }
 
-static void focus_app(App *a) {
-    int idx = app_index_of(a);
-    if (idx < 0) return;
-    g_focus = idx;
-    if (a->win) comp_raise(a->win);
-    /* redraw title bars of all visible apps */
+static CompRect work_area(void) {
+    return wm_work_area(SW, SH, TOPBAR_H, TASKBAR_H);
+}
+
+static void refresh_taskbar(void) {
+    draw_taskbar();
+    comp_damage_rect(g_bg, 0, SH - TASKBAR_H, SW, TASKBAR_H);
+}
+
+static void refresh_topbar(void) {
+    draw_topbar();
+    comp_damage_rect(g_bg, 0, 0, SW, TOPBAR_H);
+}
+
+/* Repaints what shows which window has the focus: the top bar and the title bars. */
+static void refresh_focus_chrome(void) {
+    refresh_topbar();
     for (int i = 0; i < MAX_APPS; ++i) {
         App *o = &g_apps[i];
         if (o->used && o->win && o->win->visible && !o->minimized) {
-            draw_titlebar(o);
-            comp_damage_rect(g_bg, o->win->x, o->win->y, o->win->w, TITLE_H);
+            if (o->kind == APP_TERM) {
+                draw_terminal(o);
+                comp_damage_rect(g_bg, o->win->x, o->win->y, o->win->w, o->win->h);
+            } else {
+                draw_titlebar(o);
+                comp_damage_rect(g_bg, o->win->x, o->win->y, o->win->w, TITLE_H);
+            }
         }
     }
 }
 
-static void app_minimize(App *a) {
-    a->minimized = 1;
-    if (a->win) a->win->visible = 0;
-    if (g_focus >= 0 && &g_apps[g_focus] == a) {
-        g_focus = -1;
-        for (int i = MAX_APPS - 1; i >= 0; --i)
-            if (g_apps[i].used && !g_apps[i].minimized) { g_focus = i; break; }
+/* Puts the window on top of the other app windows. The top bar and the taskbar
+   stay above them all, so a window's shadow never darkens them. */
+static void raise_app_window(App *a) {
+    a->focus_stamp = ++g_focus_clock;
+    comp_raise(a->win);
+    comp_raise(g_topbar);
+    comp_raise(g_taskbar);
+}
+
+/* The visible window that was focused last, or -1. */
+static int topmost_app(void) {
+    int top = -1;
+    for (int i = 0; i < MAX_APPS; ++i) {
+        App *a = &g_apps[i];
+        if (!a->used || a->minimized || !a->win) continue;
+        if (top < 0 || a->focus_stamp > g_apps[top].focus_stamp) top = i;
     }
-    draw_taskbar();
-    if (a->win) comp_damage_rect(g_bg, a->win->x, a->win->y, a->win->w, a->win->h);
-    comp_damage_rect(g_bg, 0, SH - TASKBAR_H, SW, TASKBAR_H);
+    return top;
+}
+
+/* The window under the pointer: the topmost visible one, bars excluded. */
+static App *app_at(int mx, int my) {
+    App *hit = 0;
+    if (my < TOPBAR_H || my >= SH - TASKBAR_H) return 0;
+    for (int i = 0; i < MAX_APPS; ++i) {
+        App *a = &g_apps[i];
+        if (!a->used || a->minimized || !a->win || !a->win->visible) continue;
+        if (!point_in_rect(mx, my, a->win->x, a->win->y, a->win->w, a->win->h)) continue;
+        if (!hit || a->focus_stamp > hit->focus_stamp) hit = a;
+    }
+    return hit;
+}
+
+/* ---------------- motion ---------------- */
+
+/* Windows grow from and shrink to this fraction of their size as they open and
+   close; the launcher moves less because it is smaller and sits under the pointer. */
+#define OPEN_SCALE     (ANIM_ONE * 92 / 100)
+#define LAUNCHER_SCALE (ANIM_ONE * 96 / 100)
+/* The size a minimized window shrinks to, at its taskbar icon. */
+#define MINIMIZE_SIZE  32
+/* Animation frames are not rendered more often than this. */
+#define MOTION_FRAME_MS 8
+#define MAX_GHOSTS     4
+
+/* A closed window that is still fading out. Its app is already gone; the
+   window is destroyed once the motion ends. */
+typedef struct Ghost {
+    int used;
+    Window *win;
+    WindowMotion motion;
+} Ghost;
+
+static Ghost g_ghosts[MAX_GHOSTS];
+static WindowMotion g_launcher_motion;
+static AnimClock g_motion_clock;
+static uint32_t g_motion_pending_ms;
+static int g_motion_running;
+
+static void style_app_window(Window *win, int maximized);
+
+static int motion_enabled(void) { return !g_settings.reduce_motion; }
+
+static CompRect window_home(const Window *win) {
+    CompRect home = { win->x, win->y, win->w, win->h };
+    return home;
+}
+
+/* Hands the compositor the pose of the current frame, or none once at rest. */
+static void window_show_pose(Window *win, const WindowMotion *motion) {
+    if (!motion->active) {
+        comp_clear_window_pose(win);
+        return;
+    }
+    CompRect home = window_home(win);
+    MotionPose pose = window_motion_pose(motion, &home);
+    comp_set_window_pose(win, &pose.rect, pose.opacity);
+}
+
+static void window_start_motion(Window *win, WindowMotion *motion, const MotionPose *from,
+                                const MotionPose *to, int to_is_home, AnimTuning tuning) {
+    CompRect home = window_home(win);
+    window_motion_begin(motion, &home, from, to, to_is_home, tuning, motion_enabled());
+    window_show_pose(win, motion);
+}
+
+static CompRect dock_icon_rect(int kind) {
+    return motion_rect_collapsed(tb_icon_x(kind) + tb_icon_s() / 2, tb_y() + tb_icon_s() / 2, MINIMIZE_SIZE);
+}
+
+/* The window rests: no pose, the final style, and out of sight if minimized. */
+static void app_motion_settled(App *a) {
+    window_motion_finish(&a->motion);
+    comp_clear_window_pose(a->win);
+    if (a->minimized) a->win->visible = 0;
+    style_app_window(a->win, a->maximized);
+}
+
+/* A press on a window that is still moving takes it to where it is going, so
+   dragging and resizing work from its resting geometry. */
+static void app_settle_motion(App *a) {
+    if (a->win && a->motion.active) app_motion_settled(a);
+}
+
+static void launcher_motion_settled(void) {
+    window_motion_finish(&g_launcher_motion);
+    comp_clear_window_pose(g_launcher);
+    g_launcher->visible = spotlight_is_open();
+}
+
+/* The launcher fades and scales in and out instead of appearing. It stays
+   visible until the motion out has finished. */
+static void launcher_shown_changed(Window *win, int shown) {
+    CompRect home = window_home(win);
+    MotionPose rest = { home, MOTION_OPAQUE };
+    MotionPose away = { motion_rect_scaled(&home, LAUNCHER_SCALE), 0 };
+
+    if (shown) {
+        win->visible = 1;
+        window_start_motion(win, &g_launcher_motion, &away, &rest, 1, ANIM_TUNING_PANEL);
+        return;
+    }
+    window_start_motion(win, &g_launcher_motion, &rest, &away, 0, ANIM_TUNING_PANEL);
+    if (!g_launcher_motion.active) win->visible = 0;
+}
+
+/* Takes over the window of an app that is closing so it can fade out. Returns
+   0 when it cannot (no motion, nothing to see, no slot); the caller then
+   destroys the window. */
+static int ghost_adopt(App *a) {
+    Window *win = a->win;
+    if (!motion_enabled() || !win->visible || a->minimized) return 0;
+    Ghost *ghost = 0;
+    for (int i = 0; i < MAX_GHOSTS && !ghost; ++i)
+        if (!g_ghosts[i].used) ghost = &g_ghosts[i];
+    if (!ghost) return 0;
+
+    CompRect home = window_home(win);
+    MotionPose rest = { home, MOTION_OPAQUE };
+    MotionPose away = { motion_rect_scaled(&home, OPEN_SCALE), 0 };
+    ghost->used = 1;
+    ghost->win = win;
+    ghost->motion = a->motion;
+    window_start_motion(win, &ghost->motion, &rest, &away, 0, ANIM_TUNING_WINDOW);
+    return 1;
+}
+
+static void dock_init(void) {
+    for (int i = 0; i < DOCK_ITEMS; ++i) {
+        anim_spring_init(&g_dock[i].hover, 0, ANIM_TUNING_CONTROL);
+        anim_spring_init(&g_dock[i].shown, 0, ANIM_TUNING_CONTROL);
+        anim_spring_init(&g_dock[i].active, 0, ANIM_TUNING_CONTROL);
+    }
+}
+
+/* Points every dock spring at where its item should be: highlighted under the
+   pointer or while the launcher is open, marked while the app has windows. */
+static void dock_retarget(void) {
+    int hovered = -1;
+    if (g_my >= SH - TASKBAR_H) {
+        for (int i = 0; i < DOCK_ITEMS; ++i)
+            if (point_in_rect(g_mx, g_my, dock_icon_x(i), dock_icon_y(i), tb_icon_s(), tb_icon_s()))
+                hovered = i;
+    }
+    for (int i = 0; i < DOCK_ITEMS; ++i) {
+        int presence = i == 0 ? 0 : app_presence(i - 1);
+        int highlighted = i == hovered || (i == 0 && spotlight_is_open());
+        anim_spring_go(&g_dock[i].hover, highlighted ? ANIM_ONE : 0, motion_enabled());
+        anim_spring_go(&g_dock[i].shown, presence ? ANIM_ONE : 0, motion_enabled());
+        anim_spring_go(&g_dock[i].active, presence == 2 ? ANIM_ONE : 0, motion_enabled());
+    }
+}
+
+/* Repaints the dock items whose appearance changed. */
+static int dock_repaint(void) {
+    int repainted = 0;
+    for (int i = 0; i < DOCK_ITEMS; ++i) {
+        if (!dock_item_stale(i)) continue;
+        dock_item_refresh(i);
+        repainted = 1;
+    }
+    return repainted;
+}
+
+static int dock_moving(void) {
+    for (int i = 0; i < DOCK_ITEMS; ++i)
+        if (!anim_spring_settled(&g_dock[i].hover) || !anim_spring_settled(&g_dock[i].shown) ||
+            !anim_spring_settled(&g_dock[i].active))
+            return 1;
+    return 0;
+}
+
+static int motion_running(void) {
+    if (g_launcher_motion.active || dock_moving()) return 1;
+    for (int i = 0; i < MAX_GHOSTS; ++i)
+        if (g_ghosts[i].used) return 1;
+    for (int i = 0; i < MAX_APPS; ++i)
+        if (g_apps[i].used && g_apps[i].win && g_apps[i].motion.active) return 1;
+    return 0;
+}
+
+/* Lets elapsed_ms pass for every running motion and presents their new poses. */
+static void motion_advance(uint32_t elapsed_ms) {
+    for (int i = 0; i < MAX_APPS; ++i) {
+        App *a = &g_apps[i];
+        if (!a->used || !a->win || !a->motion.active) continue;
+        if (window_motion_advance(&a->motion, elapsed_ms)) window_show_pose(a->win, &a->motion);
+        else app_motion_settled(a);
+    }
+    for (int i = 0; i < MAX_GHOSTS; ++i) {
+        Ghost *ghost = &g_ghosts[i];
+        if (!ghost->used) continue;
+        if (window_motion_advance(&ghost->motion, elapsed_ms)) {
+            window_show_pose(ghost->win, &ghost->motion);
+        } else {
+            comp_destroy_window(ghost->win);
+            ghost->used = 0;
+        }
+    }
+    if (g_launcher_motion.active) {
+        if (window_motion_advance(&g_launcher_motion, elapsed_ms)) window_show_pose(g_launcher, &g_launcher_motion);
+        else launcher_motion_settled();
+    }
+    for (int i = 0; i < DOCK_ITEMS; ++i) {
+        anim_spring_advance(&g_dock[i].hover, elapsed_ms);
+        anim_spring_advance(&g_dock[i].shown, elapsed_ms);
+        anim_spring_advance(&g_dock[i].active, elapsed_ms);
+    }
+}
+
+/* One step of the motion clock per loop pass. Returns nonzero when something
+   was moved or repainted and the frame must be rendered. */
+static int motion_frame(void) {
+    uint32_t elapsed = anim_clock_advance(&g_motion_clock, time_ms());
+    dock_retarget();
+    int moved = 0;
+    if (motion_running()) {
+        /* The first pass of a motion has had no time to move yet. */
+        if (g_motion_running) g_motion_pending_ms += elapsed;
+        g_motion_running = 1;
+        if (g_motion_pending_ms >= MOTION_FRAME_MS) {
+            motion_advance(g_motion_pending_ms);
+            g_motion_pending_ms = 0;
+            moved = 1;
+        }
+    } else {
+        g_motion_running = 0;
+        g_motion_pending_ms = 0;
+    }
+    return dock_repaint() || moved;
+}
+
+/* Reduce motion was switched on: everything in flight lands where it was going. */
+static void motion_settle_all(void) {
+    for (int i = 0; i < MAX_APPS; ++i)
+        if (g_apps[i].used) app_settle_motion(&g_apps[i]);
+    for (int i = 0; i < MAX_GHOSTS; ++i) {
+        if (!g_ghosts[i].used) continue;
+        comp_destroy_window(g_ghosts[i].win);
+        g_ghosts[i].used = 0;
+    }
+    if (g_launcher_motion.active) launcher_motion_settled();
+    dock_retarget();
+}
+
+static void bring_to_front(App *a, int idx) {
+    g_focus = idx;
+    if (a->win) raise_app_window(a);
+    refresh_focus_chrome();
+}
+
+static void focus_app(App *a) {
+    int idx = app_index_of(a);
+    if (idx >= 0 && idx != g_focus) bring_to_front(a, idx);
+}
+
+static void app_minimize(App *a) {
+    if (!a->used || a->minimized) return;
+    a->minimized = 1;
+    a->dragging = 0;
+    a->resizing = 0;
+    if (a->win) {
+        /* The window stays visible while it shrinks into its taskbar icon;
+           app_motion_settled() hides it. */
+        CompRect home = window_home(a->win);
+        MotionPose rest = { home, MOTION_OPAQUE };
+        MotionPose docked = { dock_icon_rect(a->kind), 0 };
+        window_start_motion(a->win, &a->motion, &rest, &docked, 0, ANIM_TUNING_WINDOW);
+        if (!a->motion.active) a->win->visible = 0;
+    }
+    if (g_focus == app_index_of(a)) g_focus = topmost_app();
+    refresh_focus_chrome();
+    refresh_taskbar();
+}
+
+static void app_restore(App *a) {
+    if (!a->used || !a->minimized) return;
+    a->minimized = 0;
+    if (a->win) {
+        CompRect home = window_home(a->win);
+        MotionPose rest = { home, MOTION_OPAQUE };
+        MotionPose docked = { dock_icon_rect(a->kind), 0 };
+        a->win->visible = 1;
+        window_start_motion(a->win, &a->motion, &docked, &rest, 1, ANIM_TUNING_WINDOW);
+    }
+    bring_to_front(a, app_index_of(a));
+    refresh_taskbar();
 }
 
 static void app_close(App *a) {
     if (!a->used) return;
+    int idx = app_index_of(a);
+    if (a->term) {
+        terminal_destroy(a->term);
+        a->term = 0;
+    }
     if (a->win) {
-        comp_damage_rect(g_bg, a->win->x, a->win->y, a->win->w, a->win->h);
-        comp_destroy_window(a->win);
+        if (!ghost_adopt(a)) comp_destroy_window(a->win);
         a->win = 0;
     }
-    int was_focus = (g_focus >= 0 && &g_apps[g_focus] == a);
+    editor_destroy(a->editor);
+    a->editor = 0;
+    if (a->kind == APP_FILES) fm_destroy(&a->files);
     a->used = 0;
     a->minimized = 0;
     a->dragging = 0;
     a->resizing = 0;
-    if (was_focus) {
-        g_focus = -1;
-        for (int i = MAX_APPS - 1; i >= 0; --i)
-            if (g_apps[i].used && !g_apps[i].minimized) { g_focus = i; break; }
-    }
-    draw_taskbar();
-    comp_damage_rect(g_bg, 0, SH - TASKBAR_H, SW, TASKBAR_H);
+    if (g_click_app == idx) g_click_app = -1;
+    if (g_focus == idx) g_focus = topmost_app();
+    refresh_focus_chrome();
+    refresh_taskbar();
 }
 
-/* Floating windows get rounded corners and a shadow; maximized ones are
-   flush with the screen edges. */
+/* Floating windows get rounded corners and a shadow; maximized ones fill the
+   work area edge to edge and cast none. */
 static void style_app_window(Window *win, int maximized) {
     CompWindowStyle style;
     comp_style_window(&style);
-    if (maximized) style.corner_radius = 0;
+    if (maximized) {
+        style.corner_radius = 0;
+        style.shadow = 0;
+    }
     comp_set_window_style(win, &style);
 }
 
-static void app_maximize(App *a) {
+/* Maximizes into the work area, or restores the geometry from before. */
+static void app_toggle_maximize(App *a) {
     Window *w = a->win;
     if (!w) return;
+    CompRect before = window_home(w);
     if (!a->maximized) {
+        CompRect work = work_area();
         int rx = w->x, ry = w->y, rw = w->w, rh = w->h;
-        if (comp_resize_window(w, SW, SH - TASKBAR_H) != 0) return;
+        if (comp_resize_window(w, work.w, work.h) != 0) return;
         a->rx = rx; a->ry = ry; a->rw = rw; a->rh = rh;
-        w->x = 0; w->y = 0;
+        w->x = work.x; w->y = work.y;
         a->maximized = 1;
     } else {
         if (comp_resize_window(w, a->rw, a->rh) != 0) return;
         w->x = a->rx; w->y = a->ry;
         a->maximized = 0;
     }
-    style_app_window(w, a->maximized);
+    /* The window keeps its floating look, corners and shadow, while it
+       travels; app_motion_settled() applies the final style. */
+    style_app_window(w, motion_enabled() ? 0 : a->maximized);
     draw_app_content(a);
-    comp_damage_rect(g_bg, w->x, w->y, w->w, w->h);
+    CompRect home = window_home(w);
+    MotionPose from = { before, MOTION_OPAQUE };
+    MotionPose rest = { home, MOTION_OPAQUE };
+    window_start_motion(w, &a->motion, &from, &rest, 1, ANIM_TUNING_WINDOW);
+}
+
+/* Alt+Tab: focuses the next open window. */
+static void cycle_focus(void) {
+    for (int step = 1; step <= MAX_APPS; ++step) {
+        int i = (g_focus + step + MAX_APPS) % MAX_APPS;
+        if (!g_apps[i].used || g_apps[i].minimized) continue;
+        focus_app(&g_apps[i]);
+        return;
+    }
+}
+
+/* What a click on a taskbar icon does to the windows of that app. */
+static void dock_click(int kind) {
+    int target = -1;
+    for (int i = 0; i < MAX_APPS; ++i) {
+        App *a = &g_apps[i];
+        if (!a->used || a->kind != kind) continue;
+        /* Visible windows win over minimized ones, then the most recent. */
+        if (target < 0 || (g_apps[target].minimized && !a->minimized) ||
+            (g_apps[target].minimized == a->minimized && a->focus_stamp > g_apps[target].focus_stamp))
+            target = i;
+    }
+    switch (wm_dock_action(target >= 0, target >= 0 && g_apps[target].minimized,
+                           target >= 0 && target == g_focus)) {
+    case WM_DOCK_LAUNCH: app_open_new(kind); break;
+    case WM_DOCK_RESTORE: app_restore(&g_apps[target]); break;
+    case WM_DOCK_RAISE: focus_app(&g_apps[target]); break;
+    case WM_DOCK_MINIMIZE: app_minimize(&g_apps[target]); break;
+    }
 }
 
 static int find_free_slot(void) {
     for (int i = 0; i < MAX_APPS; ++i) if (!g_apps[i].used) return i;
     return -1;
+}
+
+static uint32_t app_background(int kind) {
+    switch (kind) {
+    case APP_EDIT: return COL_EDIT_BG;
+    case APP_FILES:
+    case APP_SETTINGS: return g_th.surface;
+    default: return COL_WIN;
+    }
 }
 
 static int app_open_new(int kind) {
@@ -935,116 +1001,280 @@ static int app_open_new(int kind) {
     App *a = &g_apps[idx];
     for (int i = 0; i < (int)sizeof(App); ++i) ((char *)a)[i] = 0;
 
+    CompRect work = work_area();
     int w = SW * 45 / 100, h = SH * 62 / 100;
     if (w < 720) w = 720;
     if (w > SW - 120) w = SW - 120;
     if (h < 420) h = 420;
-    if (h > SH - TASKBAR_H - 80) h = SH - TASKBAR_H - 80;
-    if (kind == APP_FILES || kind == APP_SETTINGS) { w = 620; h = 460; }
+    if (h > work.h - 80) h = work.h - 80;
+    if (kind == APP_FILES) { w = 760; h = 500; }
+    if (kind == APP_SETTINGS) { w = 700; h = 480; }
+    if (w > SW) w = SW;
+    if (h > work.h) h = work.h;
     int x = (SW - w) / 2 + (idx % 4) * 30 - 60;
-    int y = (SH - TASKBAR_H - h) / 2 + (idx % 4) * 30 - 40;
+    int y = work.y + (work.h - h) / 2 + (idx % 4) * 30 - 40;
     if (x < 0) x = 0;
-    if (y < 0) y = 0;
+    if (y < work.y) y = work.y;
     if (x + w > SW) x = SW - w;
-    if (y + h > SH - TASKBAR_H) y = SH - TASKBAR_H - h;
+    if (y + h > work.y + work.h) y = work.y + work.h - h;
 
     a->used = 1;
     a->kind = kind;
     a->win = comp_create_window(x, y, w, h);
     if (!a->win) { a->used = 0; return -1; }
-    a->win->bg_color = (kind == APP_EDIT || kind == APP_FILES || kind == APP_SETTINGS) ? COL_EDIT_BG : COL_WIN;
+    a->win->bg_color = app_background(kind);
     style_app_window(a->win, 0);
 
-    const char *t = "Terminal";
-    if (kind == APP_EDIT) t = "Editor";
-    else if (kind == APP_FILES) t = "Files";
-    else if (kind == APP_SETTINGS) t = "Settings";
-    str_copy_to(a->title, t, sizeof(a->title));
+    str_copy_to(a->title, app_kind_name(kind), sizeof(a->title));
 
     if (kind == APP_TERM) {
-        term_puts(a, "HydrogenOS shell app");
-        term_puts(a, "Type 'help'. Drag the title bar to move.");
+        a->term = app_terminal_open(a->win, TITLE_H);
+        if (!a->term) {
+            comp_destroy_window(a->win);
+            a->win = 0;
+            a->used = 0;
+            return -1;
+        }
     } else if (kind == APP_EDIT) {
-        a->path[0] = 0;
+        a->editor = editor_create();
+        if (!a->editor) {
+            comp_destroy_window(a->win);
+            a->win = 0;
+            a->used = 0;
+            return -1;
+        }
     } else if (kind == APP_FILES) {
-        getcwd(a->cwd, sizeof(a->cwd));
-        a->sel = 0;
+        char cwd[FM_PATH_CAP];
+        if (!getcwd(cwd, sizeof(cwd))) cwd[0] = 0;
+        if (fm_init(&a->files, &g_th, TITLE_H, cwd) != 0) {
+            comp_destroy_window(a->win);
+            a->win = 0;
+            a->used = 0;
+            return -1;
+        }
+    } else if (kind == APP_SETTINGS) {
+        settings_ui_init(&a->settings_ui, &g_settings, &g_th, draw_icon_os, TITLE_H);
     }
 
-    g_focus = idx;
-    comp_raise(a->win);
     draw_app_content(a);
-    draw_taskbar();
-    comp_damage_rect(g_bg, x, y, w, h);
-    comp_damage_rect(g_bg, 0, SH - TASKBAR_H, SW, TASKBAR_H);
+    {
+        CompRect home = window_home(a->win);
+        MotionPose rest = { home, MOTION_OPAQUE };
+        MotionPose small = { motion_rect_scaled(&home, OPEN_SCALE), 0 };
+        window_start_motion(a->win, &a->motion, &small, &rest, 1, ANIM_TUNING_WINDOW);
+    }
+    bring_to_front(a, idx);
+    refresh_taskbar();
     return idx;
+}
+
+/* Moves shell output into the terminal windows and serves their requests. A
+   shell that ended cleanly closes its window; one that failed keeps it, with
+   the status, until Enter starts a new shell. */
+static int terminal_service_all(void) {
+    int redrawn = 0;
+    for (int i = 0; i < MAX_APPS; ++i) {
+        App *a = &g_apps[i];
+        if (!a->used || a->kind != APP_TERM || !a->term) continue;
+        unsigned events = terminal_pump(a->term);
+        if (a->start_command[0]) {
+            if (!terminal_alive(a->term)) a->start_command[0] = 0;
+            else if (terminal_run_line(a->term, a->start_command) == 0) {
+                a->start_command[0] = 0;
+                events |= TERMINAL_EVENT_OUTPUT;
+            }
+        }
+        TerminalRequest request;
+        while (terminal_take_request(a->term, &request)) handle_terminal_request(&request);
+        if ((events & TERMINAL_EVENT_EXITED) && terminal_exit_status(a->term) == 0) {
+            app_close(a);
+            redrawn = 1;
+            continue;
+        }
+        if (events && !a->minimized && a->win->visible) {
+            draw_terminal(a);
+            comp_damage_rect(g_bg, a->win->x, a->win->y, a->win->w, a->win->h);
+            redrawn = 1;
+        }
+    }
+    return redrawn;
+}
+
+/* ---------------- settings ---------------- */
+
+static void redraw_session(void) {
+    draw_background();
+    spotlight_redraw();
+    for (int i = 0; i < MAX_APPS; ++i) {
+        App *a = &g_apps[i];
+        if (!a->used || !a->win) continue;
+        a->win->bg_color = app_background(a->kind);
+        if (!a->minimized) draw_app_content(a);
+    }
+    comp_damage_all();
+}
+
+/* Makes the session show g_settings: keyboard layout, palette, materials and
+   every window; then persists the model. */
+static void apply_settings(void) {
+    unsigned int changed = settings_diff(&g_applied, &g_settings);
+    if (!changed) return;
+
+    if (changed & SETTINGS_CHANGED_LAYOUT) {
+        /* The kernel reports the layout it ended up with. */
+        long active = sys_set_layout(g_settings.layout);
+        if (active == SETTINGS_LAYOUT_DE || active == SETTINGS_LAYOUT_US)
+            g_settings.layout = (int)active;
+    }
+    g_settings_save_failed = settings_save(SETTINGS_PATH, &g_settings) != 0;
+    g_applied = g_settings;
+    settings_palette(&g_settings, &g_th);
+    if ((changed & SETTINGS_CHANGED_MOTION) && g_settings.reduce_motion) motion_settle_all();
+    redraw_session();
+}
+
+/* A missing or unreadable file keeps the defaults: that is the normal state
+   of a fresh installation. */
+static void settings_startup(void) {
+    settings_defaults(&g_settings);
+    settings_load(SETTINGS_PATH, &g_settings);
+    sys_set_layout(g_settings.layout);
+    g_applied = g_settings;
+    settings_palette(&g_settings, &g_th);
+}
+
+/* ---------------- files ---------------- */
+
+static int shell_word_safe(char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+           c == '/' || c == '.' || c == '_' || c == '-' || c == '+' || c == ',' || c == '@';
+}
+
+/* Writes path as one shell word: as it is when nothing in it needs quoting,
+   otherwise in single quotes with each embedded quote closed, escaped and
+   reopened. Returns 0, or -1 if it does not fit. */
+static int shell_quote(char *out, size_t capacity, const char *path) {
+    size_t n = 0;
+    int plain = path[0] != 0;
+    for (const char *p = path; *p; ++p) if (!shell_word_safe(*p)) plain = 0;
+    if (plain) {
+        if (strlen(path) + 1 > capacity) return -1;
+        memcpy(out, path, strlen(path) + 1);
+        return 0;
+    }
+    if (capacity < 3) return -1;
+    out[n++] = '\'';
+    for (; *path; ++path) {
+        size_t need = *path == '\'' ? 4 : 1;
+        if (n + need + 2 > capacity) return -1;
+        if (*path == '\'') {
+            memcpy(out + n, "'\\''", 4);
+            n += 4;
+        } else {
+            out[n++] = *path;
+        }
+    }
+    out[n++] = '\'';
+    out[n] = 0;
+    return 0;
+}
+
+/* A program started from Files runs in a Terminal window of its own, so its
+   output is visible and it can read the keyboard. The command is typed once
+   the shell shows its prompt (see terminal_service_all). */
+static int program_launch(const char *path) {
+    int idx = app_open_new(APP_TERM);
+    if (idx < 0) return -1;
+    if (shell_quote(g_apps[idx].start_command, sizeof(g_apps[idx].start_command), path) != 0) {
+        app_close(&g_apps[idx]);
+        return -1;
+    }
+    return 0;
+}
+
+/* Carries out what a Files event asked for: opening a file and repainting. */
+static void files_apply(App *a, unsigned int result) {
+    if (result & FM_ACTION) {
+        char path[FM_PATH_CAP];
+        int action = fm_take_action(&a->files, path, sizeof(path));
+        if (action == FM_ACTION_RUN) {
+            if (program_launch(path) != 0) fm_report(&a->files, "The program could not be started.");
+        } else if (action == FM_ACTION_OPEN_TEXT) {
+            int e = app_open_new(APP_EDIT);
+            if (e >= 0) {
+                editor_open(g_apps[e].editor, path);
+                draw_app_content(&g_apps[e]);
+            }
+        }
+    }
+    if (result & FM_REDRAW) {
+        draw_files(a);
+        comp_damage_rect(g_bg, a->win->x, a->win->y, a->win->w, a->win->h);
+    }
 }
 
 /* ---------------- hit testing ---------------- */
 
-static void handle_menu_click(int mx, int my) {
-    (void)mx;
-    int rel = my - menu_y() - 34;
-    int idx = rel / MENU_ROW;
-    if (idx >= 0 && idx < 4) {
-        close_menu();
-        app_open_new(idx);
-    } else if (idx == 4) {
-        close_menu();
-        app_open_new(APP_SETTINGS);
-    } else {
-        close_menu();
+enum { LAUNCH_ABOUT = APP_KIND_COUNT };
+
+static const SpotlightApp g_launcher_apps[] = {
+    { APP_TERM, "Terminal", "shell console command prompt" },
+    { APP_EDIT, "Editor", "text notes write" },
+    { APP_FILES, "Files", "file manager folder browser" },
+    { APP_SETTINGS, "Settings", "preferences appearance theme keyboard layout" },
+    { LAUNCH_ABOUT, "About HydrogenOS", "version system information" },
+};
+
+static void launcher_draw_icon(Window *win, int id, int x, int y, int size) {
+    if (id == LAUNCH_ABOUT) draw_icon_os(win, x, y, size);
+    else draw_kind_icon(win, id, x, y, size);
+}
+
+static void launcher_launch(int id) {
+    int opened = app_open_new(id == LAUNCH_ABOUT ? APP_SETTINGS : id);
+    if (id == LAUNCH_ABOUT && opened >= 0) {
+        settings_ui_select(&g_apps[opened].settings_ui, SETTINGS_SECTION_ABOUT);
+        draw_app_content(&g_apps[opened]);
     }
 }
 
+static const SpotlightHost g_launcher_host = {
+    g_launcher_apps, (int)(sizeof(g_launcher_apps) / sizeof(g_launcher_apps[0])),
+    launcher_draw_icon, launcher_launch, launcher_shown_changed,
+};
+
 static void handle_press(int mx, int my) {
-    if (g_menu_open) {
-        if (point_in_rect(mx, my, menu_x(), menu_y(), MENU_W, MENU_H))
-            handle_menu_click(mx, my);
-        else
-            close_menu();
-        return;
+    if (spotlight_is_open()) {
+        if (spotlight_press(mx, my)) return;
+        spotlight_close();
+        if (point_in_rect(mx, my, tb_logo_x(), tb_logo_y(), 32, 32)) return;
     }
 
     int ty = SH - TASKBAR_H;
     if (my >= ty) {
         if (point_in_rect(mx, my, tb_logo_x(), tb_logo_y(), 32, 32)) {
-            if (g_menu_open) close_menu(); else open_menu();
+            spotlight_open();
             return;
         }
         for (int k = 0; k < APP_KIND_COUNT; ++k) {
             if (point_in_rect(mx, my, tb_icon_x(k), tb_y(), tb_icon_s(), tb_icon_s())) {
-                /* focus existing non-minimized instance, else create one */
-                int found = -1;
-                for (int i = 0; i < MAX_APPS; ++i)
-                    if (g_apps[i].used && g_apps[i].kind == k && !g_apps[i].minimized) { found = i; break; }
-                if (found >= 0) focus_app(&g_apps[found]);
-                else {
-                    for (int i = 0; i < MAX_APPS; ++i)
-                        if (g_apps[i].used && g_apps[i].kind == k) { g_apps[i].minimized = 0; g_apps[i].win->visible = 1; focus_app(&g_apps[i]); break; }
-                    if (found < 0 && g_focus < 0) app_open_new(k);
-                    else if (found < 0) {
-                        int any = 0;
-                        for (int i = 0; i < MAX_APPS; ++i) if (g_apps[i].used && g_apps[i].kind == k) any = 1;
-                        if (!any) app_open_new(k);
-                    }
-                }
+                dock_click(k);
                 return;
             }
         }
         return;
     }
 
-    for (int i = MAX_APPS - 1; i >= 0; --i) {
-        App *a = &g_apps[i];
-        if (!a->used || a->minimized || !a->win || !a->win->visible) continue;
+    {
+        App *a = app_at(mx, my);
+        if (!a) return;
         Window *w = a->win;
-        if (!point_in_rect(mx, my, w->x, w->y, w->w, w->h)) continue;
         focus_app(a);
         int lx = mx - w->x, ly = my - w->y;
 
         /* resize handle: bottom-right 16x16 */
-        if (lx >= w->w - 16 && ly >= w->h - 16) {
+        if (!a->maximized && lx >= w->w - 16 && ly >= w->h - 16) {
+            app_settle_motion(a);
             a->resizing = 1;
             a->drag_ox = lx;
             a->drag_oy = ly;
@@ -1052,77 +1282,51 @@ static void handle_press(int mx, int my) {
         }
         if (ly < TITLE_H) {
             int dx = lx - 18, dy = ly - 15;
-            if (dx * dx + dy * dy <= 36) { app_close(a); return; }
+            if (dx * dx + dy * dy <= 36) {
+                if (a->kind == APP_EDIT && !editor_close_allowed(a->editor)) draw_editor(a);
+                else app_close(a);
+                return;
+            }
             dx = lx - 38;
             if (dx * dx + dy * dy <= 36) { app_minimize(a); return; }
             dx = lx - 58;
-            if (dx * dx + dy * dy <= 36) { app_maximize(a); return; }
-            a->dragging = 1;
-            a->drag_ox = lx;
-            a->drag_oy = ly;
+            if (dx * dx + dy * dy <= 36) { app_toggle_maximize(a); return; }
+            int idx = app_index_of(a);
+            unsigned long now = time_ms();
+            int twice = g_click_app == idx &&
+                        wm_is_double_click(g_click_ms, g_click_x, g_click_y, now, mx, my);
+            g_click_app = twice ? -1 : idx;
+            g_click_ms = now;
+            g_click_x = mx;
+            g_click_y = my;
+            if (twice) {
+                app_toggle_maximize(a);
+            } else if (!a->maximized) {
+                app_settle_motion(a);
+                a->dragging = 1;
+                a->drag_ox = lx;
+                a->drag_oy = ly;
+            }
             return;
         }
 
         /* app-specific clicks */
         if (a->kind == APP_FILES) {
-            int y0 = TITLE_H + 28;
-            int row = (ly - y0) / 20;
-            int show_dotdot = !str_eq(a->cwd, "/");
-            int sel_idx = show_dotdot ? row - 1 : row;
-            if (row >= 0) {
-                a->sel = sel_idx;
-                if (show_dotdot && row == 0) {
-                    chdir("..");
-                    getcwd(a->cwd, sizeof(a->cwd));
-                    a->sel = 0;
-                } else {
-                    int pos = 0, idx = 0;
-                    dirent_t de;
-                    while (readdir_pos(a->cwd, pos, &de) == 1) {
-                        if (idx == sel_idx) {
-                            if (de.d_type == 4) {
-                                chdir(de.d_name);
-                                getcwd(a->cwd, sizeof(a->cwd));
-                                a->sel = 0;
-                            } else {
-                                int e = app_open_new(APP_EDIT);
-                                if (e >= 0) {
-                                    char full[256];
-                                    int k = 0;
-                                    if (str_eq(a->cwd, "/")) full[k++] = '/';
-                                    else { str_copy_to(full, a->cwd, sizeof(full)); k = 0; while (full[k]) k++; full[k++] = '/'; }
-                                    str_copy_to(full + k, de.d_name, (int)sizeof(full) - k);
-                                    editor_load_path(&g_apps[e], full);
-                                    draw_app_content(&g_apps[e]);
-                                }
-                            }
-                            break;
-                        }
-                        idx++; pos++;
-                    }
-                }
-                draw_app_content(a);
-                comp_damage_rect(g_bg, w->x, w->y, w->w, w->h);
-                return;
-            }
+            files_apply(a, fm_click(&a->files, w, lx, ly));
+            return;
+        } else if (a->kind == APP_EDIT) {
+            editor_mouse_press(a->editor, lx, ly, time_ms());
+            draw_editor(a);
+            return;
         } else if (a->kind == APP_SETTINGS) {
-            if (point_in_rect(lx, ly, PAD, TITLE_H + 44, w->w - 2 * PAD, 40)) {
-                apply_theme(!g_theme);
-                draw_background();
-                for (int ai = 0; ai < MAX_APPS; ++ai) {
-                    if (g_apps[ai].used && g_apps[ai].win && !g_apps[ai].minimized)
-                        draw_app_content(&g_apps[ai]);
-                }
-                comp_damage_all();
-                return;
-            }
-            if (point_in_rect(lx, ly, PAD, TITLE_H + 110, w->w - 2 * PAD, 40)) {
-                g_layout = !g_layout;
-                sys_set_layout(g_layout);
+            unsigned int result = settings_ui_click(&a->settings_ui, w, lx, ly);
+            if (result & SETTINGS_UI_CHANGED) {
+                apply_settings();
+            } else if (result & SETTINGS_UI_REDRAW) {
                 draw_app_content(a);
                 comp_damage_rect(g_bg, w->x, w->y, w->w, w->h);
-                return;
             }
+            return;
         }
         return;
     }
@@ -1136,21 +1340,23 @@ static void handle_drag(int mx, int my) {
         if (a->dragging) {
             int nx = mx - a->drag_ox;
             int ny = my - a->drag_oy;
-            if (nx < 0) nx = 0;
-            if (ny < 0) ny = 0;
-            if (nx + w->w > SW) nx = SW - w->w;
-            if (ny + w->h > SH - TASKBAR_H) ny = SH - TASKBAR_H - w->h;
+            CompRect work = work_area();
+            wm_clamp_position(&work, w->w, w->h, TITLE_H, &nx, &ny);
             if (nx == w->x && ny == w->y) continue;
-            comp_damage_rect(g_bg, w->x, w->y, w->w, w->h);
+            /* The compositor repaints where the window was and where it is,
+               shadow included. */
             w->x = nx; w->y = ny;
-            comp_damage_rect(g_bg, w->x, w->y, w->w, w->h);
         } else if (a->resizing) {
             int nw = mx - w->x;
             int nh = my - w->y;
-            if (nw < 320) nw = 320;
-            if (nh < 200) nh = 200;
-            if (w->x + nw > SW) nw = SW - w->x;
-            if (w->y + nh > SH - TASKBAR_H) nh = SH - TASKBAR_H - w->y;
+            int min_w = 320, min_h = 200;
+            if (a->kind == APP_SETTINGS) { min_w = SETTINGS_UI_MIN_WIDTH; min_h = SETTINGS_UI_MIN_HEIGHT; }
+            if (a->kind == APP_FILES) { min_w = FM_MIN_WIDTH; min_h = FM_MIN_HEIGHT; }
+            CompRect work = work_area();
+            if (w->x + nw > work.x + work.w) nw = work.x + work.w - w->x;
+            if (w->y + nh > work.y + work.h) nh = work.y + work.h - w->y;
+            if (nw < min_w) nw = min_w;
+            if (nh < min_h) nh = min_h;
             if (nw == w->w && nh == w->h) continue;
             if (comp_resize_window(w, nw, nh) != 0) continue;
             draw_app_content(a);
@@ -1158,10 +1364,55 @@ static void handle_drag(int mx, int my) {
     }
 }
 
+/* Hover highlights of Files and Settings follow the pointer over the topmost window only. */
+static void settings_track_pointer(int mx, int my) {
+    App *top = app_at(mx, my);
+    int under = top ? app_index_of(top) : -1;
+
+    if (spotlight_is_open() && point_in_rect(mx, my, g_launcher->x, g_launcher->y, g_launcher->w, g_launcher->h))
+        under = -1;
+
+    for (int i = 0; i < MAX_APPS; ++i) {
+        App *a = &g_apps[i];
+        if (!a->used || a->minimized || !a->win) continue;
+        int lx = i == under ? mx - a->win->x : -1;
+        int ly = i == under ? my - a->win->y : -1;
+        if (a->kind == APP_FILES) {
+            files_apply(a, fm_hover(&a->files, a->win, lx, ly));
+            continue;
+        }
+        if (a->kind != APP_SETTINGS) continue;
+        if (settings_ui_hover(&a->settings_ui, a->win, lx, ly) & SETTINGS_UI_REDRAW) {
+            draw_app_content(a);
+            comp_damage_rect(g_bg, a->win->x, a->win->y, a->win->w, a->win->h);
+        }
+    }
+}
+
+/* Runs pending pings and live-value refreshes of the Settings windows. */
+static int settings_service_all(void) {
+    int redrawn = 0;
+
+    for (int i = 0; i < MAX_APPS; ++i) {
+        App *a = &g_apps[i];
+        if (!a->used || a->kind != APP_SETTINGS || a->minimized || !a->win) continue;
+        if (settings_ui_service(&a->settings_ui, time_ms()) & SETTINGS_UI_REDRAW) {
+            draw_app_content(a);
+            comp_damage_rect(g_bg, a->win->x, a->win->y, a->win->w, a->win->h);
+            redrawn = 1;
+        }
+    }
+    return redrawn;
+}
+
 static void handle_release(void) {
     for (int i = 0; i < MAX_APPS; ++i) {
         g_apps[i].dragging = 0;
         g_apps[i].resizing = 0;
+        if (g_apps[i].used && g_apps[i].kind == APP_EDIT) {
+            editor_mouse_release(g_apps[i].editor);
+            draw_editor(&g_apps[i]);
+        }
     }
 }
 
@@ -1180,6 +1431,9 @@ int main(void) {
     }
     SW = (int)info[0];
     SH = (int)info[1];
+    /* Prompts that start from the working directory, such as the editor's Save
+       As, should open in the user's home. A missing home leaves the root. */
+    (void)chdir("/home/user");
     if (SW <= 0 || SH <= 0) return 1;
 
     sys_console_cursor(0);
@@ -1189,19 +1443,22 @@ int main(void) {
         printf("desktop: comp_init failed\n");
         return 1;
     }
-    apply_theme(0);
+    settings_startup();
+    dock_init();
     g_bg = comp_create_window(0, 0, SW, SH);
     if (!g_bg || !g_bg->surface) return 1;
     g_bg->bg_color = COL_BG_TOP;
 
+    g_topbar = comp_create_window(0, 0, SW, TOPBAR_H);
+    if (!g_topbar || !g_topbar->surface) return 1;
+
     g_taskbar = comp_create_window(0, SH - TASKBAR_H, SW, TASKBAR_H);
     if (!g_taskbar || !g_taskbar->surface) return 1;
 
-    g_menu = comp_create_window(menu_x(), menu_y(), MENU_W, MENU_H);
-    if (!g_menu || !g_menu->surface) return 1;
-    g_menu->visible = 0;
+    g_launcher = comp_create_window(launcher_x(), launcher_y(), SPOTLIGHT_WIDTH, SPOTLIGHT_HEIGHT);
+    if (!g_launcher || !g_launcher->surface) return 1;
     style_chrome();
-    draw_menu();
+    spotlight_init(g_launcher, &g_launcher_host, &g_th, &g_settings);
 
     draw_background();
     app_open_new(APP_TERM);
@@ -1218,30 +1475,32 @@ int main(void) {
     comp_present_damage();
 
     for (;;) {
-        int dirty = 0;
+        int dirty = settings_service_all();
+        spotlight_service();
+        dirty |= terminal_service_all();
 
         for (int guard = 0; guard < 64; ++guard) {
             long k = sys_kbd_read();
             if (k < 0) break;
-            char c = (char)k;
+            if (spotlight_key(k)) { dirty = 1; continue; }
+            if (k == KBD_KEY_ALT_TAB) {
+                cycle_focus();
+                dirty = 1;
+                continue;
+            }
             if (g_focus >= 0 && g_apps[g_focus].used && !g_apps[g_focus].minimized) {
                 App *a = &g_apps[g_focus];
                 if (a->kind == APP_TERM) {
-                    int full = term_key(a, c);
-                    Window *w = a->win;
-                    if (full) {
-                        draw_terminal(a);
-                        comp_damage_rect(g_bg, w->x, w->y, w->w, w->h);
-                    } else {
-                        draw_terminal(a);
-                        int py = TITLE_H + PAD / 2;
-                        comp_damage_rect(g_bg, w->x, w->y + py, w->w, LINE_H);
-                    }
+                    terminal_key(a->term, (int)(k & KBD_CODE_MASK));
+                    draw_terminal(a);
+                    comp_damage_rect(g_bg, a->win->x, a->win->y, a->win->w, a->win->h);
+                    dirty = 1;
+                } else if (a->kind == APP_FILES) {
+                    files_apply(a, fm_key(&a->files, a->win, (int)k));
                     dirty = 1;
                 } else if (a->kind == APP_EDIT) {
-                    editor_key(a, c);
+                    editor_key(a->editor, (int)k);
                     draw_editor(a);
-                    comp_damage_rect(g_bg, a->win->x, a->win->y, a->win->w, a->win->h);
                     dirty = 1;
                 }
             }
@@ -1250,7 +1509,14 @@ int main(void) {
         int m[4] = { 0, 0, 0, 0 };
         if (sys_mouse_state(m) == 0) {
             int nmx = m[0], nmy = m[1], nbtn = m[2] & 7;
-            if (nmx != g_mx || nmy != g_my) { g_mx = nmx; g_my = nmy; dirty = 1; }
+            int moved = nmx != g_mx || nmy != g_my;
+            if (moved) {
+                g_mx = nmx;
+                g_my = nmy;
+                dirty = 1;
+                settings_track_pointer(g_mx, g_my);
+                spotlight_hover(g_mx, g_my);
+            }
             int wheel = m[3];
             int press = (nbtn & 1) && !(g_btn & 1);
             int release = !(nbtn & 1) && (g_btn & 1);
@@ -1258,18 +1524,16 @@ int main(void) {
             if (wheel != 0 && g_focus >= 0 && g_apps[g_focus].used && !g_apps[g_focus].minimized) {
                 App *fa = &g_apps[g_focus];
                 if (fa->kind == APP_TERM) {
-                    fa->scroll_off += wheel;
-                    if (fa->scroll_off < 0) fa->scroll_off = 0;
-                    if (fa->scroll_off > fa->scroll_count) fa->scroll_off = fa->scroll_count;
+                    terminal_scroll(fa->term, wheel * TERMINAL_WHEEL_ROWS);
                     draw_terminal(fa);
                     comp_damage_rect(g_bg, fa->win->x, fa->win->y, fa->win->w, fa->win->h);
                     dirty = 1;
+                } else if (fa->kind == APP_FILES) {
+                    files_apply(fa, fm_wheel(&fa->files, fa->win, wheel));
+                    dirty = 1;
                 } else if (fa->kind == APP_EDIT) {
-                    fa->scroll_line -= wheel;
-                    if (fa->scroll_line < 0) fa->scroll_line = 0;
-                    if (fa->scroll_line > fa->text_len) fa->scroll_line = fa->text_len;
+                    editor_scroll(fa->editor, -wheel * EDITOR_WHEEL_LINES);
                     draw_editor(fa);
-                    comp_damage_rect(g_bg, fa->win->x, fa->win->y, fa->win->w, fa->win->h);
                     dirty = 1;
                 }
             }
@@ -1277,17 +1541,26 @@ int main(void) {
             int any_drag = 0;
             for (int i = 0; i < MAX_APPS; ++i) if (g_apps[i].dragging || g_apps[i].resizing) any_drag = 1;
             if (any_drag) { handle_drag(g_mx, g_my); dirty = 1; }
+            if (moved && (g_btn & 1) && g_focus >= 0 && g_apps[g_focus].used &&
+                g_apps[g_focus].kind == APP_EDIT && !g_apps[g_focus].minimized) {
+                App *ea = &g_apps[g_focus];
+                editor_mouse_drag(ea->editor, g_mx - ea->win->x, g_my - ea->win->y);
+                draw_editor(ea);
+            }
             if (release) { handle_release(); dirty = 1; }
         }
 
         unsigned long now_sec = time_ms() / 1000;
         if (now_sec != g_last_sec) {
             g_last_sec = now_sec;
-            fill_rect(g_taskbar, SW - 16 - CLOCK_W - 2, 16, CLOCK_W + 4, 20, GLASS_CLEAR);
-            draw_clock(g_taskbar, SW - 16, 20);
-            comp_damage_rect(g_bg, SW - 16 - CLOCK_W - 2, SH - TASKBAR_H + 16, CLOCK_W + 4, 20);
+            int clock_x = SW - TOPBAR_PAD - CLOCK_W - 2;
+            fill_rect(g_topbar, clock_x, TOPBAR_TEXT_Y, CLOCK_W + 4, 16, chrome_clear(COL_TASKBAR));
+            draw_clock(g_topbar, SW - TOPBAR_PAD, TOPBAR_TEXT_Y);
+            comp_damage_rect(g_bg, clock_x, TOPBAR_TEXT_Y, CLOCK_W + 4, 16);
             dirty = 1;
         }
+
+        if (motion_frame()) dirty = 1;
 
         if (dirty) {
             if (g_prev_mx >= 0) comp_damage_rect(g_bg, g_prev_mx, g_prev_my, 14, 17);
@@ -1300,7 +1573,11 @@ int main(void) {
                         draw_resize_cursor(front, SW, SH, g_mx, g_my);
                     else
                         draw_cursor(front, SW, SH, g_mx, g_my);
-                    sys_fb_blit_strided(g_mx, g_my, 14, 17, front + (long)g_my * SW + g_mx, SW * 4);
+                    /* The kernel validates the whole source range, so a cursor
+                       near the bottom edge must not read past the buffer. */
+                    int blit_w = SW - g_mx < 14 ? SW - g_mx : 14;
+                    int blit_h = SH - g_my < 17 ? SH - g_my : 17;
+                    sys_fb_blit_strided(g_mx, g_my, blit_w, blit_h, front + (long)g_my * SW + g_mx, SW * 4);
                 }
             }
             g_prev_mx = g_mx;

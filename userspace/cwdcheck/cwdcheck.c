@@ -3,7 +3,12 @@
 
 enum {
     EEXIST_ERRNO = 17,
+    ENOTDIR_ERRNO = 20,
 };
+
+#define CWDCHECK_DIR "/tmp/cwdcheck.d"
+/* An installed binary: a directory must not be creatable or enterable there. */
+#define CWDCHECK_BINARY "/bin/time"
 
 static int str_eq(const char *a, const char *b) {
     if (!a || !b) {
@@ -43,17 +48,30 @@ int main(void) {
         return 1;
     }
 
-    n = sys_mkdir("/cwdcheck");
-    if (n != 0 && n != -EEXIST_ERRNO) {
+    if (sys_mkdir(CWDCHECK_BINARY) != -EEXIST_ERRNO) {
+        write(1, "cwdcheck: mkdir over binary not refused\n", 40);
+        return 19;
+    }
+    if (chdir(CWDCHECK_BINARY) != -ENOTDIR_ERRNO) {
+        write(1, "cwdcheck: chdir into binary not refused\n", 40);
+        return 20;
+    }
+
+    sys_rmdir(CWDCHECK_DIR);
+    if (sys_mkdir(CWDCHECK_DIR) != 0) {
         write(1, "cwdcheck: mkdir failed\n", 23);
         return 2;
     }
+    if (stat(CWDCHECK_DIR, &st) != 0 || !S_ISDIR(st.st_mode)) {
+        write(1, "cwdcheck: stat dir failed\n", 26);
+        return 21;
+    }
 
-    if (chdir("/cwdcheck") != 0) {
+    if (chdir(CWDCHECK_DIR) != 0) {
         write(1, "cwdcheck: chdir abs failed\n", 27);
         return 3;
     }
-    if (!getcwd(cwd, sizeof(cwd)) || !str_eq(cwd, "/cwdcheck")) {
+    if (!getcwd(cwd, sizeof(cwd)) || !str_eq(cwd, CWDCHECK_DIR)) {
         write(1, "cwdcheck: cwd after abs failed\n", 31);
         return 4;
     }
@@ -82,7 +100,7 @@ int main(void) {
         return 8;
     }
 
-    fd = open("../time", 0);
+    fd = open("../../bin/time", 0);
     if (fd < 0) {
         write(1, "cwdcheck: parent path failed\n", 29);
         return 9;
@@ -111,7 +129,7 @@ int main(void) {
         return 14;
     }
 
-    if (chdir("..") != 0) {
+    if (chdir("../..") != 0) {
         write(1, "cwdcheck: chdir parent failed\n", 30);
         return 15;
     }
@@ -120,7 +138,12 @@ int main(void) {
         return 16;
     }
 
-    pid = spawn("time");
+    if (sys_rmdir(CWDCHECK_DIR) != 0) {
+        write(1, "cwdcheck: rmdir failed\n", 23);
+        return 22;
+    }
+
+    pid = spawn_with_stdio("bin/time", SPAWN_STDIO_INHERIT, SPAWN_STDIO_NULL, SPAWN_STDIO_INHERIT);
     if (pid < 0) {
         write(1, "cwdcheck: spawn rel failed\n", 27);
         return 17;

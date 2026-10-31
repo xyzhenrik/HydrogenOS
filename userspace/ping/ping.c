@@ -4,8 +4,9 @@
 /*
  * ping - send ICMP echo requests.
  *
- * The target is read from stdin when it is a pipe or file that already holds
- * data (e.g. "echo 10.0.2.3 | ping"); otherwise the default gateway is used.
+ * The target is the first argument ("ping 10.0.2.2"); without one it is read
+ * from stdin when that is a pipe or file that already holds data (e.g.
+ * "echo 10.0.2.3 | ping"); otherwise the default gateway is used.
  */
 
 #define PING_COUNT       4
@@ -75,7 +76,7 @@ static int read_target(unsigned int *target) {
     return parse_ipv4(line, target);
 }
 
-int main(void) {
+int main(int argc, char **argv) {
     net_info_t info;
     char addr[16];
     unsigned int target;
@@ -84,12 +85,12 @@ int main(void) {
 
     long rc = sys_net_info(&info);
     if (rc != 0) {
-        fprintf(2, "ping: %s\n", ping_error_text(rc));
+        dprintf(2, "ping: %s\n", ping_error_text(rc));
         return 1;
     }
     target = info.gateway;
-    if (read_target(&target) != 0) {
-        fprintf(2, "ping: expected an IPv4 address like 10.0.2.2\n");
+    if (argc > 1 ? parse_ipv4(argv[1], &target) != 0 : read_target(&target) != 0) {
+        dprintf(2, "ping: expected an IPv4 address like 10.0.2.2\n");
         return 1;
     }
 

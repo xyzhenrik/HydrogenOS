@@ -230,8 +230,8 @@ void kernel_shell_run(void) {
       if (len > 0) {
         if (str_eq(line, "help")) {
           write_out("\nCommands: help, clear, ticks, tasks, mouse, scheduler, "
-                    "ata, block, mbr, read, vfs, ext2, mount, umount, ls, cat, "
-                    "stat, open, fread, close");
+                    "ata, block, mbr, read, vfs, ext2, mount, umount, sync, ls, "
+                    "cat, stat, open, fread, close");
         } else if (str_eq(line, "clear")) {
           tty_write("\n");
           // clear und Prompt neu
@@ -376,6 +376,8 @@ void kernel_shell_run(void) {
             else
               write_out("\numount: ok");
           }
+        } else if (str_eq(line, "sync")) {
+          write_out(vfs_sync() == 0 ? "\nsync: ok" : "\nsync: failed");
         } else if (str_eq(line, "ls")) {
           if (!vfs_is_ready())
             vfs_init();

@@ -53,6 +53,35 @@
 #define SYS_NET_PING 51
 #define SYS_SPAWN_ARGS 52
 #define SYS_TRY_WAIT 53
+#define SYS_MPROTECT 55
+#define SYS_KILL 56
+#define SYS_SIGACTION 57
+#define SYS_SIGRETURN 58
+#define SYS_SOCKET 59
+#define SYS_BIND 60
+#define SYS_SENDTO 61
+#define SYS_RECVFROM 62
+#define SYS_LINK 63
+#define SYS_SYMLINK 64
+#define SYS_READLINK 65
+#define SYS_SIGPROCMASK 68
+#define SYS_CONNECT 69
+#define SYS_LISTEN 70
+#define SYS_ACCEPT 71
+#define SYS_SHUTDOWN_SOCK 72
+#define SYS_EXECVE 73
+#define SYS_GETUID 74
+#define SYS_SETUID 75
+#define SYS_GETGID 76
+#define SYS_SETGID 77
+#define SYS_CHMOD 78
+#define SYS_CHOWN 79
+#define SYS_TRUNCATE 80
+#define SYS_PERF_READ 81
+#define SYS_CRASH 82
+#define SYS_MEMINFO 83
+#define SYS_SYNC 84
+#define SYS_FTRUNCATE 85
 
 #define PRIO_IDLE   0
 #define PRIO_NORMAL 1
@@ -65,6 +94,8 @@
 
 #define DUP3_INHERIT        (1u << 0)
 #define DUP3_CLOSE_ON_SPAWN (1u << 1)
+#define DUP3_CLOEXEC        (1u << 2)
+#define DUP3_ANY_SLOT       (-1)
 
 #define SEEK_SET 0
 #define SEEK_CUR 1
@@ -76,6 +107,9 @@
 #define OPEN_TRUNCATE (1u << 3)
 #define OPEN_APPEND   (1u << 4)
 
+/* sys_stat flag: describe a symlink itself instead of following it. */
+#define STAT_NOFOLLOW (1u << 0)
+
 #define POLL_READ  (1u << 0)
 #define POLL_WRITE (1u << 1)
 #define POLL_HUP   (1u << 2)
@@ -85,6 +119,10 @@
 #define MMAP_PROT_READ  (1u << 0)
 #define MMAP_PROT_WRITE (1u << 1)
 #define MMAP_PROT_EXEC  (1u << 2)
+#define MMAP_PROT_NONE  0u
+
+/* Without this flag sys_mmap and sys_mprotect refuse WRITE|EXEC (W^X). */
+#define MMAP_FLAG_ALLOW_WX (1u << 1)
 
 static inline long syscall6(long n, long a1, long a2, long a3, long a4, long a5, long a6) {
     long ret;
@@ -241,6 +279,10 @@ static inline long sys_stat(const char *path, void *buf) {
     return syscall3(SYS_STAT, (long)path, (long)buf, 0);
 }
 
+static inline long sys_lstat(const char *path, void *buf) {
+    return syscall3(SYS_STAT, (long)path, (long)buf, STAT_NOFOLLOW);
+}
+
 static inline long sys_fstat(int fd, void *buf) {
     return syscall3(SYS_FSTAT, (long)fd, (long)buf, 0);
 }
@@ -265,6 +307,70 @@ static inline long sys_rename(const char *old_path, const char *new_path) {
     return syscall2(SYS_RENAME, (long)old_path, (long)new_path);
 }
 
+static inline long sys_link(const char *old_path, const char *new_path) {
+    return syscall2(SYS_LINK, (long)old_path, (long)new_path);
+}
+
+static inline long sys_symlink(const char *target, const char *link_path) {
+    return syscall2(SYS_SYMLINK, (long)target, (long)link_path);
+}
+
+/* Copies up to cap bytes of the target, without a terminator, and returns the
+   number of bytes copied or -errno (-22 EINVAL if path is not a symlink). */
+static inline long sys_readlink(const char *path, char *buf, unsigned long cap) {
+    return syscall3(SYS_READLINK, (long)path, (long)buf, (long)cap);
+}
+
+/* Shrinks or grows the file at path to length bytes; growth leaves a hole that
+   reads as zero. Returns 0 or -errno (-27 EFBIG beyond 2 GiB - 1). */
+static inline long sys_truncate(const char *path, unsigned long length) {
+    return syscall2(SYS_TRUNCATE, (long)path, (long)length);
+}
+
+/* Same as sys_truncate on the file behind a writable fd; the file offset is
+   not moved. Returns 0 or -errno (-9 EBADF for a read-only fd, -22 EINVAL when
+   fd is not a file). */
+static inline long sys_ftruncate(int fd, unsigned long length) {
+    return syscall2(SYS_FTRUNCATE, fd, (long)length);
+}
+
+/* Writes every pending filesystem change to the disk. Returns 0 or -errno
+   (-5 EIO when the device failed). */
+static inline long sys_sync(void) {
+    return syscall1(SYS_SYNC, 0);
+}
+
+static inline long sys_getuid(void) {
+    return syscall1(SYS_GETUID, 0);
+}
+
+static inline long sys_getgid(void) {
+    return syscall1(SYS_GETGID, 0);
+}
+
+/* Root may become any user; everyone else only the one they already are
+   (-1 EPERM). A process that gave up root cannot get it back. */
+static inline long sys_setuid(unsigned int uid) {
+    return syscall1(SYS_SETUID, (long)uid);
+}
+
+static inline long sys_setgid(unsigned int gid) {
+    return syscall1(SYS_SETGID, (long)gid);
+}
+
+/* mode holds the permission bits, 0777 at most. Only the owner or root may
+   change them. */
+static inline long sys_chmod(const char *path, unsigned int mode) {
+    return syscall2(SYS_CHMOD, (long)path, (long)mode);
+}
+
+/* Root only. An id of ID_UNCHANGED leaves that part of the owner as it is. */
+#define ID_UNCHANGED 0xFFFFFFFFu
+
+static inline long sys_chown(const char *path, unsigned int uid, unsigned int gid) {
+    return syscall3(SYS_CHOWN, (long)path, (long)uid, (long)gid);
+}
+
 static inline long sys_writef(const char *path, const void *data, unsigned long size) {
     return syscall3(SYS_WRITEF, (long)path, (long)data, (long)size);
 }
@@ -276,6 +382,11 @@ static inline long sys_mmap(void *hint, unsigned long len, unsigned int prot,
 
 static inline long sys_munmap(void *addr, unsigned long len) {
     return syscall2(SYS_MUNMAP, (long)addr, (long)len);
+}
+
+static inline long sys_mprotect(void *addr, unsigned long len, unsigned int prot,
+                                unsigned int flags) {
+    return syscall4(SYS_MPROTECT, (long)addr, (long)len, (long)prot, (long)flags);
 }
 
 /* sys_fb_info() result when the boot path provided no linear framebuffer. */
@@ -372,6 +483,77 @@ static inline long sys_net_ping(unsigned int ipv4, long timeout_ms) {
     return syscall2(SYS_NET_PING, (long)ipv4, timeout_ms);
 }
 
+#define NET_AF_INET      2
+#define NET_SOCK_STREAM  1
+#define NET_SOCK_DGRAM   2
+#define NET_IPPROTO_TCP  6
+#define NET_IPPROTO_UDP  17
+#define NET_MSG_DONTWAIT (1u << 0)
+
+/* Peer address filled in by sys_recvfrom. */
+typedef struct net_sockaddr_t {
+    unsigned int ipv4;
+    unsigned short port;
+    unsigned short reserved;
+} net_sockaddr_t;
+
+/* Socket descriptors are ordinary handles: close, dup and poll work on them. */
+static inline long sys_socket(int domain, int type, int protocol) {
+    return syscall3(SYS_SOCKET, (long)domain, (long)type, (long)protocol);
+}
+
+/* ipv4 0 binds every local address; port 0 picks an ephemeral port. */
+static inline long sys_bind(int fd, unsigned int ipv4, unsigned int port) {
+    return syscall3(SYS_BIND, (long)fd, (long)ipv4, (long)port);
+}
+
+/* Returns the number of bytes sent or -errno. */
+static inline long sys_sendto(int fd, const void *buf, unsigned long len,
+                              unsigned int ipv4, unsigned int port) {
+    return syscall5(SYS_SENDTO, (long)fd, (long)buf, (long)len, (long)ipv4,
+                    (long)port);
+}
+
+/* Returns the datagram length (truncated to len), -EAGAIN with
+ * NET_MSG_DONTWAIT on an empty queue, or another -errno. from may be NULL. */
+static inline long sys_recvfrom(int fd, void *buf, unsigned long len,
+                                unsigned int flags, net_sockaddr_t *from) {
+    return syscall5(SYS_RECVFROM, (long)fd, (long)buf, (long)len, (long)flags,
+                    (long)from);
+}
+
+/* TCP (NET_SOCK_STREAM). Data moves with read() and write() on the socket fd;
+ * poll() reports readiness. All calls block until they can proceed. */
+
+/* Opens a connection to ipv4:port and returns 0 once it is established, or
+ * -ECONNREFUSED (-111), -ETIMEDOUT (-110), -ENETUNREACH (-101), -EISCONN
+ * (-106) or another -errno. */
+static inline long sys_connect(int fd, unsigned int ipv4, unsigned int port) {
+    return syscall3(SYS_CONNECT, (long)fd, (long)ipv4, (long)port);
+}
+
+/* Marks a bound (or unbound: ephemeral port) stream socket as listening;
+ * backlog is clamped to 1..8. */
+static inline long sys_listen(int fd, int backlog) {
+    return syscall2(SYS_LISTEN, (long)fd, (long)backlog);
+}
+
+/* Waits for a connection and returns the fd of a new connected socket.
+ * peer may be NULL. */
+static inline long sys_accept(int fd, net_sockaddr_t *peer) {
+    return syscall2(SYS_ACCEPT, (long)fd, (long)peer);
+}
+
+#define NET_SHUT_RD   0
+#define NET_SHUT_WR   1
+#define NET_SHUT_RDWR 2
+
+/* NET_SHUT_WR sends a FIN once the queued data is out; the peer then reads
+ * end of stream while this side keeps receiving. */
+static inline long sys_shutdown_sock(int fd, int how) {
+    return syscall2(SYS_SHUTDOWN_SOCK, (long)fd, (long)how);
+}
+
 static inline long sys_spawn_args(const char *path, const char *const *argv,
                                   const char *const *envp, int stdin_fd,
                                   int stdout_fd, int stderr_fd) {
@@ -379,6 +561,27 @@ static inline long sys_spawn_args(const char *path, const char *const *argv,
                     (long)stdin_fd, (long)stdout_fd, (long)stderr_fd);
 }
 
+static inline long sys_execve(const char *path, const char *const *argv,
+                              const char *const *envp) {
+    return syscall3(SYS_EXECVE, (long)path, (long)argv, (long)envp);
+}
+
 static inline long sys_try_wait(int pid, int *status) {
     return syscall2(SYS_TRY_WAIT, (long)pid, (long)status);
+}
+
+static inline long sys_kill(int pid, int sig) {
+    return syscall2(SYS_KILL, (long)pid, (long)sig);
+}
+
+struct sigaction;
+
+static inline long sys_sigprocmask(int how, unsigned int set,
+                                   unsigned int *old) {
+    return syscall3(SYS_SIGPROCMASK, (long)how, (long)set, (long)old);
+}
+
+static inline long sys_sigaction(int sig, const struct sigaction *act,
+                                 struct sigaction *old) {
+    return syscall3(SYS_SIGACTION, (long)sig, (long)act, (long)old);
 }

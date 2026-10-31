@@ -40,6 +40,7 @@ if [ "$ARCH" = "x86_64" ] && [ "$BOOT_MODE" = "kernel" ]; then
     -initrd "$ROOT_DIR/build/$ARCH/initrd.cpio" \
     -drive if=virtio,format=raw,file="$ROOT_DIR/build/$ARCH/disk.img" \
     -netdev user,id=n0 -device virtio-net-pci,netdev=n0 \
+    -device virtio-tablet-pci \
     -m 256M \
     -vga std \
     -serial stdio \
@@ -51,6 +52,7 @@ elif [ "$ARCH" = "x86_64" ]; then
     -cdrom "$ROOT_DIR/build/$ARCH/hydrogen.iso" \
     -drive if=virtio,format=raw,file="$ROOT_DIR/build/$ARCH/disk.img" \
     -netdev user,id=n0 -device virtio-net-pci,netdev=n0 \
+    -device virtio-tablet-pci \
     -m 256M \
     -serial stdio \
     -display none \
@@ -90,6 +92,16 @@ while [ "$i" -lt "${SMOKE_TICKS:-1500}" ]; do
   i=$((i + 1))
 done
 
+# The frame checksum is logged before the compositor's first full-screen blit
+# ends the boot splash, so give that hand-off a moment to reach the log.
+if [ "$FOUND" -eq 1 ]; then
+  i=0
+  while [ "$i" -lt 300 ] && ! grep -q "\[SPLASH\] handoff to desktop" "$LOG_FILE" 2>/dev/null; do
+    sleep 0.1
+    i=$((i + 1))
+  done
+fi
+
 kill "$QEMU_PID" >/dev/null 2>&1 || true
 sleep 0.1
 kill -9 "$QEMU_PID" >/dev/null 2>&1 || true
@@ -99,7 +111,7 @@ if [ "$FOUND" -eq 1 ]; then
   grep -q "FSTEST PASS" "$LOG_FILE" || MISSING="$MISSING FSTEST_PASS"
   grep -q "DESKTOPTEST PASS" "$LOG_FILE" || MISSING="$MISSING DESKTOPTEST_PASS"
   grep -q "LOGIN PASS" "$LOG_FILE" || MISSING="$MISSING LOGIN_PASS"
-  grep -q "PKG PASS" "$LOG_FILE" || MISSING="$MISSING PKG_PASS"
+  grep -q "HPKG PASS" "$LOG_FILE" || MISSING="$MISSING HPKG_PASS"
   grep -q "stdout captured: pollwaitcheck: wait ok" "$LOG_FILE" || MISSING="$MISSING POLLWAIT_PASS"
   grep -q "stdout captured: pollmanycheck: many ok" "$LOG_FILE" || MISSING="$MISSING POLLMANY_PASS"
   grep -q "stdout captured: dupfallbackcheck: implicit stdout live" "$LOG_FILE" || MISSING="$MISSING DUPFALLBACK_PASS"
@@ -107,10 +119,34 @@ if [ "$FOUND" -eq 1 ]; then
   grep -q "PROC PASS" "$LOG_FILE" || MISSING="$MISSING PROC_PASS"
   grep -q "DIRTEST PASS" "$LOG_FILE" || MISSING="$MISSING DIRTEST_PASS"
   grep -q "MMAP PASS" "$LOG_FILE" || MISSING="$MISSING MMAP_PASS"
+  grep -q "MPROTECT PASS" "$LOG_FILE" || MISSING="$MISSING MPROTECT_PASS"
   grep -q "ACPI OK" "$LOG_FILE" || MISSING="$MISSING ACPI_OK"
   grep -q "POWERCHECK PASS" "$LOG_FILE" || MISSING="$MISSING POWERCHECK_PASS"
   grep -q "NET PASS" "$LOG_FILE" || MISSING="$MISSING NET_PASS"
   grep -q "SHELL PASS" "$LOG_FILE" || MISSING="$MISSING SHELL_PASS"
+  grep -q "LIBC PASS" "$LOG_FILE" || MISSING="$MISSING LIBC_PASS"
+  grep -q "stdout captured: cwdcheck: cwd ok" "$LOG_FILE" || MISSING="$MISSING CWDCHECK_PASS"
+  grep -q "LINK PASS" "$LOG_FILE" || MISSING="$MISSING LINK_PASS"
+  grep -q "SYSLOG PASS" "$LOG_FILE" || MISSING="$MISSING SYSLOG_PASS"
+  grep -q "UDP PASS" "$LOG_FILE" || MISSING="$MISSING UDP_PASS"
+  grep -q "TCP PASS" "$LOG_FILE" || MISSING="$MISSING TCP_PASS"
+  grep -q "FAULT PASS" "$LOG_FILE" || MISSING="$MISSING FAULT_PASS"
+  grep -q "SCHED PASS" "$LOG_FILE" || MISSING="$MISSING SCHED_PASS"
+  grep -q "SIG PASS" "$LOG_FILE" || MISSING="$MISSING SIG_PASS"
+  grep -q "WP PASS" "$LOG_FILE" || MISSING="$MISSING WP_PASS"
+  grep -q "DCACHE PASS" "$LOG_FILE" || MISSING="$MISSING DCACHE_PASS"
+  grep -q "IO PASS" "$LOG_FILE" || MISSING="$MISSING IO_PASS"
+  grep -q "PERF PASS" "$LOG_FILE" || MISSING="$MISSING PERF_PASS"
+  { grep -q "SPLASH PASS" "$LOG_FILE" && grep -q "\[SPLASH\] handoff to desktop" "$LOG_FILE"; } || MISSING="$MISSING SPLASH_PASS"
+  grep -q "WAITQ PASS" "$LOG_FILE" || MISSING="$MISSING WAITQ_PASS"
+  grep -q "SUPERVISE PASS" "$LOG_FILE" || MISSING="$MISSING SUPERVISE_PASS"
+  grep -q "EXEC PASS" "$LOG_FILE" || MISSING="$MISSING EXEC_PASS"
+  grep -q "PERM PASS" "$LOG_FILE" || MISSING="$MISSING PERM_PASS"
+  grep -q "EDITOR PASS" "$LOG_FILE" || MISSING="$MISSING EDITOR_PASS"
+  grep -q "FUZZY PASS" "$LOG_FILE" || MISSING="$MISSING FUZZY_PASS"
+  grep -q "TERM PASS" "$LOG_FILE" || MISSING="$MISSING TERM_PASS"
+  grep -q "CRASH PASS" "$LOG_FILE" || MISSING="$MISSING CRASH_PASS"
+  grep -q "OOM PASS" "$LOG_FILE" || MISSING="$MISSING OOM_PASS"
   if [ "$REQUIRE_DESKTOP" = "1" ]; then
     grep -qE "compositor: ready|COMP READY" "$LOG_FILE" || MISSING="$MISSING COMPOSITOR_READY"
     grep -q "FRAME CHECKSUM:" "$LOG_FILE" || MISSING="$MISSING FRAME_CHECKSUM"

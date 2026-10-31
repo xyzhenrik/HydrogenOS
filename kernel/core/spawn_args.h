@@ -18,6 +18,9 @@ typedef struct spawn_args {
     char strings[SPAWN_ARGS_MAX_BYTES];
 } spawn_args_t;
 
-/* Places argv/envp on the initial user stack of a process that has not run
- * yet and sets its entry registers: rdi = argc, rsi = argv, rdx = envp. */
+/* Writes argv/envp below frame->rsp in the address space pml4 and updates
+ * frame to the entry registers: rsp, rdi = argc, rsi = argv, rdx = envp. */
+int spawn_args_place(uint64_t *pml4, regs_t *frame, const spawn_args_t *args);
+
+/* spawn_args_place() for a process that has not run yet. */
 int spawn_args_apply(process_t *proc, const spawn_args_t *args);

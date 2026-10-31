@@ -2,6 +2,7 @@
 #include "io.h"
 #include "console.h"
 #include "drivers/virtio_input.h"
+#include "core/signal.h"
 
 #define KB_BUF_SIZE 128
 
@@ -17,6 +18,7 @@ static const char scancode_table[128] = {
     'a','s','d','f','g','h','j','k','l','o','a','^', 0, '#',
     'y','x','c','v','b','n','m',',','.','-','*', 0,   ' ', 0,
     0,
+    [0x56] = '<',
 };
 
 static const char scancode_table_shift[128] = {
@@ -25,14 +27,13 @@ static const char scancode_table_shift[128] = {
     'A','S','D','F','G','H','J','K','L','O','A','^', 0, '\'',
     'Y','X','C','V','B','N','M',';',':','_','*', 0,   ' ', 0,
     0,
+    [0x56] = '>',
 };
 
 static const char scancode_table_altgr[128] = {
-    0,   0, '1','2','3', '$', '%', '&', '{','[',']','}','\\', 0, 0,
-    0,  '@', 0,  'E', 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, '~',
-    0, 0, 0, 0, 0, 0, 'u', 0, 0, 0, 0, 0,  '|', 0,
-    0,
+    [0x02] = '1', [0x03] = '2', [0x04] = '3', [0x05] = '$', [0x06] = '%', [0x07] = '&',
+    [0x08] = '{', [0x09] = '[', [0x0A] = ']', [0x0B] = '}', [0x0C] = '\\',
+    [0x10] = '@', [0x1B] = '~', [0x56] = '|',
 };
 
 /* US layout (scancode set 1). */
@@ -70,6 +71,9 @@ void keyboard_set_layout(int layout) { g_layout = layout ? 1 : 0; }
 int keyboard_get_layout(void) { return g_layout; }
 
 static inline void buffer_put(uint16_t c) {
+    /* Ctrl+C interrupts the console's foreground job instead of being input. */
+    if (c == 0x03 && signal_console_interrupt())
+        return;
     uint8_t next = (uint8_t)((buf_head + 1) % KB_BUF_SIZE);
     if (next != buf_tail) {
         keybuf[buf_head] = c;
@@ -77,11 +81,17 @@ static inline void buffer_put(uint16_t c) {
     }
 }
 
-int keyboard_read_char(void) {
+int keyboard_read_event(void) {
     if (buf_head == buf_tail) return -1;
     uint16_t c = keybuf[buf_tail];
     buf_tail = (uint8_t)((buf_tail + 1) % KB_BUF_SIZE);
     return (int)(c);
+}
+
+/* Text consoles have no use for modifier flags on navigation keys. */
+int keyboard_read_char(void) {
+    int c = keyboard_read_event();
+    return c < 0 ? c : (c & KEY_CODE_MASK);
 }
 
 void keyboard_handle_scancode(uint8_t scancode) {
@@ -89,22 +99,40 @@ void keyboard_handle_scancode(uint8_t scancode) {
     static int extended = 0;
     static int altgr = 0;
     static int ctrl = 0;
+    static int alt = 0;
+    static int caps = 0;
 
     if (scancode == 0xE0) { extended = 1; return; }
     if (scancode & 0x80) {
         uint8_t code = scancode & 0x7F;
         if (code == 0x2A || code == 0x36) shift = 0;
         if (code == 0x1D) ctrl = 0;
+        if (!extended && code == 0x38) alt = 0;
         if (extended && code == 0x38) altgr = 0;
         extended = 0;
         return;
     }
-    if (scancode == 0x2A || scancode == 0x36) { shift = 1; return; }
-    if (scancode == 0x1D) { ctrl = 1; return; }
-    if (extended && scancode == 0x38) { altgr = 1; return; }
+    /* Modifier presses must also consume a pending E0 prefix (AltGr, right Ctrl),
+     * otherwise the next key press is misread as an extended key and dropped. */
+    if (scancode == 0x2A || scancode == 0x36) { shift = 1; extended = 0; return; }
+    if (scancode == 0x1D) { ctrl = 1; extended = 0; return; }
+    if (!extended && scancode == 0x38) { alt = 1; return; }
+    if (extended && scancode == 0x38) { altgr = 1; extended = 0; return; }
+    if (scancode == 0x3A) { caps = !caps; return; }
+
+    if (scancode == 0x0F && alt) {
+        buffer_put(KEY_ALT_TAB);
+        extended = 0;
+        return;
+    }
 
     if (scancode == 0x39) { // Space
-        buffer_put(' ');
+        buffer_put(ctrl ? KEY_LAUNCHER : ' ');
+        return;
+    }
+
+    if (scancode == 0x01 && !extended) {
+        buffer_put(KEY_ESCAPE);
         return;
     }
 
@@ -118,9 +146,18 @@ void keyboard_handle_scancode(uint8_t scancode) {
             case 0x47: code = KEY_HOME; break;
             case 0x4F: code = KEY_END; break;
             case 0x53: code = KEY_DEL; break;
+            case 0x49: code = KEY_PAGE_UP; break;
+            case 0x51: code = KEY_PAGE_DOWN; break;
+            case 0x52: code = KEY_INSERT; break;
+            case 0x5B: /* left Super */
+            case 0x5C: code = KEY_LAUNCHER; break; /* right Super */
             default: break;
         }
-        if (code) buffer_put(code);
+        if (code) {
+            if (shift) code |= KEY_MOD_SHIFT;
+            if (ctrl) code |= KEY_MOD_CTRL;
+            buffer_put(code);
+        }
         extended = 0;
         return;
     }
@@ -134,6 +171,7 @@ void keyboard_handle_scancode(uint8_t scancode) {
     }
     if (scancode < 128) {
         char c = table[scancode];
+        if (caps && ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'))) c ^= 0x20;
         if (c) {
             if (ctrl) {
                 if (c >= 'a' && c <= 'z') c = (char)(c - 'a' + 1);
@@ -147,99 +185,43 @@ void keyboard_handle_scancode(uint8_t scancode) {
     extended = 0;
 }
 
-static int vshift = 0;
-static int vcaps = 0;
-
+/* Linux evdev key codes up to KEY_F12 match PS/2 set-1 make codes; the keys
+ * below carry an E0 prefix there. Feeding virtio-input through the PS/2 path
+ * keeps layouts, AltGr and Caps Lock identical for both devices. */
 static void virtio_feed_key(int code, int value) {
-    /* Track modifier state. */
-    switch (code) {
-        case 42: /* KEY_LEFTSHIFT */
-        case 54: /* KEY_RIGHTSHIFT */
-            vshift = (value != 0) ? 1 : 0;
-            return;
-        case 58: /* KEY_CAPSLOCK */
-            if (value == 1) vcaps = !vcaps;
-            return;
-        default:
-            break;
+    uint8_t extended = 0;
+    uint8_t scancode;
+
+    if (code > 0 && code <= 0x58) {
+        scancode = (uint8_t)code;
+    } else {
+        switch (code) {
+            case 97:  extended = 1; scancode = 0x1D; break; /* KEY_RIGHTCTRL */
+            case 100: extended = 1; scancode = 0x38; break; /* KEY_RIGHTALT */
+            case 102: extended = 1; scancode = 0x47; break; /* KEY_HOME */
+            case 103: extended = 1; scancode = 0x48; break; /* KEY_UP */
+            case 105: extended = 1; scancode = 0x4B; break; /* KEY_LEFT */
+            case 106: extended = 1; scancode = 0x4D; break; /* KEY_RIGHT */
+            case 107: extended = 1; scancode = 0x4F; break; /* KEY_END */
+            case 108: extended = 1; scancode = 0x50; break; /* KEY_DOWN */
+            case 104: extended = 1; scancode = 0x49; break; /* KEY_PAGEUP */
+            case 109: extended = 1; scancode = 0x51; break; /* KEY_PAGEDOWN */
+            case 110: extended = 1; scancode = 0x52; break; /* KEY_INSERT */
+            case 111: extended = 1; scancode = 0x53; break; /* KEY_DELETE */
+            case 125: extended = 1; scancode = 0x5B; break; /* KEY_LEFTMETA */
+            case 126: extended = 1; scancode = 0x5C; break; /* KEY_RIGHTMETA */
+            default: return;
+        }
     }
 
-    if (value == 0) return; /* ignore key release */
-
-    uint16_t out = 0;
-    switch (code) {
-        /* Letters */
-        case 30: out = 'a'; break;
-        case 48: out = 'b'; break;
-        case 46: out = 'c'; break;
-        case 32: out = 'd'; break;
-        case 18: out = 'e'; break;
-        case 33: out = 'f'; break;
-        case 34: out = 'g'; break;
-        case 35: out = 'h'; break;
-        case 23: out = 'i'; break;
-        case 36: out = 'j'; break;
-        case 37: out = 'k'; break;
-        case 38: out = 'l'; break;
-        case 50: out = 'm'; break;
-        case 49: out = 'n'; break;
-        case 24: out = 'o'; break;
-        case 25: out = 'p'; break;
-        case 16: out = 'q'; break;
-        case 19: out = 'r'; break;
-        case 31: out = 's'; break;
-        case 20: out = 't'; break;
-        case 22: out = 'u'; break;
-        case 47: out = 'v'; break;
-        case 17: out = 'w'; break;
-        case 45: out = 'x'; break;
-        case 21: out = 'y'; break;
-        case 44: out = 'z'; break;
-
-        /* Number row */
-        case 2:  out = vshift ? '!' : '1'; break;
-        case 3:  out = vshift ? '"' : '2'; break;
-        case 4:  out = vshift ? '#' : '3'; break;
-        case 5:  out = vshift ? '$' : '4'; break;
-        case 6:  out = vshift ? '%' : '5'; break;
-        case 7:  out = vshift ? '&' : '6'; break;
-        case 8:  out = vshift ? '/' : '7'; break;
-        case 9:  out = vshift ? '(' : '8'; break;
-        case 10: out = vshift ? ')' : '9'; break;
-        case 11: out = vshift ? '=' : '0'; break;
-        case 12: out = vshift ? '_' : '-'; break;
-        case 13: out = vshift ? '+' : '='; break;
-
-        /* Control keys */
-        case 14: out = '\b'; break;
-        case 15: out = '\t'; break;
-        case 28: out = '\n'; break;
-        case 57: out = ' '; break;
-
-        /* Special keys */
-        case 102: out = KEY_HOME; break;
-        case 103: out = KEY_UP; break;
-        case 105: out = KEY_LEFT; break;
-        case 106: out = KEY_RIGHT; break;
-        case 107: out = KEY_END; break;
-        case 108: out = KEY_DOWN; break;
-        case 111: out = KEY_DEL; break;
-        default: break;
-    }
-
-    if (out >= 'a' && out <= 'z' && (vshift ^ vcaps)) {
-        out = (uint16_t)(out - 'a' + 'A');
-    }
-
-    if (out) buffer_put(out);
+    if (extended) keyboard_handle_scancode(0xE0);
+    keyboard_handle_scancode(value ? scancode : (uint8_t)(scancode | 0x80));
 }
 
 void keyboard_init(void) {
     // nothing needed yet; IRQ unmask already in kernel64.c
     // clear buffer
     buf_head = buf_tail = 0;
-    vshift = 0;
-    vcaps = 0;
 }
 
 void keyboard_poll(void) {

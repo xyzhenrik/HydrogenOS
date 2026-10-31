@@ -9,9 +9,17 @@
 #define IPV4_PAYLOAD_MAX    (NET_ETH_MTU - IPV4_HDR_LEN)
 #define IPV4_PAYLOAD_OFFSET (NET_ETH_HDR_LEN + IPV4_HDR_LEN)
 #define IPV4_PROTO_ICMP     1
+#define IPV4_PROTO_TCP      6
+#define IPV4_PROTO_UDP      17
 
 /* RFC 1071 Internet checksum, ready to be stored big-endian. */
 uint16_t ipv4_checksum(const uint8_t *data, size_t len);
+
+/* Incremental form for checksums over several buffers (UDP pseudo-header):
+ * start with 0, add every chunk and fold. Only the last chunk may have an odd
+ * length. */
+uint32_t ipv4_checksum_add(uint32_t sum, const uint8_t *data, size_t len);
+uint16_t ipv4_checksum_fold(uint32_t sum);
 
 void ipv4_input(const uint8_t *packet, size_t len);
 

@@ -1,7 +1,11 @@
 #pragma once
 
+#include "stdio.h"
+#include "stdlib.h"
+#include "string.h"
+#include "time.h"
+
 #include <stddef.h>
-#include <stdarg.h>
 #include <stdint.h>
 
 #define SPAWN_STDIO_CLEAR   (-1)
@@ -10,6 +14,8 @@
 
 #define DUP3_INHERIT        (1u << 0)
 #define DUP3_CLOSE_ON_SPAWN (1u << 1)
+#define DUP3_CLOEXEC        (1u << 2)
+#define DUP3_ANY_SLOT       (-1)
 
 #define SEEK_SET 0
 #define SEEK_CUR 1
@@ -38,6 +44,8 @@ typedef struct stat {
     uint32_t st_size;
     uint32_t st_nlink;
     uint32_t st_ino;
+    uint32_t st_uid;
+    uint32_t st_gid;
     uint64_t st_mtime;
 } stat_t;
 
@@ -45,8 +53,12 @@ typedef struct stat {
 #define S_IFREG  0100000
 #define S_IFDIR  0040000
 #define S_IFLNK  0120000
+/* The permission bits of st_mode: read, write and execute for owner, group
+   and everyone else. */
+#define S_IRWXUGO 0777
 #define S_ISREG(m)  (((m) & S_IFMT) == S_IFREG)
 #define S_ISDIR(m)  (((m) & S_IFMT) == S_IFDIR)
+#define S_ISLNK(m)  (((m) & S_IFMT) == S_IFLNK)
 
 #define DIRENT_NAME_MAX 255
 
@@ -61,7 +73,13 @@ long read(int fd, void *buf, size_t len);
 long open(const char *path, int flags);
 long close(int fd);
 long lseek(int fd, long off, int whence);
+/* Resizes the file behind a writable fd; growth leaves a zero-filled hole.
+ * Returns 0 or -errno. */
+long ftruncate(int fd, unsigned long length);
+/* Writes all pending filesystem changes to the disk. Returns 0 or -errno. */
+long sync(void);
 int stat(const char *path, stat_t *buf);
+int lstat(const char *path, stat_t *buf);
 int fstat(int fd, stat_t *buf);
 int readdir_pos(const char *path, int pos, dirent_t *out);
 long pipe(int fds[2]);
@@ -71,6 +89,8 @@ long poll_many_wait(poll_fd_t *fds, unsigned int count, long timeout_ms);
 long dup(int fd);
 long dup2(int src_fd, int dst_fd);
 long dup3(int src_fd, int dst_fd, unsigned int flags);
+/* dup() whose copy is closed by execve. */
+long dup_cloexec(int fd);
 long set_fd_inherit(int fd, int inherit);
 long set_handle_inherit(int fd, int inherit);
 long spawn(const char *path);
@@ -78,25 +98,17 @@ long spawn_with_stdio(const char *path, int stdin_fd, int stdout_fd, int stderr_
 long spawn_args(const char *path, const char *const *argv,
                 const char *const *envp, int stdin_fd, int stdout_fd,
                 int stderr_fd);
+/* Replace the calling process image. They only return on failure, with the
+ * negative errno; the process then continues unchanged. Handles stay open
+ * except those duplicated with DUP3_CLOEXEC; caught signals are reset to
+ * their default action. execv passes the current environ. */
+long execve(const char *path, const char *const *argv, const char *const *envp);
+long execv(const char *path, const char *const *argv);
 long wait_pid(int pid, int *status);
 long try_wait_pid(int pid, int *status);
 void yield_cpu(void);
 void tty_set_color(unsigned char fg, unsigned char bg);
-int puts(const char *s);
-void *memcpy(void *dst, const void *src, size_t n);
-void *memset(void *dst, int c, size_t n);
-size_t strlen(const char *s);
-void *malloc(size_t size);
-void free(void *ptr);
-void *calloc(size_t count, size_t size);
-void *realloc(void *ptr, size_t size);
 void sleep_ms(unsigned long ms);
 unsigned long time_ms(void);
 char *getcwd(char *buf, size_t size);
 int   chdir(const char *path);
-
-int vsnprintf(char *buf, size_t size, const char *fmt, va_list ap);
-int snprintf(char *buf, size_t size, const char *fmt, ...);
-int sprintf(char *buf, const char *fmt, ...);
-int printf(const char *fmt, ...);
-int fprintf(int fd, const char *fmt, ...);

@@ -22,7 +22,7 @@ static void write_hex_dump(const unsigned char *buf, unsigned long len) {
 }
 
 int main(void) {
-    const char *path = "/user";
+    const char *path = "/bin/hello";
     unsigned char buf[64];
 
     long fd = open(path, 0);
@@ -38,7 +38,7 @@ int main(void) {
         return 1;
     }
 
-    write(1, "cat: first bytes of /user:\n", 28);
+    write(1, "cat: first bytes of /bin/hello:\n", 32);
     write_hex_dump(buf, (unsigned long)n);
     close((int)fd);
     return 0;

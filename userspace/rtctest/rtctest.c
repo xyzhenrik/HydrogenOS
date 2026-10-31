@@ -209,7 +209,7 @@ static int check_kernel_clock(void) {
     char line[48];
     if (time_civil_from_epoch(second.epoch_seconds, &now) == 0 &&
         time_format(line, sizeof(line), TIME_FORMAT_LONG, &now) > 0)
-        fprintf(2, "rtctest: wall clock %s\n", line);
+        dprintf(2, "rtctest: wall clock %s\n", line);
     return 0;
 }
 

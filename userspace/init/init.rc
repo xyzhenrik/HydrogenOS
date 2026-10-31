@@ -1,36 +1,64 @@
 logsink syslog "sink-a\nsink-b\n"
-service bootprobe oneshot /bootprobe 100 restart=on-failure
-service handoffcheck oneshot /handoffcheck 100 restart=on-failure stdin=pipe "init handoff ok\n" bootprobe
-service stdiocheck oneshot /stdiocheck 100 restart=on-failure stdin=pipe "init stdio ok\n" stdout=capture "stdiocheck: stdout ok\n" stderr=capture "stdiocheck: stderr ok\n" bootprobe handoffcheck
-service stdiobadbind oneshot /stdiobadbind 100 restart=on-failure bootprobe handoffcheck stdiocheck
-service dupcheck oneshot /dupcheck 100 restart=on-failure stdout=capture "dupcheck: dup ok\n" bootprobe handoffcheck stdiocheck stdiobadbind
-service handlelimitcheck oneshot /handlelimitcheck 100 restart=on-failure stdout=capture "handlelimitcheck: emfile ok\n" bootprobe handoffcheck stdiocheck stdiobadbind dupcheck
-service fileoffsetcheck oneshot /fileoffsetcheck 100 restart=on-failure stdout=capture "fileoffsetcheck: offset ok\n" bootprobe handoffcheck stdiocheck stdiobadbind handlelimitcheck
-service seekcheck oneshot /seekcheck 100 restart=on-failure stdout=capture "seekcheck: seek ok\n" bootprobe handoffcheck stdiocheck stdiobadbind fileoffsetcheck
-service pollcheck oneshot /pollcheck 100 restart=on-failure stdout=capture "pollcheck: poll ok\n" bootprobe handoffcheck stdiocheck stdiobadbind seekcheck
-service fstest oneshot /fstest 100 restart=on-failure stdout=capture "FSTEST PASS\n" bootprobe handoffcheck stdiocheck stdiobadbind
-service login oneshot /login 100 restart=on-failure stdout=capture "LOGIN PASS\n" bootprobe 
-service pkgtest oneshot /pkgtest 100 restart=on-failure stdout=capture "PKG PASS\n" bootprobe fstest login
-service desktoptest oneshot /desktoptest 100 restart=on-failure stdout=capture "DESKTOPTEST PASS\n" bootprobe handoffcheck stdiocheck stdiobadbind fstest
-service logproducer_a oneshot /logproducer_a 100 restart=on-failure stdout=channel logbus bootprobe handoffcheck stdiocheck stdiobadbind
-service logproducer_b oneshot /logproducer_b 100 restart=on-failure stdout=channel logbus bootprobe handoffcheck stdiocheck stdiobadbind logproducer_a
-service logcollector oneshot /logcollector 100 restart=on-failure stdin=channel logbus stdout=capture "logcollector: multiwriter ok\n" bootprobe handoffcheck stdiocheck stdiobadbind logproducer_b
-service logsink_writer_a oneshot /logsink_writer_a 100 restart=on-failure stdout=logsink syslog bootprobe handoffcheck stdiocheck stdiobadbind logcollector
-service logsink_writer_b oneshot /logsink_writer_b 100 restart=on-failure stdout=logsink syslog bootprobe handoffcheck stdiocheck stdiobadbind logcollector logsink_writer_a
-service teewriter oneshot /teewriter 100 restart=on-failure stdout=tee teebus bootprobe handoffcheck stdiocheck stdiobadbind logcollector logsink_writer_b
-service teereader_a oneshot /teereader_a 100 restart=on-failure stdin=tee teebus stdout=capture "teereader_a: tee ok\n" bootprobe handoffcheck stdiocheck stdiobadbind logcollector teewriter
-service teereader_b oneshot /teereader_b 100 restart=on-failure stdin=tee teebus stdout=capture "teereader_b: tee ok\n" bootprobe handoffcheck stdiocheck stdiobadbind logcollector teewriter
-service pipeproducer oneshot /pipeproducer 100 restart=on-failure stdout=channel bootseq bootprobe handoffcheck stdiocheck stdiobadbind logcollector teereader_b
-service pipeconsumer oneshot /pipeconsumer 100 restart=on-failure stdin=channel bootseq stdout=capture "pipeconsumer: channel ok\n" bootprobe handoffcheck stdiocheck stdiobadbind logcollector pipeproducer
-service stdionullcheck oneshot /stdionullcheck 100 restart=on-failure stdin=null stdout=null stderr=null bootprobe handoffcheck stdiocheck stdiobadbind pipeconsumer
-service pollwaitcheck oneshot /pollwaitcheck 100 restart=on-failure stdout=capture "pollwaitcheck: wait ok\n" bootprobe handoffcheck stdiocheck stdiobadbind pollcheck
-service pollmanycheck oneshot /pollmanycheck 100 restart=on-failure stdout=capture "pollmanycheck: many ok\n" bootprobe handoffcheck stdiocheck stdiobadbind pollwaitcheck
-service dupfallbackcheck oneshot /dupfallbackcheck 100 restart=on-failure stdout=capture "dupfallbackcheck: implicit stdout live\n" bootprobe handoffcheck stdiocheck stdiobadbind dupcheck
-service rtctest oneshot /rtctest 100 restart=on-failure stdout=capture "RTC PASS\n" bootprobe
-service proctest oneshot /proctest 100 restart=on-failure stdout=capture "PROC PASS\n" bootprobe
-service dirtest oneshot /dirtest 100 restart=on-failure stdout=capture "DIRTEST PASS\n" bootprobe
-service mmaptest oneshot /mmaptest 100 restart=on-failure stdout=capture "MMAP PASS\n" bootprobe
-service powercheck oneshot /powercheck 100 restart=on-failure stdout=capture "POWERCHECK PASS\n" bootprobe
-service nettest oneshot /nettest 100 restart=on-failure stdout=capture "NET PASS\n" bootprobe
-service shelltest oneshot /shelltest 100 restart=on-failure stdout=capture "SHELL PASS\n" bootprobe
-service desktopdemo daemon /desktopdemo 100 restart=always login pkgtest bootprobe handoffcheck stdiocheck stdiobadbind dupcheck handlelimitcheck fileoffsetcheck seekcheck pollcheck logcollector pipeconsumer stdionullcheck fstest desktoptest pollwaitcheck pollmanycheck dupfallbackcheck rtctest proctest dirtest mmaptest powercheck nettest shelltest
+service syslogd daemon /sbin/syslogd 100 log=server
+service crashcollect oneshot /sbin/crashcollect 100 restart=on-failure syslogd
+service bootprobe oneshot /lib/tests/bootprobe 100 restart=on-failure log=syslog syslogd
+service handoffcheck oneshot /lib/tests/handoffcheck 100 restart=on-failure stdin=pipe "init handoff ok\n" bootprobe
+service stdiocheck oneshot /lib/tests/stdiocheck 100 restart=on-failure stdin=pipe "init stdio ok\n" stdout=capture "stdiocheck: stdout ok\n" stderr=capture "stdiocheck: stderr ok\n" bootprobe handoffcheck
+service stdiobadbind oneshot /lib/tests/stdiobadbind 100 restart=on-failure bootprobe handoffcheck stdiocheck
+service dupcheck oneshot /lib/tests/dupcheck 100 restart=on-failure stdout=capture "dupcheck: dup ok\n" bootprobe handoffcheck stdiocheck stdiobadbind
+service handlelimitcheck oneshot /lib/tests/handlelimitcheck 100 restart=on-failure stdout=capture "handlelimitcheck: emfile ok\n" bootprobe handoffcheck stdiocheck stdiobadbind dupcheck
+service fileoffsetcheck oneshot /lib/tests/fileoffsetcheck 100 restart=on-failure stdout=capture "fileoffsetcheck: offset ok\n" bootprobe handoffcheck stdiocheck stdiobadbind handlelimitcheck
+service seekcheck oneshot /lib/tests/seekcheck 100 restart=on-failure stdout=capture "seekcheck: seek ok\n" bootprobe handoffcheck stdiocheck stdiobadbind fileoffsetcheck
+service pollcheck oneshot /lib/tests/pollcheck 100 restart=on-failure stdout=capture "pollcheck: poll ok\n" bootprobe handoffcheck stdiocheck stdiobadbind seekcheck
+service fstest oneshot /lib/tests/fstest 100 restart=on-failure stdout=capture "FSTEST PASS\n" bootprobe handoffcheck stdiocheck stdiobadbind
+service login oneshot /sbin/login 100 restart=on-failure stdout=capture "LOGIN PASS\n" bootprobe 
+service hpkgtest oneshot /lib/tests/hpkgtest 100 restart=on-failure stdout=capture "HPKG PASS\n" bootprobe fstest login
+service desktoptest oneshot /lib/tests/desktoptest 100 restart=on-failure stdout=capture "DESKTOPTEST PASS\n" bootprobe handoffcheck stdiocheck stdiobadbind fstest
+service logproducer_a oneshot /lib/tests/logproducer_a 100 restart=on-failure stdout=channel logbus bootprobe handoffcheck stdiocheck stdiobadbind
+service logproducer_b oneshot /lib/tests/logproducer_b 100 restart=on-failure stdout=channel logbus bootprobe handoffcheck stdiocheck stdiobadbind logproducer_a
+service logcollector oneshot /lib/tests/logcollector 100 restart=on-failure stdin=channel logbus stdout=capture "logcollector: multiwriter ok\n" bootprobe handoffcheck stdiocheck stdiobadbind logproducer_b
+service logsink_writer_a oneshot /lib/tests/logsink_writer_a 100 restart=on-failure stdout=logsink syslog bootprobe handoffcheck stdiocheck stdiobadbind logcollector
+service logsink_writer_b oneshot /lib/tests/logsink_writer_b 100 restart=on-failure stdout=logsink syslog bootprobe handoffcheck stdiocheck stdiobadbind logcollector logsink_writer_a
+service teewriter oneshot /lib/tests/teewriter 100 restart=on-failure stdout=tee teebus bootprobe handoffcheck stdiocheck stdiobadbind logcollector logsink_writer_b
+service teereader_a oneshot /lib/tests/teereader_a 100 restart=on-failure stdin=tee teebus stdout=capture "teereader_a: tee ok\n" bootprobe handoffcheck stdiocheck stdiobadbind logcollector teewriter
+service teereader_b oneshot /lib/tests/teereader_b 100 restart=on-failure stdin=tee teebus stdout=capture "teereader_b: tee ok\n" bootprobe handoffcheck stdiocheck stdiobadbind logcollector teewriter
+service pipeproducer oneshot /lib/tests/pipeproducer 100 restart=on-failure stdout=channel bootseq bootprobe handoffcheck stdiocheck stdiobadbind logcollector teereader_b
+service pipeconsumer oneshot /lib/tests/pipeconsumer 100 restart=on-failure stdin=channel bootseq stdout=capture "pipeconsumer: channel ok\n" bootprobe handoffcheck stdiocheck stdiobadbind logcollector pipeproducer
+service stdionullcheck oneshot /lib/tests/stdionullcheck 100 restart=on-failure stdin=null stdout=null stderr=null bootprobe handoffcheck stdiocheck stdiobadbind pipeconsumer
+service pollwaitcheck oneshot /lib/tests/pollwaitcheck 100 restart=on-failure stdout=capture "pollwaitcheck: wait ok\n" bootprobe handoffcheck stdiocheck stdiobadbind pollcheck
+service pollmanycheck oneshot /lib/tests/pollmanycheck 100 restart=on-failure stdout=capture "pollmanycheck: many ok\n" bootprobe handoffcheck stdiocheck stdiobadbind pollwaitcheck
+service dupfallbackcheck oneshot /lib/tests/dupfallbackcheck 100 restart=on-failure stdout=capture "dupfallbackcheck: implicit stdout live\n" bootprobe handoffcheck stdiocheck stdiobadbind dupcheck
+service rtctest oneshot /lib/tests/rtctest 100 restart=on-failure stdout=capture "RTC PASS\n" bootprobe
+service proctest oneshot /lib/tests/proctest 100 restart=on-failure stdout=capture "PROC PASS\n" bootprobe
+service dirtest oneshot /lib/tests/dirtest 100 restart=on-failure stdout=capture "DIRTEST PASS\n" bootprobe
+service mmaptest oneshot /lib/tests/mmaptest 100 restart=on-failure stdout=capture "MMAP PASS\n" bootprobe
+service mprotecttest oneshot /lib/tests/mprotecttest 100 restart=on-failure stdout=capture "MPROTECT PASS\n" bootprobe
+service powercheck oneshot /lib/tests/powercheck 100 restart=on-failure stdout=capture "POWERCHECK PASS\n" bootprobe
+service nettest oneshot /lib/tests/nettest 100 restart=on-failure stdout=capture "NET PASS\n" bootprobe
+service shelltest oneshot /lib/tests/shelltest 100 restart=on-failure stdout=capture "SHELL PASS\n" bootprobe
+service libctest oneshot /lib/tests/libctest 100 restart=on-failure stdout=capture "LIBC PASS\n" bootprobe
+service cwdcheck oneshot /lib/tests/cwdcheck 100 restart=on-failure stdout=capture "cwdcheck: cwd ok\n" bootprobe
+service linktest oneshot /lib/tests/linktest 100 restart=on-failure stdout=capture "LINK PASS\n" bootprobe
+service logtest oneshot /lib/tests/logtest 100 restart=on-failure stdout=capture "SYSLOG PASS\n" stderr=syslog bootprobe syslogd
+service udptest oneshot /lib/tests/udptest 100 restart=on-failure stdout=capture "UDP PASS\n" bootprobe
+service tcptest oneshot /lib/tests/tcptest 100 restart=on-failure stdout=capture "TCP PASS\n" bootprobe
+service faulttest oneshot /lib/tests/faulttest 100 restart=on-failure stdout=capture "FAULT PASS\n" bootprobe
+service schedtest oneshot /lib/tests/schedtest 100 restart=on-failure stdout=capture "SCHED PASS\n" bootprobe
+service sigtest oneshot /lib/tests/sigtest 100 restart=on-failure stdout=capture "SIG PASS\n" bootprobe
+service wptest oneshot /lib/tests/wptest 100 restart=on-failure stdout=capture "WP PASS\n" bootprobe
+service dcachetest oneshot /lib/tests/dcachetest 100 restart=on-failure stdout=capture "DCACHE PASS\n" bootprobe
+service iotest oneshot /lib/tests/iotest 100 restart=on-failure stdout=capture "IO PASS\n" bootprobe
+service perftest oneshot /lib/tests/perftest 100 restart=on-failure stdout=capture "PERF PASS\n" bootprobe
+service splashtest oneshot /lib/tests/splashtest 100 restart=on-failure stdout=capture "SPLASH PASS\n" bootprobe
+service waitqtest oneshot /lib/tests/waitqtest 100 restart=on-failure stdout=capture "WAITQ PASS\n" bootprobe
+service editortest oneshot /lib/tests/editortest 100 restart=on-failure stdout=capture "EDITOR PASS\n" bootprobe
+service fuzzycheck oneshot /lib/tests/fuzzycheck 100 restart=on-failure stdout=capture "FUZZY PASS\n" bootprobe
+service termtest oneshot /lib/tests/termtest 100 restart=on-failure stdout=capture "TERM PASS\n" bootprobe shelltest
+service supervisehang oneshot /lib/tests/supervisehang 100 restart=never timeout=300
+service superviseflap daemon /lib/tests/superviseflap 100 restart=on-failure retries=2
+service supervisetest oneshot /lib/tests/supervisetest 100 restart=on-failure stdout=capture "SUPERVISE PASS\n" bootprobe superviseflap
+service exectest oneshot /lib/tests/exectest 100 restart=on-failure stdout=capture "EXEC PASS\n" bootprobe
+service permtest oneshot /lib/tests/permtest 100 restart=on-failure stdout=capture "PERM PASS\n" bootprobe
+service crashtest oneshot /lib/tests/crashtest 100 restart=on-failure stdout=capture "CRASH PASS\n" bootprobe crashcollect
+service oomtest oneshot /lib/tests/oomtest 100 restart=never stdout=capture "OOM PASS\n" bootprobe crashtest
+service desktopdemo daemon /sbin/desktopdemo 100 restart=always display=owner stderr=syslog login hpkgtest bootprobe handoffcheck stdiocheck stdiobadbind dupcheck handlelimitcheck fileoffsetcheck seekcheck pollcheck logcollector pipeconsumer stdionullcheck fstest desktoptest pollwaitcheck pollmanycheck dupfallbackcheck rtctest proctest dirtest mmaptest powercheck nettest shelltest cwdcheck libctest linktest logtest mprotecttest udptest faulttest schedtest sigtest wptest dcachetest iotest perftest splashtest waitqtest supervisetest exectest permtest tcptest editortest fuzzycheck termtest crashtest oomtest

@@ -1,11 +1,16 @@
 #include "builtins.h"
 
+#include "account.h"
+#include "builtin_names.h"
 #include "diag.h"
 #include "env.h"
 #include "exec.h"
+#include "interrupt.h"
 #include "jobs.h"
 #include "mini_libc.h"
 #include "output.h"
+#include "passwd.h"
+#include "signal.h"
 #include "syscall.h"
 
 enum {
@@ -48,14 +53,16 @@ static int builtin_help(int argc, char **argv) {
     (void)argc;
     (void)argv;
     out_str(1,
-            "Builtins: cat cd cp echo env exit export false help jobs ls mkdir mv\n"
-            "          pwd rm sleep time touch true unset wait\n"
+            "Builtins: cat cd chmod chown cp echo env exec exit export false help id\n"
+            "          jobs kill ln ls mkdir mv pwd readlink rm sleep sync time touch\n"
+            "          true unset uptime version wait whoami\n"
+            "Desktop terminal only: clear edit [file] files\n"
             "Diagnostics: pipe piperun pipenoinherit pipeblock pipefull\n"
             "          pipebroken pipeeof pollpipe pollwaitpipe pollmanypipe\n"
             "Syntax:   a | b   a && b   a || b   a ; b   a &\n"
             "          < file   > file   >> file   2> file   2>&1\n"
             "          'single' \"double $VAR\" \\escape  $VAR ${VAR} $?  NAME=value\n"
-            "Other commands are looked up along $PATH (default /).\n");
+            "Other commands are looked up along $PATH (default /bin:/sbin).\n");
     return 0;
 }
 
@@ -80,10 +87,14 @@ static int copy_fd_to_stdout(int fd) {
     for (;;) {
         long n = read(fd, io_buffer, sizeof(io_buffer));
         if (n < 0)
-            return -1;
+            return interrupt_pending() ? 0 : -1;
         if (n == 0)
             return 0;
         out_write(1, io_buffer, (size_t)n);
+        /* Stdin delivers data as it is produced; passing it on only at exit
+           would hide a live pipe or the terminal's echo of typed lines. */
+        if (fd == 0)
+            out_flush();
     }
 }
 
@@ -115,23 +126,87 @@ static int builtin_cat(int argc, char **argv) {
     return status;
 }
 
-static void list_directory(const char *path) {
+/* Appends " -> target" if path is a symlink. */
+static void print_link_target(const char *path) {
+    char target[COPY_PATH_MAX];
+    long length = sys_readlink(path, target, sizeof(target) - 1);
+    if (length <= 0)
+        return;
+    target[length] = 0;
+    out_str(1, " -> ");
+    out_str(1, target);
+}
+
+/* Starts a long listing line: mode, links, owner, group and size. */
+static void print_long_prefix(const char *path) {
+    stat_t st;
+    char mode[11];
+    char owner[PASSWD_NAME_MAX + 11];
+    char group[PASSWD_NAME_MAX + 11];
+    char line[2 * sizeof(owner) + 48];
+    if (lstat(path, &st) != 0) {
+        out_str(1, "?????????? ? ? ? ? ");
+        return;
+    }
+    account_format_mode(st.st_mode, mode);
+    account_format_owner(st.st_uid, owner, sizeof(owner));
+    account_format_owner(st.st_gid, group, sizeof(group));
+    snprintf(line, sizeof(line), "%s %u %s %s %u ", mode, st.st_nlink, owner,
+             group, st.st_size);
+    out_str(1, line);
+}
+
+enum {
+    LS_LONG = 1 << 0,
+    LS_ALL = 1 << 1,
+};
+
+static int is_dot_entry(const char *name) {
+    return str_eq(name, ".") || str_eq(name, "..");
+}
+
+static void list_directory(const char *path, int flags) {
     dirent_t entry;
+    char full[COPY_PATH_MAX + DIRENT_NAME_MAX + 2];
+    int long_format = flags & LS_LONG;
     for (int pos = 0; readdir_pos(path, pos, &entry) == 1; ++pos) {
+        if (!(flags & LS_ALL) && is_dot_entry(entry.d_name))
+            continue;
+        int has_path = snprintf(full, sizeof(full), "%s/%s", path, entry.d_name) <
+                       (int)sizeof(full);
+        if (long_format && has_path)
+            print_long_prefix(full);
         out_str(1, entry.d_name);
         if (entry.d_type == 4)
             out_char(1, '/');
+        if (entry.d_type == 10 && has_path)
+            print_link_target(full);
         out_char(1, '\n');
     }
 }
 
 static int builtin_ls(int argc, char **argv) {
     int status = 0;
-    if (argc < 2) {
-        list_directory(".");
+    int first = 1;
+    int flags = 0;
+    int long_format;
+    for (; first < argc && argv[first][0] == '-' && argv[first][1]; ++first) {
+        for (const char *option = argv[first] + 1; *option; ++option) {
+            if (*option == 'l') {
+                flags |= LS_LONG;
+            } else if (*option == 'a') {
+                flags |= LS_ALL;
+            } else {
+                return usage("ls", "usage: ls [-la] [path]...");
+            }
+        }
+    }
+    long_format = flags & LS_LONG;
+    if (first >= argc) {
+        list_directory(".", flags);
         return 0;
     }
-    for (int i = 1; i < argc; ++i) {
+    for (int i = first; i < argc; ++i) {
         stat_t st;
         if (stat(argv[i], &st) != 0) {
             out_error("ls", argv[i], "no such file or directory");
@@ -139,15 +214,18 @@ static int builtin_ls(int argc, char **argv) {
             continue;
         }
         if (!S_ISDIR(st.st_mode)) {
+            if (long_format)
+                print_long_prefix(argv[i]);
             out_str(1, argv[i]);
+            print_link_target(argv[i]);
             out_char(1, '\n');
             continue;
         }
-        if (argc > 2) {
+        if (argc - first > 1) {
             out_str(1, argv[i]);
             out_str(1, ":\n");
         }
-        list_directory(argv[i]);
+        list_directory(argv[i], flags);
     }
     return status;
 }
@@ -228,6 +306,40 @@ static int builtin_mv(int argc, char **argv) {
         return STATUS_FAILURE;
     }
     return 0;
+}
+
+static int builtin_ln(int argc, char **argv) {
+    int symbolic = argc > 1 && str_eq(argv[1], "-s");
+    int first = symbolic ? 2 : 1;
+    if (argc - first != 2)
+        return usage("ln", "usage: ln [-s] <target> <link>");
+    long rc = symbolic ? sys_symlink(argv[first], argv[first + 1])
+                       : sys_link(argv[first], argv[first + 1]);
+    if (rc != 0) {
+        out_error("ln", argv[first + 1],
+                  symbolic ? "cannot create symbolic link" : "cannot create hard link");
+        return STATUS_FAILURE;
+    }
+    return 0;
+}
+
+static int builtin_readlink(int argc, char **argv) {
+    int status = 0;
+    if (argc < 2)
+        return usage("readlink", "usage: readlink <link>...");
+    for (int i = 1; i < argc; ++i) {
+        char target[COPY_PATH_MAX];
+        long length = sys_readlink(argv[i], target, sizeof(target) - 1);
+        if (length <= 0) {
+            out_error("readlink", argv[i], "not a symbolic link");
+            status = STATUS_FAILURE;
+            continue;
+        }
+        target[length] = 0;
+        out_str(1, target);
+        out_char(1, '\n');
+    }
+    return status;
 }
 
 static int write_all(int fd, const char *buf, size_t len) {
@@ -358,7 +470,138 @@ static int builtin_sleep(int argc, char **argv) {
             return usage("sleep", "usage: sleep [milliseconds]");
     }
     out_flush();
-    sleep_ms((unsigned long)ms);
+    if (!interrupt_pending())
+        sleep_ms((unsigned long)ms);
+    return 0;
+}
+
+static void format_uptime(char *out, size_t cap, unsigned long seconds) {
+    unsigned long hours = seconds / 3600;
+    unsigned long minutes = seconds / 60 % 60;
+    seconds %= 60;
+    if (hours > 0)
+        snprintf(out, cap, "%luh %02lum %02lus", hours, minutes, seconds);
+    else if (minutes > 0)
+        snprintf(out, cap, "%lum %02lus", minutes, seconds);
+    else
+        snprintf(out, cap, "%lus", seconds);
+}
+
+static int builtin_uptime(int argc, char **argv) {
+    char text[32];
+    (void)argv;
+    if (argc > 1)
+        return usage("uptime", "usage: uptime");
+    format_uptime(text, sizeof(text), time_ms() / 1000);
+    out_str(1, "up ");
+    out_str(1, text);
+    out_char(1, '\n');
+    return 0;
+}
+
+static int builtin_sync(int argc, char **argv) {
+    (void)argv;
+    if (argc > 1)
+        return usage("sync", "usage: sync");
+    long rc = sys_sync();
+    if (rc != 0) {
+        out_error("sync", 0, "cannot write the filesystem to disk");
+        return STATUS_FAILURE;
+    }
+    return 0;
+}
+
+static int builtin_version(int argc, char **argv) {
+    char text[128];
+    long fd;
+    long length;
+    (void)argv;
+    if (argc > 1)
+        return usage("version", "usage: version");
+    fd = open("/proc/version", OPEN_READ);
+    if (fd < 0) {
+        out_error("version", 0, "version information unavailable");
+        return STATUS_FAILURE;
+    }
+    length = read((int)fd, text, sizeof(text) - 1);
+    close((int)fd);
+    if (length <= 0) {
+        out_error("version", 0, "version information unavailable");
+        return STATUS_FAILURE;
+    }
+    out_write(1, text, (size_t)length);
+    if (text[length - 1] != '\n')
+        out_char(1, '\n');
+    return 0;
+}
+
+/* The commands below ask the desktop terminal that hosts the shell to do
+ * something that only the desktop can: they print a private escape sequence
+ * (see docs/TERMINAL.md) instead of acting themselves. */
+static int require_terminal_host(const char *name) {
+    if (exec_terminal_host())
+        return 0;
+    out_error(name, 0, "only available in the desktop terminal");
+    return STATUS_FAILURE;
+}
+
+static int builtin_clear(int argc, char **argv) {
+    (void)argv;
+    if (argc > 1)
+        return usage("clear", "usage: clear");
+    if (require_terminal_host("clear") != 0)
+        return STATUS_FAILURE;
+    out_str(1, "\x1b[2J\x1b[H");
+    return 0;
+}
+
+/* The editor runs in the desktop process, whose working directory is not the
+ * shell's, so the file is named by an absolute path. */
+static int builtin_edit(int argc, char **argv) {
+    char path[COPY_PATH_MAX];
+    if (argc > 2)
+        return usage("edit", "usage: edit [file]");
+    if (require_terminal_host("edit") != 0)
+        return STATUS_FAILURE;
+    path[0] = 0;
+    if (argc == 2) {
+        const char *name = argv[1];
+        int length;
+        if (name[0] == '/') {
+            length = snprintf(path, sizeof(path), "%s", name);
+        } else {
+            char cwd[COPY_PATH_MAX];
+            if (!getcwd(cwd, sizeof(cwd))) {
+                out_error("edit", 0, "cannot determine working directory");
+                return STATUS_FAILURE;
+            }
+            length = snprintf(path, sizeof(path), "%s%s%s", cwd,
+                              cwd[1] ? "/" : "", name);
+        }
+        if (length < 0 || length >= (int)sizeof(path)) {
+            out_error("edit", name, "path too long");
+            return STATUS_FAILURE;
+        }
+        for (const char *c = path; *c; ++c) {
+            if ((unsigned char)*c < 0x20) {
+                out_error("edit", name, "invalid file name");
+                return STATUS_FAILURE;
+            }
+        }
+    }
+    out_str(1, "\x1b]7770;edit;");
+    out_str(1, path);
+    out_char(1, '\a');
+    return 0;
+}
+
+static int builtin_files(int argc, char **argv) {
+    (void)argv;
+    if (argc > 1)
+        return usage("files", "usage: files");
+    if (require_terminal_host("files") != 0)
+        return STATUS_FAILURE;
+    out_str(1, "\x1b]7770;files\a");
     return 0;
 }
 
@@ -447,6 +690,49 @@ static int builtin_wait(int argc, char **argv) {
     return status;
 }
 
+/* kill [-SIGNAL | -s SIGNAL] {pid | %job}... ; SIGNAL is a name or number,
+   0 only checks that the process exists. */
+static int builtin_kill(int argc, char **argv) {
+    static const char kill_usage[] = "usage: kill [-SIGNAL | -s SIGNAL] {pid | %job}...";
+    int sig = SIGTERM;
+    int first = 1;
+    int status = 0;
+
+    if (first < argc && str_eq(argv[first], "-s")) {
+        if (first + 1 >= argc)
+            return usage("kill", kill_usage);
+        sig = signal_number(argv[first + 1]);
+        first += 2;
+    } else if (first < argc && argv[first][0] == '-' && argv[first][1]) {
+        sig = signal_number(argv[first] + 1);
+        first++;
+    }
+    if (sig < 0) {
+        out_error("kill", 0, "unknown signal");
+        return STATUS_USAGE;
+    }
+    if (first >= argc)
+        return usage("kill", kill_usage);
+
+    for (int i = first; i < argc; ++i) {
+        const char *arg = argv[i];
+        int is_job = arg[0] == '%';
+        long id = parse_decimal(is_job ? arg + 1 : arg);
+        long rc;
+        if (id <= 0) {
+            out_error("kill", arg, "not a pid or job");
+            status = STATUS_FAILURE;
+            continue;
+        }
+        rc = is_job ? jobs_signal((int)id, sig) : kill((int)id, sig);
+        if (rc != 0) {
+            out_error("kill", arg, is_job ? "no such job" : "no such process");
+            status = STATUS_FAILURE;
+        }
+    }
+    return status;
+}
+
 static int builtin_true(int argc, char **argv) {
     (void)argc;
     (void)argv;
@@ -457,6 +743,12 @@ static int builtin_false(int argc, char **argv) {
     (void)argc;
     (void)argv;
     return STATUS_FAILURE;
+}
+
+static int builtin_exec(int argc, char **argv) {
+    if (argc < 2)
+        return usage("exec", "usage: exec command [argument]...");
+    return exec_replace(argv + 1);
 }
 
 static int builtin_exit(int argc, char **argv) {
@@ -477,28 +769,10 @@ typedef struct BuiltinEntry {
     BuiltinFn fn;
 } BuiltinEntry;
 
+#define BUILTIN_ENTRY(name) {#name, builtin_##name},
+
 static const BuiltinEntry builtins[] = {
-    {"cat", builtin_cat},
-    {"cd", builtin_cd},
-    {"cp", builtin_cp},
-    {"echo", builtin_echo},
-    {"env", builtin_env},
-    {"exit", builtin_exit},
-    {"export", builtin_export},
-    {"false", builtin_false},
-    {"help", builtin_help},
-    {"jobs", builtin_jobs},
-    {"ls", builtin_ls},
-    {"mkdir", builtin_mkdir},
-    {"mv", builtin_mv},
-    {"pwd", builtin_pwd},
-    {"rm", builtin_rm},
-    {"sleep", builtin_sleep},
-    {"time", builtin_time},
-    {"touch", builtin_touch},
-    {"true", builtin_true},
-    {"unset", builtin_unset},
-    {"wait", builtin_wait},
+    SHELL_BUILTIN_NAMES(BUILTIN_ENTRY)
 };
 
 BuiltinFn builtin_find(const char *name) {
@@ -506,5 +780,6 @@ BuiltinFn builtin_find(const char *name) {
         if (str_eq(builtins[i].name, name))
             return builtins[i].fn;
     }
-    return diag_find(name);
+    BuiltinFn account_fn = account_find(name);
+    return account_fn ? account_fn : diag_find(name);
 }

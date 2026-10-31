@@ -2,7 +2,9 @@
 #include "drivers/block.h"
 #include "drivers/block_cache.h"
 #include "drivers/mbr.h"
+#include "fs/dcache.h"
 #include "mm/kheap.h"
+#include "rtc.h"
 #include "errno.h"
 
 #include <stddef.h>
@@ -15,6 +17,11 @@
  * below need no locking. Metadata updates are ordered so that an I/O error
  * in the middle of an operation can leak blocks or inodes but never leaves
  * a directory entry pointing at an unallocated or uninitialised inode.
+ *
+ * Namespace operations and whole-file writes return only after the block
+ * cache has been synced. Positioned writes and truncation are write-back:
+ * they are durable once the cache's periodic flush, ext2_sync() or an
+ * unmount/power-off has run.
  */
 
 #define EXT2_SUPER_MAGIC          0xEF53
@@ -27,6 +34,10 @@
 #define EXT2_NDIR_BLOCKS          12
 #define EXT2_NAME_LEN             255
 #define EXT2_LINK_MAX             32000
+/* i_size is 32 bit; the large-file high word in i_dir_acl is not used. */
+#define EXT2_FILE_SIZE_MAX        0x7FFFFFFFu
+/* Targets up to the size of i_block[] live in the inode itself. */
+#define EXT2_FAST_SYMLINK_MAX     60
 
 #define EXT2_S_IFMT   0xF000
 #define EXT2_S_IFSOCK 0xC000
@@ -45,6 +56,12 @@
 #define EXT2_FT_FIFO     5
 #define EXT2_FT_SOCK     6
 #define EXT2_FT_SYMLINK  7
+
+#define EXT2_PERMISSION_MASK 0777
+
+/* Where Linux keeps the upper halves of the 32-bit owner ids. */
+#define EXT2_OSD2_UID_HIGH 4
+#define EXT2_OSD2_GID_HIGH 6
 
 #define EXT2_INDEX_FL 0x00001000
 
@@ -260,9 +277,14 @@ static int sync_result(int rc) {
 /* Inodes                                                              */
 /* ------------------------------------------------------------------ */
 
-/* The kernel has no wall clock yet; the newest timestamp recorded in the
-   superblock is the best available lower bound for "now". */
+/* Wall-clock seconds from the RTC. Without a usable RTC the newest timestamp
+   recorded in the superblock is the best available lower bound for "now", so
+   inode times never run backwards. */
 static uint32_t fs_timestamp(void) {
+    hydrogen_rtc_time_t now;
+    if (rtc_now(&now) == 0 && now.epoch_seconds > 0)
+        return now.epoch_seconds > UINT32_MAX ? UINT32_MAX : (uint32_t)now.epoch_seconds;
+
     uint32_t t = sb.s_wtime;
     if (sb.s_mtime > t) t = sb.s_mtime;
     if (sb.s_lastcheck > t) t = sb.s_lastcheck;
@@ -271,6 +293,31 @@ static uint32_t fs_timestamp(void) {
 
 static int is_dir(const ext2_inode_t *ino) { return (ino->i_mode & EXT2_S_IFMT) == EXT2_S_IFDIR; }
 static int is_file(const ext2_inode_t *ino) { return (ino->i_mode & EXT2_S_IFMT) == EXT2_S_IFREG; }
+static int is_symlink(const ext2_inode_t *ino) { return (ino->i_mode & EXT2_S_IFMT) == EXT2_S_IFLNK; }
+
+static uint32_t osd2_u16(const ext2_inode_t *ino, uint32_t at) {
+    return (uint32_t)ino->i_osd2[at] | (uint32_t)ino->i_osd2[at + 1] << 8;
+}
+
+static void osd2_set_u16(ext2_inode_t *ino, uint32_t at, uint32_t value) {
+    ino->i_osd2[at] = (uint8_t)value;
+    ino->i_osd2[at + 1] = (uint8_t)(value >> 8);
+}
+
+static uint32_t inode_uid(const ext2_inode_t *ino) {
+    return ino->i_uid | osd2_u16(ino, EXT2_OSD2_UID_HIGH) << 16;
+}
+
+static uint32_t inode_gid(const ext2_inode_t *ino) {
+    return ino->i_gid | osd2_u16(ino, EXT2_OSD2_GID_HIGH) << 16;
+}
+
+static void inode_set_owner(ext2_inode_t *ino, uint32_t uid, uint32_t gid) {
+    ino->i_uid = (uint16_t)uid;
+    ino->i_gid = (uint16_t)gid;
+    osd2_set_u16(ino, EXT2_OSD2_UID_HIGH, uid >> 16);
+    osd2_set_u16(ino, EXT2_OSD2_GID_HIGH, gid >> 16);
+}
 
 static uint32_t group_of_inode(uint32_t ino) { return (ino - 1) / sb.s_inodes_per_group; }
 
@@ -344,6 +391,10 @@ static int alloc_block(uint32_t goal_group, uint32_t *out_blk) {
         if (rc != 0) return rc;
         uint32_t n = group_block_count(g);
         for (uint32_t i = 0; i < n; ++i) {
+            if (i % 8 == 0 && bitmap_buf[i / 8] == 0xFF) {
+                i += 7;
+                continue;
+            }
             uint8_t bit = (uint8_t)(1u << (i % 8));
             if (bitmap_buf[i / 8] & bit) continue;
             bitmap_buf[i / 8] |= bit;
@@ -554,6 +605,90 @@ static int free_indirect(uint32_t blk, uint32_t level) {
     return free_block(blk);
 }
 
+/* Free the part of the tree below indirect block blk that maps logical
+   blocks at or beyond keep. base is the logical index of the first data block
+   the tree covers. *empty tells the caller that nothing is left below blk, so
+   blk itself can go too. Every freed block, indirect ones included, is added
+   to *freed. */
+static int trim_indirect(uint32_t blk, uint32_t level, uint32_t base, uint32_t keep,
+                         uint32_t *freed, int *empty) {
+    uint32_t *table = indirect_buf[level - 1];
+    int rc = read_block(blk, table);
+    if (rc != 0) return rc;
+    uint32_t ptrs = block_size / 4;
+    uint32_t span = 1;
+    for (uint32_t l = 1; l < level; ++l) span *= ptrs;
+
+    int kept = 0;
+    int changed = 0;
+    for (uint32_t i = 0; i < ptrs && rc == 0; ++i) {
+        uint32_t child = table[i];
+        if (!child) continue;
+        uint32_t child_base = base + i * span;
+        if (child_base + span <= keep) {
+            kept = 1;
+            continue;
+        }
+        if (level > 1) {
+            int child_empty = 0;
+            rc = trim_indirect(child, level - 1, child_base, keep, freed, &child_empty);
+            if (rc != 0) break;
+            if (!child_empty) {
+                kept = 1;
+                continue;
+            }
+        }
+        rc = free_block(child);
+        if (rc != 0) break;
+        (*freed)++;
+        table[i] = 0;
+        changed = 1;
+    }
+    /* A failed pass still persists the pointers it has already released. */
+    if (changed && (kept || rc != 0)) {
+        int wr = write_block(blk, table);
+        if (rc == 0) rc = wr;
+    }
+    *empty = rc == 0 && !kept;
+    return rc;
+}
+
+/* Release every data and indirect block that maps logical block keep or
+   later and adjust i_blocks. The size is left to the caller. */
+static int inode_trim_blocks(ext2_inode_t *ino, uint32_t keep) {
+    uint32_t freed = 0;
+    int rc = 0;
+    for (uint32_t i = keep; i < EXT2_NDIR_BLOCKS && rc == 0; ++i) {
+        if (!ino->i_block[i]) continue;
+        rc = free_block(ino->i_block[i]);
+        if (rc != 0) break;
+        ino->i_block[i] = 0;
+        freed++;
+    }
+    uint32_t ptrs = block_size / 4;
+    uint32_t base = EXT2_NDIR_BLOCKS;
+    uint32_t span = ptrs;
+    for (uint32_t level = 1; level <= 3 && rc == 0; ++level) {
+        uint32_t slot = EXT2_NDIR_BLOCKS - 1 + level;
+        if (ino->i_block[slot] && base + span > keep) {
+            int empty = 0;
+            rc = trim_indirect(ino->i_block[slot], level, base, keep, &freed, &empty);
+            if (rc == 0 && empty) {
+                rc = free_block(ino->i_block[slot]);
+                if (rc == 0) {
+                    ino->i_block[slot] = 0;
+                    freed++;
+                }
+            }
+        }
+        base += span;
+        if (level < 3) span *= ptrs;
+    }
+    uint32_t sectors = freed * sectors_per_block;
+    ino->i_blocks = ino->i_blocks > sectors ? ino->i_blocks - sectors : 0;
+    return rc;
+}
+
 /* Device nodes and fast symlinks keep payload, not block numbers, in i_block. */
 static int inode_has_block_map(const ext2_inode_t *ino) {
     uint16_t fmt = ino->i_mode & EXT2_S_IFMT;
@@ -609,6 +744,8 @@ static int inode_release_xattr(ext2_inode_t *ino) {
 /* Free an inode whose last link has already been removed. */
 static int inode_destroy(uint32_t ino_num, ext2_inode_t *ino) {
     int dir = is_dir(ino);
+    /* The number is about to be reused; nothing cached may refer to it. */
+    dcache_invalidate_inode(DCACHE_FS_EXT2, ino_num);
     int rc = inode_release_blocks(ino);
     if (rc == 0) rc = inode_release_xattr(ino);
     if (rc != 0) return rc;
@@ -744,6 +881,7 @@ static int visit_insert(ext2_dir_entry_t *ent, const ext2_dir_pos_t *pos, void *
 static int dir_add_entry(uint32_t dir_ino, ext2_inode_t *dir, const char *name, uint32_t len,
                          uint32_t child_ino, uint8_t file_type) {
     if (len == 0 || len > EXT2_NAME_LEN) return -EINVAL;
+    dcache_invalidate_entry(DCACHE_FS_EXT2, dir_ino, name, len);
     int rc;
     /* Entries are inserted linearly, which would leave an htree index
        stale; dropping the flag turns the directory into a valid linear
@@ -784,7 +922,9 @@ static int visit_remove(ext2_dir_entry_t *ent, const ext2_dir_pos_t *pos, void *
     return rc != 0 ? rc : 1;
 }
 
-static int dir_remove_entry(const ext2_inode_t *dir, const char *name, uint32_t len) {
+static int dir_remove_entry(uint32_t dir_ino, const ext2_inode_t *dir, const char *name,
+                            uint32_t len) {
+    dcache_invalidate_entry(DCACHE_FS_EXT2, dir_ino, name, len);
     dir_name_ctx_t c = { name, len, 0, 0 };
     int rc = dir_walk(dir, visit_remove, &c);
     if (rc < 0) return rc;
@@ -808,8 +948,9 @@ static int visit_retarget(ext2_dir_entry_t *ent, const ext2_dir_pos_t *pos, void
 }
 
 /* Point an existing entry at a different inode. */
-static int dir_retarget_entry(const ext2_inode_t *dir, const char *name, uint32_t len,
-                              uint32_t new_ino, uint8_t file_type) {
+static int dir_retarget_entry(uint32_t dir_ino, const ext2_inode_t *dir, const char *name,
+                              uint32_t len, uint32_t new_ino, uint8_t file_type) {
+    dcache_invalidate_entry(DCACHE_FS_EXT2, dir_ino, name, len);
     dir_retarget_ctx_t c = { name, len, new_ino, file_type };
     int rc = dir_walk(dir, visit_retarget, &c);
     if (rc < 0) return rc;
@@ -856,6 +997,22 @@ static const char *path_end(const char *path) {
     return path;
 }
 
+/* Read-path lookup through the dentry cache. The mutating operations call
+   dir_lookup directly so that their decisions never depend on cached state. */
+static int dir_lookup_cached(uint32_t dir_ino, const ext2_inode_t *dir, const char *name,
+                             uint32_t len, uint32_t *out_ino) {
+    if (!is_dir(dir)) return -ENOTDIR;
+    switch (dcache_lookup(DCACHE_FS_EXT2, dir_ino, name, len, out_ino)) {
+    case DCACHE_HIT_POSITIVE: return 0;
+    case DCACHE_HIT_NEGATIVE: return -ENOENT;
+    case DCACHE_MISS: break;
+    }
+    int rc = dir_lookup(dir, name, len, out_ino);
+    if (rc == 0) dcache_insert(DCACHE_FS_EXT2, dir_ino, name, len, *out_ino);
+    else if (rc == -ENOENT) dcache_insert_negative(DCACHE_FS_EXT2, dir_ino, name, len);
+    return rc;
+}
+
 static int resolve_range(const char *path, const char *end, uint32_t *out_ino, ext2_inode_t *out) {
     uint32_t ino = EXT2_ROOT_INO;
     int rc = read_inode(ino, out);
@@ -865,7 +1022,7 @@ static int resolve_range(const char *path, const char *end, uint32_t *out_ino, e
     uint32_t len = 0;
     while (next_component(&cursor, end, &name, &len)) {
         uint32_t child = 0;
-        rc = dir_lookup(out, name, len, &child);
+        rc = dir_lookup_cached(ino, out, name, len, &child);
         if (rc != 0) return rc;
         rc = read_inode(child, out);
         if (rc != 0) return rc;
@@ -926,6 +1083,7 @@ static int check_not_ancestor(uint32_t ancestor, uint32_t start) {
 int ext2_mount_auto(void) {
     mounted = 0;
     writable = 0;
+    dcache_invalidate_fs(DCACHE_FS_EXT2);
     if (groups) {
         kfree(groups);
         groups = 0;
@@ -1050,18 +1208,57 @@ int ext2_read_file_at(const char *path, uint32_t offset, uint8_t *out,
     return 0;
 }
 
-int ext2_stat(const char *path, uint8_t *type, uint32_t *size) {
-    if (!mounted || !path) return -EINVAL;
+/* A symlink is reported as such; the final component is never followed. */
+int ext2_stat(const char *path, vfs_stat_t *out) {
+    if (!mounted || !path || !out) return -EINVAL;
+    uint32_t ino_num = 0;
+    ext2_inode_t ino;
+    int rc = resolve_path(path, &ino_num, &ino);
+    if (rc != 0) return rc;
+    if (is_dir(&ino)) out->type = 2;
+    else if (is_file(&ino)) out->type = 1;
+    else if (is_symlink(&ino)) out->type = 3;
+    else out->type = 0;
+    out->size = ino.i_size;
+    out->nlink = ino.i_links_count;
+    out->ino = ino_num;
+    out->mode = ino.i_mode & EXT2_PERMISSION_MASK;
+    out->uid = inode_uid(&ino);
+    out->gid = inode_gid(&ino);
+    out->mtime = ino.i_mtime;
+    return 0;
+}
+
+/* Copies the target of a symlink inode to buf without a terminator. */
+static int symlink_read_target(const ext2_inode_t *ino, char *buf) {
+    uint32_t len = ino->i_size;
+    if (len == 0 || len > block_size) return -EIO;
+    if (!inode_has_block_map(ino)) {
+        if (len > EXT2_FAST_SYMLINK_MAX) return -EIO;
+        buf_copy((uint8_t *)buf, (const uint8_t *)ino->i_block, len);
+        return 0;
+    }
+    uint32_t blk = 0;
+    int rc = inode_get_block(ino, 0, &blk);
+    if (rc != 0) return rc;
+    if (!blk) return -EIO;
+    rc = read_block(blk, block_buf);
+    if (rc != 0) return rc;
+    buf_copy((uint8_t *)buf, block_buf, len);
+    return 0;
+}
+
+int ext2_readlink(const char *path, char *buf, uint32_t cap) {
+    if (!mounted || !path || !buf || cap == 0) return -EINVAL;
     ext2_inode_t ino;
     int rc = resolve_path(path, 0, &ino);
     if (rc != 0) return rc;
-    if (type) {
-        if (is_dir(&ino)) *type = 2;
-        else if (is_file(&ino)) *type = 1;
-        else *type = 0;
-    }
-    if (size) *size = ino.i_size;
-    return 0;
+    if (!is_symlink(&ino)) return -EINVAL;
+    if (ino.i_size >= cap) return -ENAMETOOLONG;
+    rc = symlink_read_target(&ino, buf);
+    if (rc != 0) return rc;
+    buf[ino.i_size] = 0;
+    return (int)ino.i_size;
 }
 
 /* ------------------------------------------------------------------ */
@@ -1146,6 +1343,115 @@ int ext2_write_file(const char *path, const uint8_t *data, uint32_t size) {
         return sync_result(rc);
     }
     return sync_result(write_inode(ino_num, &ino));
+}
+
+int ext2_write_at(const char *path, uint32_t offset, const uint8_t *data, uint32_t size,
+                  uint32_t *written) {
+    *written = 0;
+    int rc = write_check(path);
+    if (rc != 0) return rc;
+    if (size > 0 && !data) return -EINVAL;
+    uint32_t ino_num = 0;
+    ext2_inode_t ino;
+    rc = resolve_path(path, &ino_num, &ino);
+    if (rc != 0) return rc;
+    if (is_dir(&ino)) return -EISDIR;
+    if (!is_file(&ino)) return -EINVAL;
+    if (size == 0) return 0;
+    if (offset > EXT2_FILE_SIZE_MAX || size > EXT2_FILE_SIZE_MAX - offset) return -EFBIG;
+
+    uint32_t goal = group_of_inode(ino_num);
+    uint32_t pos = offset;
+    const uint8_t *src = data;
+    uint32_t remaining = size;
+    while (remaining > 0) {
+        uint32_t lb = pos / block_size;
+        uint32_t block_off = pos % block_size;
+        uint32_t take = block_size - block_off;
+        if (take > remaining) take = remaining;
+
+        uint32_t blk = 0;
+        rc = inode_get_block(&ino, lb, &blk);
+        if (rc != 0) break;
+        int fresh = (blk == 0);
+        if (fresh) {
+            rc = inode_map_new_block(&ino, goal, lb, &blk);
+            if (rc != 0) break;
+        }
+        if (take == block_size) {
+            rc = write_block(blk, src);
+        } else {
+            if (fresh) {
+                buf_zero(block_buf, block_size);
+            } else {
+                rc = read_block(blk, block_buf);
+                if (rc != 0) break;
+            }
+            buf_copy(block_buf + block_off, src, take);
+            rc = write_block(blk, block_buf);
+        }
+        if (rc != 0) break;
+        pos += take;
+        src += take;
+        remaining -= take;
+    }
+
+    /* Blocks mapped so far stay referenced by the inode even if the write
+       stopped early, so the inode is written in every case. */
+    if (pos > offset) {
+        if (pos > ino.i_size) ino.i_size = pos;
+        ino.i_mtime = ino.i_ctime = fs_timestamp();
+    }
+    int inode_rc = write_inode(ino_num, &ino);
+    if (inode_rc == 0)
+        *written = pos - offset;
+    return rc != 0 ? rc : inode_rc;
+}
+
+/* Bytes past the end of file inside the last block must read as zero once
+   the file grows again. */
+static int zero_block_tail(const ext2_inode_t *ino, uint32_t size) {
+    uint32_t tail = size % block_size;
+    if (tail == 0) return 0;
+    uint32_t blk = 0;
+    int rc = inode_get_block(ino, size / block_size, &blk);
+    if (rc != 0 || !blk) return rc;
+    rc = read_block(blk, block_buf);
+    if (rc != 0) return rc;
+    buf_zero(block_buf + tail, block_size - tail);
+    return write_block(blk, block_buf);
+}
+
+int ext2_truncate(const char *path, uint32_t size) {
+    int rc = write_check(path);
+    if (rc != 0) return rc;
+    if (size > EXT2_FILE_SIZE_MAX) return -EFBIG;
+    uint32_t ino_num = 0;
+    ext2_inode_t ino;
+    rc = resolve_path(path, &ino_num, &ino);
+    if (rc != 0) return rc;
+    if (is_dir(&ino)) return -EISDIR;
+    if (!is_file(&ino)) return -EINVAL;
+    if (size == ino.i_size) return 0;
+
+    /* Growing only moves i_size: the new range is a hole that reads as zero. */
+    if (size < ino.i_size) {
+        rc = inode_trim_blocks(&ino, (size + block_size - 1) / block_size);
+        if (rc == 0) {
+            ino.i_size = size;
+            rc = zero_block_tail(&ino, size);
+        }
+    } else {
+        ino.i_size = size;
+    }
+    ino.i_mtime = ino.i_ctime = fs_timestamp();
+    int inode_rc = write_inode(ino_num, &ino);
+    return rc != 0 ? rc : inode_rc;
+}
+
+int ext2_sync(void) {
+    if (!mounted) return -EINVAL;
+    return block_cache_sync() == 0 ? 0 : -EIO;
 }
 
 int ext2_mkdir(const char *path) {
@@ -1236,7 +1542,7 @@ int ext2_rmdir(const char *path) {
     if (rc < 0) return rc;
     if (rc == 0) return -ENOTEMPTY;
 
-    rc = dir_remove_entry(&parent, name, len);
+    rc = dir_remove_entry(parent_ino, &parent, name, len);
     if (rc != 0) return sync_result(rc);
     if (parent.i_links_count > 1) parent.i_links_count--;
     rc = write_inode(parent_ino, &parent);
@@ -1264,7 +1570,7 @@ int ext2_unlink(const char *path) {
     if (rc != 0) return rc;
     if (is_dir(&ino)) return -EISDIR;
 
-    rc = dir_remove_entry(&parent, name, len);
+    rc = dir_remove_entry(parent_ino, &parent, name, len);
     if (rc != 0) return sync_result(rc);
     if (ino.i_links_count > 1) {
         ino.i_links_count--;
@@ -1334,17 +1640,18 @@ int ext2_rename(const char *old_path, const char *new_path) {
 
     uint8_t ftype = dirent_file_type(src.i_mode);
     if (replace) {
-        rc = dir_retarget_entry(np, new_name, new_len, src_ino, ftype);
+        rc = dir_retarget_entry(new_parent, np, new_name, new_len, src_ino, ftype);
     } else {
         rc = dir_add_entry(new_parent, np, new_name, new_len, src_ino, ftype);
     }
     if (rc != 0) return sync_result(rc);
 
-    rc = dir_remove_entry(op, old_name, old_len);
+    rc = dir_remove_entry(old_parent, op, old_name, old_len);
     if (rc != 0) return sync_result(rc);
 
     if (moves_dir) {
         dir_retarget_ctx_t c = { "..", 2, new_parent, dirent_file_type(EXT2_S_IFDIR) };
+        dcache_invalidate_entry(DCACHE_FS_EXT2, src_ino, "..", 2);
         rc = dir_walk(&src, visit_retarget, &c);
         if (rc < 0) return sync_result(rc);
         if (rc == 0) return sync_result(-EIO);
@@ -1369,4 +1676,129 @@ int ext2_rename(const char *old_path, const char *new_path) {
         }
     }
     return sync_result(rc);
+}
+
+int ext2_link(const char *old_path, const char *new_path) {
+    int rc = write_check(old_path);
+    if (rc != 0) return rc;
+    if (!new_path) return -EINVAL;
+    uint32_t ino_num = 0;
+    ext2_inode_t ino;
+    rc = resolve_path(old_path, &ino_num, &ino);
+    if (rc != 0) return rc;
+    if (is_dir(&ino)) return -EISDIR;
+    if (ino.i_links_count >= EXT2_LINK_MAX) return -EMLINK;
+
+    ext2_inode_t parent;
+    uint32_t parent_ino = 0;
+    const char *name = 0;
+    uint32_t len = 0;
+    rc = resolve_parent(new_path, &parent_ino, &parent, &name, &len);
+    if (rc == -EBUSY) return -EEXIST;
+    if (rc != 0) return rc;
+    if (name_is_dot(name, len) || name_is_dotdot(name, len)) return -EEXIST;
+    if (len > EXT2_NAME_LEN) return -ENAMETOOLONG;
+    uint32_t existing = 0;
+    rc = dir_lookup(&parent, name, len, &existing);
+    if (rc == 0) return -EEXIST;
+    if (rc != -ENOENT) return rc;
+
+    /* Count first: a failure below can then only leave the count too high,
+       never a directory entry that outlives the last reference. */
+    ino.i_links_count++;
+    ino.i_ctime = fs_timestamp();
+    rc = write_inode(ino_num, &ino);
+    if (rc == 0) rc = dir_add_entry(parent_ino, &parent, name, len, ino_num,
+                                    dirent_file_type(ino.i_mode));
+    if (rc != 0) {
+        ino.i_links_count--;
+        write_inode(ino_num, &ino);
+    }
+    return sync_result(rc);
+}
+
+int ext2_symlink(const char *target, const char *path) {
+    int rc = write_check(path);
+    if (rc != 0) return rc;
+    if (!target) return -EINVAL;
+    uint32_t target_len = 0;
+    while (target[target_len]) target_len++;
+    if (target_len == 0) return -ENOENT;
+    if (target_len >= block_size) return -ENAMETOOLONG;
+
+    ext2_inode_t parent;
+    uint32_t parent_ino = 0;
+    const char *name = 0;
+    uint32_t len = 0;
+    rc = resolve_parent(path, &parent_ino, &parent, &name, &len);
+    if (rc == -EBUSY) return -EEXIST;
+    if (rc != 0) return rc;
+    if (name_is_dot(name, len) || name_is_dotdot(name, len)) return -EEXIST;
+    if (len > EXT2_NAME_LEN) return -ENAMETOOLONG;
+    uint32_t existing = 0;
+    rc = dir_lookup(&parent, name, len, &existing);
+    if (rc == 0) return -EEXIST;
+    if (rc != -ENOENT) return rc;
+
+    uint32_t ino_num = 0;
+    rc = alloc_inode(group_of_inode(parent_ino), 0, &ino_num);
+    if (rc != 0) return sync_result(rc);
+
+    ext2_inode_t ino;
+    buf_zero(&ino, sizeof(ino));
+    ino.i_mode = EXT2_S_IFLNK | 0777;
+    ino.i_links_count = 1;
+    ino.i_size = target_len;
+    ino.i_atime = ino.i_ctime = ino.i_mtime = fs_timestamp();
+    if (target_len <= EXT2_FAST_SYMLINK_MAX) {
+        buf_copy((uint8_t *)ino.i_block, (const uint8_t *)target, target_len);
+    } else {
+        uint32_t blk = 0;
+        rc = inode_map_new_block(&ino, group_of_inode(ino_num), 0, &blk);
+        if (rc == 0) {
+            buf_zero(block_buf, block_size);
+            buf_copy(block_buf, (const uint8_t *)target, target_len);
+            rc = write_block(blk, block_buf);
+        }
+    }
+    if (rc == 0) rc = init_inode(ino_num, &ino);
+    if (rc == 0) rc = dir_add_entry(parent_ino, &parent, name, len, ino_num,
+                                    dirent_file_type(ino.i_mode));
+    if (rc != 0) {
+        inode_destroy(ino_num, &ino);
+        return sync_result(rc);
+    }
+    return sync_result(0);
+}
+
+/* Attribute changes act on the inode that path itself names; callers expand
+   a final symlink first. */
+static int attributes_load(const char *path, uint32_t *ino_num, ext2_inode_t *ino) {
+    int rc = write_check(path);
+    if (rc != 0) return rc;
+    return resolve_path(path, ino_num, ino);
+}
+
+static int attributes_store(uint32_t ino_num, ext2_inode_t *ino) {
+    ino->i_ctime = fs_timestamp();
+    return sync_result(write_inode(ino_num, ino));
+}
+
+int ext2_chmod(const char *path, uint32_t mode) {
+    if ((mode & ~(uint32_t)EXT2_PERMISSION_MASK) != 0) return -EINVAL;
+    uint32_t ino_num = 0;
+    ext2_inode_t ino;
+    int rc = attributes_load(path, &ino_num, &ino);
+    if (rc != 0) return rc;
+    ino.i_mode = (uint16_t)((ino.i_mode & EXT2_S_IFMT) | mode);
+    return attributes_store(ino_num, &ino);
+}
+
+int ext2_chown(const char *path, uint32_t uid, uint32_t gid) {
+    uint32_t ino_num = 0;
+    ext2_inode_t ino;
+    int rc = attributes_load(path, &ino_num, &ino);
+    if (rc != 0) return rc;
+    inode_set_owner(&ino, uid, gid);
+    return attributes_store(ino_num, &ino);
 }

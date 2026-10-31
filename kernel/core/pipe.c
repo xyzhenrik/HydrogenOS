@@ -1,7 +1,10 @@
 #include "pipe.h"
+#include "waitq.h"
+
+#include "core/perf.h"
 
 enum {
-    KERNEL_PIPE_POOL_SIZE = 16,
+    KERNEL_PIPE_POOL_SIZE = 64,
     KERNEL_PIPE_BUFFER_CAP = KERNEL_PIPE_CAPACITY,
 };
 
@@ -12,6 +15,11 @@ struct kernel_pipe {
     uint32_t read_pos;
     uint32_t write_pos;
     uint32_t size;
+    /* Blocked readers and writers wake one at a time, in arrival order;
+     * pollers watch the pipe in either direction and all wake together. */
+    WaitQueue read_waiters;
+    WaitQueue write_waiters;
+    WaitQueue poll_waiters;
     uint8_t buffer[KERNEL_PIPE_BUFFER_CAP];
 };
 
@@ -25,6 +33,9 @@ static void kernel_pipe_reset(kernel_pipe_t *pipe) {
     pipe->read_pos = 0;
     pipe->write_pos = 0;
     pipe->size = 0;
+    wait_queue_init(&pipe->read_waiters);
+    wait_queue_init(&pipe->write_waiters);
+    wait_queue_init(&pipe->poll_waiters);
 }
 
 static void kernel_pipe_maybe_release(kernel_pipe_t *pipe) {
@@ -75,6 +86,18 @@ int kernel_pipe_acquire_writer(kernel_pipe_t *pipe) {
     return kernel_pipe_acquire(pipe, &pipe->writers);
 }
 
+WaitQueue *kernel_pipe_read_waiters(kernel_pipe_t *pipe) {
+    return &pipe->read_waiters;
+}
+
+WaitQueue *kernel_pipe_write_waiters(kernel_pipe_t *pipe) {
+    return &pipe->write_waiters;
+}
+
+WaitQueue *kernel_pipe_poll_waiters(kernel_pipe_t *pipe) {
+    return &pipe->poll_waiters;
+}
+
 int kernel_pipe_has_readers(const kernel_pipe_t *pipe) {
     if (!pipe || !pipe->used) return 0;
     return pipe->readers > 0;
@@ -105,8 +128,16 @@ int kernel_pipe_read(kernel_pipe_t *pipe, uint8_t *out, uint32_t out_sz,
         pipe->size--;
         (*out_len)++;
     }
+    perf_count_pipe_read(*out_len);
     if (*out_len == 0 && pipe->writers > 0) {
         return 1;
+    }
+    if (*out_len > 0) {
+        wait_queue_wake_one(&pipe->write_waiters, 0);
+        wait_queue_wake_all(&pipe->poll_waiters, 0);
+        /* A woken reader takes only what it asked for; pass the rest on. */
+        if (pipe->size > 0)
+            wait_queue_wake_one(&pipe->read_waiters, 0);
     }
     return 0;
 }
@@ -122,8 +153,15 @@ int kernel_pipe_write(kernel_pipe_t *pipe, const uint8_t *in, uint32_t in_sz,
         pipe->size++;
         (*out_len)++;
     }
+    perf_count_pipe_write(*out_len);
     if (*out_len == 0 && pipe->size >= KERNEL_PIPE_BUFFER_CAP) {
         return 1;
+    }
+    if (*out_len > 0) {
+        wait_queue_wake_one(&pipe->read_waiters, 0);
+        wait_queue_wake_all(&pipe->poll_waiters, 0);
+        if (pipe->size < KERNEL_PIPE_BUFFER_CAP)
+            wait_queue_wake_one(&pipe->write_waiters, 0);
     }
     return 0;
 }
@@ -131,11 +169,19 @@ int kernel_pipe_write(kernel_pipe_t *pipe, const uint8_t *in, uint32_t in_sz,
 void kernel_pipe_close_reader(kernel_pipe_t *pipe) {
     if (!pipe || !pipe->used) return;
     if (pipe->readers > 0) pipe->readers--;
+    if (pipe->readers == 0) {
+        wait_queue_wake_all(&pipe->write_waiters, 0);
+        wait_queue_wake_all(&pipe->poll_waiters, 0);
+    }
     kernel_pipe_maybe_release(pipe);
 }
 
 void kernel_pipe_close_writer(kernel_pipe_t *pipe) {
     if (!pipe || !pipe->used) return;
     if (pipe->writers > 0) pipe->writers--;
+    if (pipe->writers == 0) {
+        wait_queue_wake_all(&pipe->read_waiters, 0);
+        wait_queue_wake_all(&pipe->poll_waiters, 0);
+    }
     kernel_pipe_maybe_release(pipe);
 }

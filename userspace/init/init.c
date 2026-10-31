@@ -1,4 +1,6 @@
 #include "mini_libc.h"
+#include "syscall.h"
+#include "signal.h"
 
 typedef enum init_service_type {
     INIT_SERVICE_ONESHOT = 0,
@@ -20,19 +22,32 @@ typedef enum init_stdio_mode {
     INIT_STDIO_CHANNEL = 4,
     INIT_STDIO_TEE = 5,
     INIT_STDIO_LOGSINK = 6,
+    INIT_STDIO_SYSLOG = 7,
 } init_stdio_mode_t;
 
 enum {
-    INIT_MAX_SERVICES = 48,
+    INIT_MAX_SERVICES = 96,
     INIT_MAX_CHANNELS = 16,
     INIT_MAX_TEES = 16,
     INIT_MAX_LOGSINKS = 16,
+    INIT_MAX_SYSLOG_SOURCES = 12,
     INIT_NAME_CAP = 32,
     INIT_PATH_CAP = 64,
     INIT_CHANNEL_NAME_CAP = 32,
     INIT_CONFIG_CAP = 16384,
     INIT_STDIO_TEXT_CAP = 128,
     INIT_STREAM_CAP = 512,
+    INIT_DEFAULT_RETRIES = 3,
+    INIT_MAX_RETRIES = 16,
+    INIT_BACKOFF_CAP_MS = 30000,
+    INIT_SPLASH_GRACE_SECONDS = 30,
+    INIT_DEFAULT_TIMEOUT_MS = 120000,
+    INIT_MAX_TIMEOUT_MS = 86400000,
+    /* A daemon that ran this long before dying starts over with a fresh retry
+     * budget; otherwise a long-lived service would exhaust it over weeks. */
+    INIT_DAEMON_STABLE_MS = 10000,
+    /* Interval at which init looks for exited daemons and due restarts. */
+    INIT_TICK_MS = 10,
 };
 
 typedef struct init_service_runtime {
@@ -64,12 +79,17 @@ typedef struct init_service {
     init_service_type_t type;
     init_restart_policy_t restart_policy;
     unsigned long restart_delay_ms;
+    unsigned long max_retries;
+    unsigned long timeout_ms;
     init_stdio_mode_t stdin_mode;
     init_stdio_mode_t stdout_mode;
     init_stdio_mode_t stderr_mode;
     int stdin_channel_index;
     int stdout_channel_index;
     int stderr_channel_index;
+    int syslog_source_index;
+    unsigned char log_server;
+    unsigned char display_owner;
     char stdin_text[INIT_STDIO_TEXT_CAP];
     char stdout_text[INIT_STDIO_TEXT_CAP];
     char stderr_text[INIT_STDIO_TEXT_CAP];
@@ -105,17 +125,50 @@ typedef struct init_logsink {
     char expected[INIT_STREAM_CAP];
 } init_logsink_t;
 
+/*
+ * One pipe per service whose stdout/stderr go to syslogd. The write end stays
+ * in init until the service is done; syslogd receives the read end as an
+ * inherited handle and labels everything read from it with the service name.
+ */
+typedef struct init_syslog_source {
+    int service_index;
+    int read_fd;
+    int write_fd;
+} init_syslog_source_t;
+
+typedef enum init_daemon_phase {
+    INIT_DAEMON_NOT_STARTED = 0,
+    INIT_DAEMON_RUNNING = 1,
+    INIT_DAEMON_BACKOFF = 2,
+    INIT_DAEMON_STOPPED = 3,
+} init_daemon_phase_t;
+
+/* Supervision state of one daemon, indexed like the service table. */
+typedef struct init_daemon {
+    init_daemon_phase_t phase;
+    long pid;
+    unsigned long failures;
+    unsigned long started_ms;
+    unsigned long restart_at_ms;
+    init_service_runtime_t runtime;
+} init_daemon_t;
+
 typedef struct init_service_table {
     init_service_t services[INIT_MAX_SERVICES];
+    init_daemon_t daemons[INIT_MAX_SERVICES];
     char names[INIT_MAX_SERVICES][INIT_NAME_CAP];
     char paths[INIT_MAX_SERVICES][INIT_PATH_CAP];
     init_channel_t channels[INIT_MAX_CHANNELS];
     init_tee_t tees[INIT_MAX_TEES];
     init_logsink_t logsinks[INIT_MAX_LOGSINKS];
+    init_syslog_source_t syslog_sources[INIT_MAX_SYSLOG_SOURCES];
+    int log_server_index;
+    unsigned long daemon_failed_count;
     unsigned long count;
     unsigned long channel_count;
     unsigned long tee_count;
     unsigned long logsink_count;
+    unsigned long syslog_source_count;
 } init_service_table_t;
 
 static int tee_append(init_service_table_t *table, int tee_index,
@@ -128,57 +181,57 @@ static int channel_remove_writer_ref(init_service_table_t *table, int channel_in
 
 static const char default_init_config[] =
     "logsink syslog \"sink-a\\nsink-b\\n\"\n"
-    "service bootprobe oneshot /bootprobe 100 restart=on-failure\n"
-    "service handoffcheck oneshot /handoffcheck 100 restart=on-failure "
+    "service bootprobe oneshot /lib/tests/bootprobe 100 restart=on-failure\n"
+    "service handoffcheck oneshot /lib/tests/handoffcheck 100 restart=on-failure "
     "stdin=pipe \"init handoff ok\\n\" bootprobe\n"
-    "service stdiocheck oneshot /stdiocheck 100 restart=on-failure "
+    "service stdiocheck oneshot /lib/tests/stdiocheck 100 restart=on-failure "
     "stdin=pipe \"init stdio ok\\n\" "
     "stdout=capture \"stdiocheck: stdout ok\\n\" "
     "stderr=capture \"stdiocheck: stderr ok\\n\" "
     "bootprobe handoffcheck\n"
-    "service stdiobadbind oneshot /stdiobadbind 100 restart=on-failure "
+    "service stdiobadbind oneshot /lib/tests/stdiobadbind 100 restart=on-failure "
     "bootprobe handoffcheck stdiocheck\n"
-    "service dupcheck oneshot /dupcheck 100 restart=on-failure "
+    "service dupcheck oneshot /lib/tests/dupcheck 100 restart=on-failure "
     "stdout=capture \"dupcheck: dup ok\\n\" "
     "bootprobe handoffcheck stdiocheck stdiobadbind\n"
-    "service logproducer_a oneshot /logproducer_a 100 restart=on-failure "
+    "service logproducer_a oneshot /lib/tests/logproducer_a 100 restart=on-failure "
     "stdout=channel logbus "
     "bootprobe handoffcheck stdiocheck stdiobadbind dupcheck\n"
-    "service logproducer_b oneshot /logproducer_b 100 restart=on-failure "
+    "service logproducer_b oneshot /lib/tests/logproducer_b 100 restart=on-failure "
     "stdout=channel logbus "
     "bootprobe handoffcheck stdiocheck stdiobadbind logproducer_a\n"
-    "service logcollector oneshot /logcollector 100 restart=on-failure "
+    "service logcollector oneshot /lib/tests/logcollector 100 restart=on-failure "
     "stdin=channel logbus "
     "stdout=capture \"logcollector: multiwriter ok\\n\" "
     "bootprobe handoffcheck stdiocheck stdiobadbind logproducer_b\n"
-    "service logsink_writer_a oneshot /logsink_writer_a 100 restart=on-failure "
+    "service logsink_writer_a oneshot /lib/tests/logsink_writer_a 100 restart=on-failure "
     "stdout=logsink syslog "
     "bootprobe handoffcheck stdiocheck stdiobadbind logcollector\n"
-    "service logsink_writer_b oneshot /logsink_writer_b 100 restart=on-failure "
+    "service logsink_writer_b oneshot /lib/tests/logsink_writer_b 100 restart=on-failure "
     "stdout=logsink syslog "
     "bootprobe handoffcheck stdiocheck stdiobadbind logcollector logsink_writer_a\n"
-    "service teewriter oneshot /teewriter 100 restart=on-failure "
+    "service teewriter oneshot /lib/tests/teewriter 100 restart=on-failure "
     "stdout=tee teebus "
     "bootprobe handoffcheck stdiocheck stdiobadbind logcollector logsink_writer_b\n"
-    "service teereader_a oneshot /teereader_a 100 restart=on-failure "
+    "service teereader_a oneshot /lib/tests/teereader_a 100 restart=on-failure "
     "stdin=tee teebus "
     "stdout=capture \"teereader_a: tee ok\\n\" "
     "bootprobe handoffcheck stdiocheck stdiobadbind logcollector teewriter\n"
-    "service teereader_b oneshot /teereader_b 100 restart=on-failure "
+    "service teereader_b oneshot /lib/tests/teereader_b 100 restart=on-failure "
     "stdin=tee teebus "
     "stdout=capture \"teereader_b: tee ok\\n\" "
     "bootprobe handoffcheck stdiocheck stdiobadbind logcollector teewriter\n"
-    "service pipeproducer oneshot /pipeproducer 100 restart=on-failure "
+    "service pipeproducer oneshot /lib/tests/pipeproducer 100 restart=on-failure "
     "stdout=channel bootseq "
     "bootprobe handoffcheck stdiocheck stdiobadbind logcollector teereader_b\n"
-    "service pipeconsumer oneshot /pipeconsumer 100 restart=on-failure "
+    "service pipeconsumer oneshot /lib/tests/pipeconsumer 100 restart=on-failure "
     "stdin=channel bootseq "
     "stdout=capture \"pipeconsumer: channel ok\\n\" "
     "bootprobe handoffcheck stdiocheck stdiobadbind logcollector pipeproducer\n"
-    "service stdionullcheck oneshot /stdionullcheck 100 restart=on-failure "
+    "service stdionullcheck oneshot /lib/tests/stdionullcheck 100 restart=on-failure "
     "stdin=null stdout=null stderr=null "
     "bootprobe handoffcheck stdiocheck stdiobadbind pipeconsumer\n"
-    "service shell supervised /shell 100 restart=always "
+    "service shell supervised /bin/shell 100 restart=always "
     "stdin=inherit stdout=inherit stderr=inherit "
     "bootprobe handoffcheck stdiocheck stdiobadbind dupcheck logcollector pipeconsumer stdionullcheck\n";
 
@@ -203,6 +256,23 @@ static void write_str(const char *s) {
         return;
     }
     write(1, s, strlen(s));
+}
+
+/*
+ * Tells the kernel's boot splash how far startup has come. The report is
+ * advisory: without a splash the kernel ignores it, so a failed write must not
+ * affect boot.
+ */
+static void report_boot(const char *text) {
+    (void)sys_writef("/proc/boot", text, strlen(text));
+}
+
+static void report_boot_progress(unsigned long done, unsigned long total) {
+    char text[48];
+    int len = snprintf(text, sizeof(text), "services %lu %lu\n", done, total);
+    if (len > 0 && (unsigned long)len < sizeof(text)) {
+        report_boot(text);
+    }
 }
 
 static void runtime_reset(init_service_runtime_t *rt) {
@@ -965,6 +1035,93 @@ static int channel_remove_writer_ref(init_service_table_t *table, int channel_in
     return 0;
 }
 
+static int release_output_binding(init_service_table_t *table,
+                                  init_stdio_mode_t mode, int index) {
+    if (!output_mode_uses_binding(mode) || index < 0) {
+        return 0;
+    }
+    return remove_output_binding_ref(table, mode, index);
+}
+
+static int add_syslog_source(init_service_table_t *table, int service_index) {
+    init_syslog_source_t *source;
+    if (!table || table->syslog_source_count >= INIT_MAX_SYSLOG_SOURCES) {
+        return -1;
+    }
+    source = &table->syslog_sources[table->syslog_source_count];
+    source->service_index = service_index;
+    source->read_fd = -1;
+    source->write_fd = -1;
+    return (int)table->syslog_source_count++;
+}
+
+/* Every logging service must start after the log server that will read it. */
+static int validate_syslog_topology(const init_service_table_t *table) {
+    if (!table || table->syslog_source_count == 0) {
+        return 0;
+    }
+    if (table->log_server_index < 0) {
+        return -1;
+    }
+    for (unsigned long i = 0; i < table->syslog_source_count; ++i) {
+        if (table->syslog_sources[i].service_index <= table->log_server_index) {
+            return -1;
+        }
+    }
+    return 0;
+}
+
+static void close_syslog_source_write(init_service_table_t *table,
+                                      const init_service_t *svc) {
+    if (!table || !svc || svc->syslog_source_index < 0 ||
+        svc->syslog_source_index >= (int)table->syslog_source_count) {
+        return;
+    }
+    close_fd_slot(&table->syslog_sources[svc->syslog_source_index].write_fd);
+}
+
+static void close_syslog_sources(init_service_table_t *table) {
+    for (unsigned long i = 0; i < table->syslog_source_count; ++i) {
+        close_fd_slot(&table->syslog_sources[i].read_fd);
+        close_fd_slot(&table->syslog_sources[i].write_fd);
+    }
+}
+
+/*
+ * Starts the log server with "<service>:<fd>" arguments. The read ends are
+ * inherited only for this one spawn so no other service can hold a source
+ * open and delay its end-of-file.
+ */
+static long spawn_log_server(init_service_table_t *table, const init_service_t *svc) {
+    char args[INIT_MAX_SYSLOG_SOURCES][INIT_NAME_CAP + 8];
+    const char *argv[INIT_MAX_SYSLOG_SOURCES + 2];
+    unsigned long count = table->syslog_source_count;
+    long pid;
+
+    for (unsigned long i = 0; i < count; ++i) {
+        init_syslog_source_t *source = &table->syslog_sources[i];
+        if (configure_pipe(&source->read_fd, &source->write_fd) != 0 ||
+            set_handle_inherit(source->read_fd, 1) != 0 ||
+            snprintf(args[i], sizeof(args[i]), "%s:%d",
+                     table->names[source->service_index], source->read_fd) <= 0) {
+            close_syslog_sources(table);
+            return -1;
+        }
+        argv[i + 1] = args[i];
+    }
+    argv[0] = svc->name;
+    argv[count + 1] = 0;
+    pid = spawn_args(svc->path, argv, 0, SPAWN_STDIO_INHERIT, SPAWN_STDIO_INHERIT,
+                     SPAWN_STDIO_INHERIT);
+    for (unsigned long i = 0; i < count; ++i) {
+        close_fd_slot(&table->syslog_sources[i].read_fd);
+    }
+    if (pid < 0) {
+        close_syslog_sources(table);
+    }
+    return pid;
+}
+
 static int parse_stdio_mode(const char *token, const char *prefix,
                             init_stdio_mode_t *out_mode) {
     const char *value;
@@ -1055,18 +1212,56 @@ static int parse_restart_policy(const char *token, init_restart_policy_t *out) {
     return -1;
 }
 
+static const char *option_value(const char *token, const char *prefix) {
+    if (!token || !prefix) {
+        return 0;
+    }
+    while (*prefix) {
+        if (*token != *prefix) {
+            return 0;
+        }
+        ++token;
+        ++prefix;
+    }
+    return token;
+}
+
 static int parse_restart_option(const char *token, init_restart_policy_t *out) {
-    const char *value;
-    if (!token || !out) {
+    const char *value = option_value(token, "restart=");
+    if (!value || !out) {
         return -1;
     }
-    if (!(token[0] == 'r' && token[1] == 'e' && token[2] == 's' &&
-          token[3] == 't' && token[4] == 'a' && token[5] == 'r' &&
-          token[6] == 't' && token[7] == '=')) {
-        return -1;
-    }
-    value = token + 8;
     return parse_restart_policy(value, out);
+}
+
+static int parse_retries_option(const char *token, unsigned long *out) {
+    const char *value = option_value(token, "retries=");
+    unsigned long retries;
+    if (!value || !out) {
+        return -1;
+    }
+    if (parse_u64_token(value, &retries) != 0 || retries > INIT_MAX_RETRIES) {
+        return -1;
+    }
+    *out = retries;
+    return 0;
+}
+
+static unsigned long default_timeout_ms(init_service_type_t type) {
+    return type == INIT_SERVICE_ONESHOT ? INIT_DEFAULT_TIMEOUT_MS : 0;
+}
+
+static int parse_timeout_option(const char *token, unsigned long *out) {
+    const char *value = option_value(token, "timeout=");
+    unsigned long timeout;
+    if (!value || !out) {
+        return -1;
+    }
+    if (parse_u64_token(value, &timeout) != 0 || timeout > INIT_MAX_TIMEOUT_MS) {
+        return -1;
+    }
+    *out = timeout;
+    return 0;
 }
 
 static int parse_logsink_line(init_service_table_t *table, char *line) {
@@ -1111,6 +1306,8 @@ static int parse_service_line(init_service_table_t *table, char *line) {
     char *path;
     char *restart_token;
     unsigned long restart_delay_ms = 0;
+    unsigned long max_retries = INIT_DEFAULT_RETRIES;
+    unsigned long timeout_ms;
     unsigned long deps_mask = 0;
     int service_index;
     init_service_type_t type;
@@ -1121,6 +1318,9 @@ static int parse_service_line(init_service_table_t *table, char *line) {
     int stdin_channel_index = -1;
     int stdout_channel_index = -1;
     int stderr_channel_index = -1;
+    int syslog_source_index = -1;
+    int is_log_server = 0;
+    int is_display_owner = 0;
     char stdin_text[INIT_STDIO_TEXT_CAP];
     char stdout_text[INIT_STDIO_TEXT_CAP];
     char stderr_text[INIT_STDIO_TEXT_CAP];
@@ -1158,6 +1358,7 @@ static int parse_service_line(init_service_table_t *table, char *line) {
         return -1;
     }
     restart_policy = default_restart_policy(type);
+    timeout_ms = default_timeout_ms(type);
     for (;;) {
         char *dep = next_token(&cursor, &parse_error);
         int dep_index;
@@ -1174,7 +1375,9 @@ static int parse_service_line(init_service_table_t *table, char *line) {
         if (!dep) {
             break;
         }
-        if (parse_restart_option(dep, &restart_policy) == 0) {
+        if (parse_restart_option(dep, &restart_policy) == 0 ||
+            parse_retries_option(dep, &max_retries) == 0 ||
+            parse_timeout_option(dep, &timeout_ms) == 0) {
             continue;
         }
         if (str_eq(dep, "stdin=channel")) {
@@ -1348,6 +1551,34 @@ static int parse_service_line(init_service_table_t *table, char *line) {
             stderr_text[0] = 0;
             continue;
         }
+        if (str_eq(dep, "log=server")) {
+            is_log_server = 1;
+            continue;
+        }
+        if (str_eq(dep, "display=owner")) {
+            is_display_owner = 1;
+            continue;
+        }
+        if (str_eq(dep, "stdout=syslog") || str_eq(dep, "stderr=syslog") ||
+            str_eq(dep, "log=syslog")) {
+            if (!str_eq(dep, "stderr=syslog")) {
+                if (release_output_binding(table, prev_stdout_mode, prev_stdout_index) != 0) {
+                    return -1;
+                }
+                stdout_mode = INIT_STDIO_SYSLOG;
+                stdout_channel_index = -1;
+                stdout_text[0] = 0;
+            }
+            if (!str_eq(dep, "stdout=syslog")) {
+                if (release_output_binding(table, prev_stderr_mode, prev_stderr_index) != 0) {
+                    return -1;
+                }
+                stderr_mode = INIT_STDIO_SYSLOG;
+                stderr_channel_index = -1;
+                stderr_text[0] = 0;
+            }
+            continue;
+        }
         if (parse_stdio_mode(dep, "stdin=", &stdin_mode) == 0) {
             if (input_mode_uses_binding(prev_stdin_mode) &&
                 prev_stdin_index >= 0 &&
@@ -1449,6 +1680,34 @@ static int parse_service_line(init_service_table_t *table, char *line) {
     if (!output_mode_uses_binding(stderr_mode) && stderr_channel_index >= 0) {
         return -1;
     }
+    if (is_log_server &&
+        (type != INIT_SERVICE_DAEMON || table->log_server_index >= 0 ||
+         stdin_mode != INIT_STDIO_INHERIT || stdout_mode != INIT_STDIO_INHERIT ||
+         stderr_mode != INIT_STDIO_INHERIT)) {
+        return -1;
+    }
+    /* The log server's sources are pipes created for one particular instance,
+     * so a second instance could not take over from the first. */
+    if (is_log_server) {
+        restart_policy = INIT_RESTART_NEVER;
+    }
+    /* Shared stream bindings count writers per spawn and are closed after the
+     * last one, which a restarted daemon could no longer write to. */
+    if (type == INIT_SERVICE_DAEMON && restart_policy != INIT_RESTART_NEVER &&
+        (stdin_mode == INIT_STDIO_CHANNEL || stdin_mode == INIT_STDIO_TEE ||
+         output_mode_uses_binding(stdout_mode) ||
+         output_mode_uses_binding(stderr_mode))) {
+        return -1;
+    }
+    if (stdout_mode == INIT_STDIO_SYSLOG || stderr_mode == INIT_STDIO_SYSLOG) {
+        syslog_source_index = add_syslog_source(table, service_index);
+        if (syslog_source_index < 0) {
+            return -1;
+        }
+    }
+    if (is_log_server) {
+        table->log_server_index = service_index;
+    }
     svc = &table->services[table->count];
     svc->name = table->names[table->count];
     svc->path = table->paths[table->count];
@@ -1457,12 +1716,17 @@ static int parse_service_line(init_service_table_t *table, char *line) {
     svc->type = type;
     svc->restart_policy = restart_policy;
     svc->restart_delay_ms = restart_delay_ms;
+    svc->max_retries = max_retries;
+    svc->timeout_ms = timeout_ms;
     svc->stdin_mode = stdin_mode;
     svc->stdout_mode = stdout_mode;
     svc->stderr_mode = stderr_mode;
     svc->stdin_channel_index = stdin_channel_index;
     svc->stdout_channel_index = stdout_channel_index;
     svc->stderr_channel_index = stderr_channel_index;
+    svc->syslog_source_index = syslog_source_index;
+    svc->log_server = (unsigned char)is_log_server;
+    svc->display_owner = (unsigned char)is_display_owner;
     if (str_copy(svc->stdin_text, sizeof(svc->stdin_text), stdin_text) != 0 ||
         str_copy(svc->stdout_text, sizeof(svc->stdout_text), stdout_text) != 0 ||
         str_copy(svc->stderr_text, sizeof(svc->stderr_text), stderr_text) != 0) {
@@ -1497,6 +1761,8 @@ static int parse_service_config(init_service_table_t *table, char *buf) {
     table->channel_count = 0;
     table->tee_count = 0;
     table->logsink_count = 0;
+    table->syslog_source_count = 0;
+    table->log_server_index = -1;
     for (unsigned long i = 0; i < INIT_MAX_CHANNELS; ++i) {
         channel_reset(&table->channels[i]);
     }
@@ -1526,6 +1792,11 @@ static int parse_service_config(init_service_table_t *table, char *buf) {
         }
         line = next;
         line_no++;
+    }
+    if (validate_syslog_topology(table) != 0) {
+        write_str("init: syslog users need an earlier log=server daemon\n");
+        table->count = 0;
+        return -1;
     }
     return table->count == 0 ? -1 : 0;
 }
@@ -1558,22 +1829,22 @@ static int load_service_table(init_service_table_t *table) {
     if (!table) {
         return -1;
     }
-    fd = open("/init.rc", 0);
+    fd = open("/etc/init.rc", 0);
     if (fd >= 0) {
         got = read((int)fd, buf, sizeof(buf) - 1);
         close((int)fd);
         if (got > 0 && got < (long)(sizeof(buf) - 1)) {
             buf[got] = 0;
             if (parse_service_config(table, buf) == 0) {
-                write(1, "init: loaded /init.rc\n", 22);
+                write(1, "init: loaded /etc/init.rc\n", 26);
                 return 0;
             }
-            write(1, "init: invalid /init.rc, using built-in config\n", 46);
+            write(1, "init: invalid /etc/init.rc, using built-in config\n", 50);
         } else {
-            write(1, "init: unreadable /init.rc, using built-in config\n", 49);
+            write(1, "init: unreadable /etc/init.rc, using built-in config\n", 53);
         }
     } else {
-        write(1, "init: /init.rc missing, using built-in config\n", 46);
+        write(1, "init: /etc/init.rc missing, using built-in config\n", 50);
     }
     return load_service_table_from_text(table, default_init_config, "built-in init config");
 }
@@ -1587,6 +1858,9 @@ static long spawn_with_runtime(init_service_table_t *table, const init_service_t
     runtime_reset(rt);
     if (!table || !svc || !rt) {
         return -1;
+    }
+    if (svc->log_server) {
+        return spawn_log_server(table, svc);
     }
     if (svc->setup && svc->setup(table, svc, rt) != 0) {
         write_service_prefix(svc, " setup failed\n");
@@ -1611,6 +1885,11 @@ static long spawn_with_runtime(init_service_table_t *table, const init_service_t
         if (ensure_channel_pipe(table, svc->stdin_channel_index) != 0) {
             write_service_prefix(svc, " stdin channel setup failed\n");
             return -1;
+        }
+        /* Every writer may already have been started or skipped. */
+        if (table->channels[svc->stdin_channel_index].writer_spawned_count >=
+            table->channels[svc->stdin_channel_index].writer_service_count) {
+            close_channel_write(table, svc->stdin_channel_index);
         }
         stdin_fd = table->channels[svc->stdin_channel_index].read_fd;
         break;
@@ -1641,6 +1920,13 @@ static long spawn_with_runtime(init_service_table_t *table, const init_service_t
         }
         stdout_fd = table->channels[svc->stdout_channel_index].write_fd;
         break;
+    case INIT_STDIO_SYSLOG:
+        stdout_fd = table->syslog_sources[svc->syslog_source_index].write_fd;
+        if (stdout_fd < 0) {
+            write_service_prefix(svc, " stdout syslog pipe missing\n");
+            return -1;
+        }
+        break;
     default:
         write_service_prefix(svc, " invalid stdout mode\n");
         return -1;
@@ -1667,6 +1953,13 @@ static long spawn_with_runtime(init_service_table_t *table, const init_service_t
             return -1;
         }
         stderr_fd = table->channels[svc->stderr_channel_index].write_fd;
+        break;
+    case INIT_STDIO_SYSLOG:
+        stderr_fd = table->syslog_sources[svc->syslog_source_index].write_fd;
+        if (stderr_fd < 0) {
+            write_service_prefix(svc, " stderr syslog pipe missing\n");
+            return -1;
+        }
         break;
     default:
         write_service_prefix(svc, " invalid stderr mode\n");
@@ -1716,9 +2009,205 @@ static int service_should_restart(const init_service_t *svc, int success) {
     }
 }
 
-static int run_service(init_service_table_t *table, const init_service_t *svc) {
+/* Delay before the Nth consecutive retry: the configured base delay doubled
+ * per failure, capped so a large retries= cannot park a service for minutes. */
+static unsigned long retry_backoff_ms(const init_service_t *svc,
+                                      unsigned long failures) {
+    unsigned long delay = svc->restart_delay_ms;
+    for (unsigned long i = 1; i < failures && delay < INIT_BACKOFF_CAP_MS; ++i) {
+        delay *= 2;
+    }
+    return delay < INIT_BACKOFF_CAP_MS ? delay : INIT_BACKOFF_CAP_MS;
+}
+
+static void release_runtime(init_service_table_t *table, const init_service_t *svc,
+                            init_service_runtime_t *rt) {
+    if (svc->cleanup) {
+        svc->cleanup(table, svc, rt);
+    } else {
+        close_runtime_fds(rt);
+    }
+}
+
+static int daemon_may_restart(const init_service_t *svc) {
+    return svc->type == INIT_SERVICE_DAEMON && svc->restart_policy != INIT_RESTART_NEVER;
+}
+
+/* Starts (or restarts) a daemon instance. Returns 0 once it is running. */
+static int daemon_spawn(init_service_table_t *table, unsigned long index) {
+    const init_service_t *svc = &table->services[index];
+    init_daemon_t *daemon = &table->daemons[index];
+    long pid;
+    daemon->started_ms = time_ms();
+    pid = spawn_with_runtime(table, svc, &daemon->runtime);
+    if (pid < 0) {
+        write_service_prefix(svc, " spawn failed\n");
+        release_runtime(table, svc, &daemon->runtime);
+        return -1;
+    }
+    daemon->pid = pid;
+    daemon->phase = INIT_DAEMON_RUNNING;
+    return 0;
+}
+
+/* The daemon will not run again: let its log source reach end-of-file. */
+static void daemon_stop(init_service_table_t *table, unsigned long index) {
+    table->daemons[index].phase = INIT_DAEMON_STOPPED;
+    close_syslog_source_write(table, &table->services[index]);
+}
+
+/*
+ * Applies the restart policy after an instance ended: either schedules the
+ * next start with the same backoff as run_service, or stops the daemon for
+ * good once the policy or the retry budget says so.
+ */
+static void daemon_run_ended(init_service_table_t *table, unsigned long index,
+                             int success) {
+    const init_service_t *svc = &table->services[index];
+    init_daemon_t *daemon = &table->daemons[index];
+    unsigned long delay;
+    char note[96];
+
+    if (!service_should_restart(svc, success)) {
+        if (!success) {
+            ++table->daemon_failed_count;
+        }
+        daemon_stop(table, index);
+        return;
+    }
+    if (success) {
+        daemon->failures = 0;
+        delay = svc->restart_delay_ms;
+        write_service_prefix(svc, " restart policy requests restart\n");
+    } else {
+        if (time_ms() - daemon->started_ms >= INIT_DAEMON_STABLE_MS) {
+            daemon->failures = 0;
+        }
+        if (daemon->failures >= svc->max_retries) {
+            snprintf(note, sizeof(note), " giving up after %lu failed attempts\n",
+                     daemon->failures + 1);
+            write_service_prefix(svc, note);
+            write_service_prefix(svc, " failed permanently\n");
+            ++table->daemon_failed_count;
+            daemon_stop(table, index);
+            return;
+        }
+        ++daemon->failures;
+        delay = retry_backoff_ms(svc, daemon->failures);
+        snprintf(note, sizeof(note), " retry %lu/%lu in %lu ms\n", daemon->failures,
+                 svc->max_retries, delay);
+        write_service_prefix(svc, note);
+    }
+    daemon->restart_at_ms = time_ms() + delay;
+    daemon->phase = INIT_DAEMON_BACKOFF;
+}
+
+/*
+ * Reaps daemons that have exited and restarts those whose backoff has run
+ * out. Never blocks, so it can be called from any waiting loop in init.
+ */
+static void daemons_tick(init_service_table_t *table) {
+    for (unsigned long i = 0; i < table->count; ++i) {
+        const init_service_t *svc = &table->services[i];
+        init_daemon_t *daemon = &table->daemons[i];
+        if (daemon->phase == INIT_DAEMON_RUNNING) {
+            int status = 0;
+            int success = 0;
+            long rc = try_wait_pid((int)daemon->pid, &status);
+            if (rc == 0) {
+                continue;
+            }
+            if (rc < 0) {
+                write_service_prefix(svc, " wait failed\n");
+            } else {
+                write_service_prefix(svc, " exited with status ");
+                write_u64((unsigned long)status);
+                write(1, "\n", 1);
+                success = status == 0;
+            }
+            release_runtime(table, svc, &daemon->runtime);
+            daemon_run_ended(table, i, success);
+        } else if (daemon->phase == INIT_DAEMON_BACKOFF &&
+                   (long)(time_ms() - daemon->restart_at_ms) >= 0) {
+            if (daemon_spawn(table, i) != 0) {
+                daemon_run_ended(table, i, 0);
+            } else {
+                write_service_prefix(svc, " restarted as daemon\n");
+            }
+        }
+    }
+}
+
+static unsigned long daemons_active(const init_service_table_t *table) {
+    unsigned long active = 0;
+    for (unsigned long i = 0; i < table->count; ++i) {
+        if (table->daemons[i].phase == INIT_DAEMON_RUNNING ||
+            table->daemons[i].phase == INIT_DAEMON_BACKOFF) {
+            ++active;
+        }
+    }
+    return active;
+}
+
+/* Sleeps like sleep_ms while keeping the daemons supervised. */
+static void supervised_sleep(init_service_table_t *table, unsigned long ms) {
+    unsigned long start = time_ms();
+    for (;;) {
+        unsigned long elapsed;
+        daemons_tick(table);
+        elapsed = time_ms() - start;
+        if (elapsed >= ms) {
+            return;
+        }
+        sleep_ms(ms - elapsed < INIT_TICK_MS ? ms - elapsed : INIT_TICK_MS);
+    }
+}
+
+enum {
+    INIT_WAIT_EXITED = 0,
+    INIT_WAIT_FAILED = 1,
+    INIT_WAIT_TIMED_OUT = 2,
+};
+
+/*
+ * Waits for a started service to exit while supervising the daemons. A
+ * service that outlives its timeout is killed and reaped; its exit status is
+ * then that of the kill.
+ */
+static int wait_for_service(init_service_table_t *table, const init_service_t *svc,
+                            long pid, int *status) {
+    unsigned long start = time_ms();
+    for (;;) {
+        long rc = try_wait_pid((int)pid, status);
+        if (rc < 0) {
+            return INIT_WAIT_FAILED;
+        }
+        if (rc > 0) {
+            return INIT_WAIT_EXITED;
+        }
+        daemons_tick(table);
+        if (svc->timeout_ms != 0 && time_ms() - start >= svc->timeout_ms) {
+            if (kill((int)pid, SIGKILL) < 0 || wait_pid((int)pid, status) < 0) {
+                return INIT_WAIT_FAILED;
+            }
+            return INIT_WAIT_TIMED_OUT;
+        }
+        sleep_ms(INIT_TICK_MS);
+    }
+}
+
+/*
+ * Runs a service until its restart policy stops it. Returns 0 on success and
+ * 1 once the service has failed for good, either by policy or because it used
+ * up its retries. *spawned is set when at least one instance was started.
+ */
+static int run_service(init_service_table_t *table, const init_service_t *svc,
+                       int *spawned) {
     init_service_runtime_t rt;
+    unsigned long failures = 0;
+    char note[96];
     runtime_reset(&rt);
+    *spawned = 0;
     for (;;) {
         int success = 0;
         long pid = spawn_with_runtime(table, svc, &rt);
@@ -1726,8 +2215,15 @@ static int run_service(init_service_table_t *table, const init_service_t *svc) {
             write_service_prefix(svc, " spawn failed\n");
         } else {
             int status = 0;
-            if (wait_pid((int)pid, &status) < 0) {
+            int outcome;
+            *spawned = 1;
+            outcome = wait_for_service(table, svc, pid, &status);
+            if (outcome == INIT_WAIT_FAILED) {
                 write_service_prefix(svc, " wait failed\n");
+            } else if (outcome == INIT_WAIT_TIMED_OUT) {
+                snprintf(note, sizeof(note), " timed out after %lu ms, killed\n",
+                         svc->timeout_ms);
+                write_service_prefix(svc, note);
             } else {
                 write_service_prefix(svc, " exited with status ");
                 write_u64((unsigned long)status);
@@ -1743,66 +2239,154 @@ static int run_service(init_service_table_t *table, const init_service_t *svc) {
                 }
             }
         }
-        if (svc->cleanup) {
-            svc->cleanup(table, svc, &rt);
-        } else {
-            close_runtime_fds(&rt);
-        }
+        release_runtime(table, svc, &rt);
         if (!service_should_restart(svc, success)) {
+            close_syslog_source_write(table, svc);
             return success ? 0 : 1;
         }
         if (success) {
+            failures = 0;
             write_service_prefix(svc, " restart policy requests restart\n");
-        } else {
-            write_service_prefix(svc, " restart policy requests retry\n");
+            if (svc->restart_delay_ms > 0) {
+                supervised_sleep(table, svc->restart_delay_ms);
+            }
+            continue;
         }
-        if (svc->restart_delay_ms > 0) {
-            sleep_ms(svc->restart_delay_ms);
+        if (failures >= svc->max_retries) {
+            snprintf(note, sizeof(note), " giving up after %lu failed attempts\n",
+                     failures + 1);
+            write_service_prefix(svc, note);
+            return 1;
+        }
+        ++failures;
+        unsigned long delay = retry_backoff_ms(svc, failures);
+        snprintf(note, sizeof(note), " retry %lu/%lu in %lu ms\n", failures,
+                 svc->max_retries, delay);
+        write_service_prefix(svc, note);
+        if (delay > 0) {
+            supervised_sleep(table, delay);
         }
     }
+}
+
+/*
+ * A service that will never run must not leave a channel reader waiting for
+ * an end-of-file: drop its writer reference and close the write end once all
+ * remaining writers have been started.
+ */
+static void release_unspawned_channel_writers(init_service_table_t *table,
+                                              const init_service_t *svc) {
+    const init_stdio_mode_t modes[2] = { svc->stdout_mode, svc->stderr_mode };
+    const int indexes[2] = { svc->stdout_channel_index, svc->stderr_channel_index };
+    for (int i = 0; i < 2; ++i) {
+        init_channel_t *channel;
+        if (modes[i] != INIT_STDIO_CHANNEL ||
+            channel_remove_writer_ref(table, indexes[i]) != 0) {
+            continue;
+        }
+        channel = &table->channels[indexes[i]];
+        if (channel->writer_spawned_count >= channel->writer_service_count) {
+            close_channel_write(table, indexes[i]);
+        }
+    }
+}
+
+static int first_unmet_dependency(const init_service_table_t *table,
+                                   const init_service_t *svc,
+                                   unsigned long ready_mask) {
+    unsigned long missing = svc->deps_mask & ~ready_mask;
+    for (unsigned long i = 0; i < table->count; ++i) {
+        if (missing & (1ul << i)) {
+            return (int)i;
+        }
+    }
+    return -1;
 }
 
 int main(void) {
     static init_service_table_t table;
     unsigned long ready_mask = 0;
+    unsigned long failed_count = 0;
+    unsigned long daemon_count = 0;
+    unsigned long display_owner_count = 0;
 
     if (load_service_table(&table) != 0) {
         write(1, "init: failed to load service config\n", 36);
         return 1;
     }
     write(1, "init: entering service startup\n", 31);
-    unsigned long daemon_count = 0;
     for (unsigned long i = 0; i < table.count; ++i) {
         const init_service_t *svc = &table.services[i];
-        if ((ready_mask & svc->deps_mask) != svc->deps_mask) {
-            write_service_prefix(svc, " dependency check failed\n");
-            return 1;
+        int spawned = 0;
+        int missing;
+        report_boot_progress(i, table.count);
+        missing = first_unmet_dependency(&table, svc, ready_mask);
+        if (missing >= 0) {
+            char note[96];
+            snprintf(note, sizeof(note), " skipped, dependency %s did not start\n",
+                     table.services[missing].name);
+            write_service_prefix(svc, note);
+            release_unspawned_channel_writers(&table, svc);
+            ++failed_count;
+            continue;
         }
         write_service_prefix(svc, " start\n");
         if (svc->type == INIT_SERVICE_DAEMON) {
-            init_service_runtime_t rt;
-            runtime_reset(&rt);
-            long pid = spawn_with_runtime(&table, svc, &rt);
-            if (pid < 0) {
-                write_service_prefix(svc, " spawn failed\n");
-                return 1;
+            if (daemon_spawn(&table, i) != 0) {
+                write_service_prefix(svc, " failed permanently\n");
+                release_unspawned_channel_writers(&table, svc);
+                ++failed_count;
+                continue;
             }
             write_service_prefix(svc, " started as daemon\n");
+            /* A daemon that may be restarted keeps writing to the same log
+             * pipe, so init holds its write end until the daemon is stopped. */
+            if (!daemon_may_restart(svc)) {
+                close_syslog_source_write(&table, svc);
+            }
             daemon_count++;
+            display_owner_count += svc->display_owner;
             ready_mask |= svc->provides_mask;
             continue;
         }
-        if (run_service(&table, svc) != 0) {
+        if (run_service(&table, svc, &spawned) != 0) {
             write_service_prefix(svc, " failed permanently\n");
-            return 1;
+            if (!spawned) {
+                release_unspawned_channel_writers(&table, svc);
+            }
+            ++failed_count;
+            continue;
         }
         ready_mask |= svc->provides_mask;
     }
-    if (daemon_count > 0) {
-        /* Keep the session alive; daemons own the console/framebuffer. */
-        for (;;) {
-            sleep_ms(1000);
+    report_boot_progress(table.count, table.count);
+    if (display_owner_count == 0) {
+        /* Nothing is going to take over the screen, so show the console. */
+        report_boot("end\n");
+    }
+    if (failed_count > 0) {
+        char note[64];
+        int len = snprintf(note, sizeof(note), "init: %lu service(s) failed or skipped\n",
+                           failed_count);
+        if (len > 0 && (unsigned long)len < sizeof(note)) {
+            write(1, note, (unsigned long)len);
         }
     }
-    return 0;
+    if (daemon_count > 0) {
+        unsigned long grace_end_ms = time_ms() + INIT_SPLASH_GRACE_SECONDS * 1000ul;
+        int grace_expired = 0;
+
+        /* Keep the session alive while daemons own the console/framebuffer. */
+        while (daemons_active(&table) > 0) {
+            if (!grace_expired && (long)(time_ms() - grace_end_ms) >= 0) {
+                /* A display owner that never presented a frame must not leave
+                   the screen on the splash; once it has, this is a no-op. */
+                report_boot("end\n");
+                grace_expired = 1;
+            }
+            daemons_tick(&table);
+            sleep_ms(INIT_TICK_MS);
+        }
+    }
+    return failed_count > 0 || table.daemon_failed_count > 0 ? 1 : 0;
 }

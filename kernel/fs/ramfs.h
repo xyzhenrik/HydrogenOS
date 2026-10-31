@@ -21,3 +21,6 @@ int ramfs_create(const char *path, const uint8_t *data, uint32_t size);
 int ramfs_unlink(const char *path);
 int ramfs_rename(const char *old_path, const char *new_path);
 int ramfs_write_file(const char *path, const uint8_t *data, uint32_t size);
+/* In-place access to runtime-created files; initrd entries give -EROFS. */
+int ramfs_write_at(const char *path, uint32_t offset, const uint8_t *data, uint32_t size);
+int ramfs_truncate(const char *path, uint32_t size);

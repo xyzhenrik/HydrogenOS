@@ -117,14 +117,14 @@ Launcher *launcher_create(void) {
     l->user_data = 0;
     l->context = 0;
 
-    launcher_add_app(l, "Shell", "/shell", "terminal command line console");
-    launcher_add_app(l, "Hello", "/hello", "hello world demo");
-    launcher_add_app(l, "Echo", "/echo", "echo text");
-    launcher_add_app(l, "Cat", "/cat", "cat file read");
-    launcher_add_app(l, "Filesystem Test", "/fstest", "filesystem test");
-    launcher_add_app(l, "Boot Probe", "/bootprobe", "boot probe");
-    launcher_add_app(l, "Time", "/time", "time clock");
-    launcher_add_app(l, "Sleep", "/sleep", "sleep delay");
+    launcher_add_app(l, "Shell", "/bin/shell", "terminal command line console");
+    launcher_add_app(l, "Hello", "/bin/hello", "hello world demo");
+    launcher_add_app(l, "Echo", "/bin/echo", "echo text");
+    launcher_add_app(l, "Cat", "/bin/cat", "cat file read");
+    launcher_add_app(l, "Filesystem Test", "/lib/tests/fstest", "filesystem test");
+    launcher_add_app(l, "Boot Probe", "/lib/tests/bootprobe", "boot probe");
+    launcher_add_app(l, "Time", "/bin/time", "time clock");
+    launcher_add_app(l, "Sleep", "/bin/sleep", "sleep delay");
 
     launcher_update_filter(l);
     return l;

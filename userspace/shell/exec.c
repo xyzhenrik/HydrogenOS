@@ -1,13 +1,16 @@
 #include "exec.h"
 
+#include "brace.h"
 #include "builtins.h"
 #include "env.h"
 #include "expand.h"
+#include "interrupt.h"
 #include "jobs.h"
 #include "lexer.h"
 #include "mini_libc.h"
 #include "output.h"
 #include "parser.h"
+#include "signal.h"
 #include "shell_limits.h"
 
 enum {
@@ -15,6 +18,7 @@ enum {
     STATUS_USAGE = 2,
     STATUS_CANNOT_EXECUTE = 126,
     STATUS_NOT_FOUND = 127,
+    STATUS_INTERRUPTED = 130,
 };
 
 typedef struct PreparedRedirect {
@@ -46,6 +50,7 @@ typedef struct StdioPlan {
 static int last_status = 0;
 static int exit_requested = 0;
 static int interactive = 0;
+static int terminal_host = 0;
 
 static ShellTokenList tokens;
 static ShellProgram program;
@@ -61,20 +66,27 @@ int exec_last_status(void) { return last_status; }
 void exec_request_exit(void) { exit_requested = 1; }
 int exec_exit_requested(void) { return exit_requested; }
 void exec_set_interactive(int value) { interactive = value; }
+void exec_set_terminal_host(int value) { terminal_host = value; }
+int exec_terminal_host(void) { return terminal_host; }
 
-static int expand_token(const char *line, const ShellToken *token,
-                        PreparedCommand *cmd, char **out,
-                        ShellExpansion *result) {
+static int expand_raw(const char *raw, size_t raw_len, PreparedCommand *cmd,
+                      char **out, ShellExpansion *result) {
     const char *error = 0;
     char *dst = cmd->storage + cmd->used;
-    if (expand_word(line + token->start, token->length, last_status, dst,
-                    SHELL_EXPAND_CAP - cmd->used, result, &error) != 0) {
+    if (expand_word(raw, raw_len, last_status, dst, SHELL_EXPAND_CAP - cmd->used,
+                    result, &error) != 0) {
         out_error("shell", 0, error);
         return -1;
     }
     cmd->used += result->length + 1;
     *out = dst;
     return 0;
+}
+
+static int expand_token(const char *line, const ShellToken *token,
+                        PreparedCommand *cmd, char **out,
+                        ShellExpansion *result) {
+    return expand_raw(line + token->start, token->length, cmd, out, result);
 }
 
 static int raw_is_assignment(const char *line, const ShellToken *token) {
@@ -85,28 +97,53 @@ static int raw_is_assignment(const char *line, const ShellToken *token) {
     return name_len < token->length && env_name_valid(raw, name_len);
 }
 
+/* Collects the words one command word expands to. */
+typedef struct WordSink {
+    PreparedCommand *cmd;
+    int assignment;
+    int assignments;
+} WordSink;
+
+static int add_word(void *context, const char *raw, size_t raw_len) {
+    WordSink *sink = context;
+    PreparedCommand *cmd = sink->cmd;
+    ShellExpansion result;
+    char *word;
+    if (expand_raw(raw, raw_len, cmd, &word, &result) != 0)
+        return -1;
+    /* An unquoted word that expands to nothing is dropped, so that
+     * "echo $UNSET x" passes a single argument. */
+    if (result.length == 0 && !result.quoted)
+        return 0;
+    if (cmd->argc >= SHELL_MAX_ARGS) {
+        out_error("shell", 0, "too many arguments");
+        return -1;
+    }
+    sink->assignments += sink->assignment;
+    cmd->argv[cmd->argc++] = word;
+    return 0;
+}
+
 static int prepare_command(const char *line, const ShellCommand *src,
                            PreparedCommand *cmd) {
-    int assignments = 0;
+    WordSink sink = {cmd, 0, 0};
     cmd->argc = 0;
     cmd->redirect_count = 0;
     cmd->used = 0;
     for (int i = 0; i < src->word_count; ++i) {
         const ShellToken *token = &tokens.tokens[src->words[i]];
-        ShellExpansion result;
-        char *word;
-        if (expand_token(line, token, cmd, &word, &result) != 0)
+        const char *raw = line + token->start;
+        sink.assignment = raw_is_assignment(line, token);
+        /* "NAME={a,b}" assigns the text as written. */
+        if (sink.assignment) {
+            if (add_word(&sink, raw, token->length) != 0)
+                return -1;
+        } else if (brace_expand(raw, token->length, add_word, &sink) != 0) {
             return -1;
-        /* An unquoted word that expands to nothing is dropped, so that
-         * "echo $UNSET x" passes a single argument. */
-        if (result.length == 0 && !result.quoted)
-            continue;
-        if (raw_is_assignment(line, token))
-            assignments++;
-        cmd->argv[cmd->argc++] = word;
+        }
     }
     cmd->argv[cmd->argc] = 0;
-    cmd->assignment_only = cmd->argc > 0 && assignments == cmd->argc;
+    cmd->assignment_only = cmd->argc > 0 && sink.assignments == cmd->argc;
 
     for (int i = 0; i < src->redirect_count; ++i) {
         const ShellRedirect *redirect = &src->redirects[i];
@@ -212,16 +249,19 @@ static int run_in_shell(BuiltinFn fn, PreparedCommand *cmd) {
     if (stdio_plan_apply(&plan, cmd) != 0)
         return STATUS_FAILURE;
     redirected = plan.fds[0] != 0 || plan.fds[1] != 1 || plan.fds[2] != 2;
+    if (redirected)
+        out_pause_color(1);
     if (redirected && fn) {
         out_flush();
         /* Save all three first: a target such as 2>&1 refers to the fd as
          * it was before any slot was replaced. */
         for (int i = 0; i < 3; ++i) {
-            long fd = dup(i);
+            long fd = dup_cloexec(i);
             if (fd < 0) {
                 out_error("shell", 0, "cannot save standard streams");
                 restore_stdio(&plan, saved);
                 stdio_plan_close(&plan);
+                out_pause_color(0);
                 return STATUS_FAILURE;
             }
             saved[i] = (int)fd;
@@ -235,6 +275,7 @@ static int run_in_shell(BuiltinFn fn, PreparedCommand *cmd) {
             if (dup2(src, i) < 0) {
                 restore_stdio(&plan, saved);
                 stdio_plan_close(&plan);
+                out_pause_color(0);
                 out_error("shell", 0, "cannot redirect standard streams");
                 return STATUS_FAILURE;
             }
@@ -245,6 +286,13 @@ static int run_in_shell(BuiltinFn fn, PreparedCommand *cmd) {
     out_flush();
     restore_stdio(&plan, saved);
     stdio_plan_close(&plan);
+    out_pause_color(0);
+    /* A builtin cut short by Ctrl+C leaves the cursor mid-line, where a
+     * killed child would have the shell end it. */
+    if (fn && interrupt_pending()) {
+        out_char(2, '\n');
+        out_flush();
+    }
     return status;
 }
 
@@ -261,7 +309,7 @@ static int contains_slash(const char *s) {
     return 0;
 }
 
-/* Looks name up along $PATH (default "/") into resolved_path. */
+/* Looks name up along $PATH (default "/bin:/sbin") into resolved_path. */
 static int resolve_external(const char *name) {
     size_t name_len = strlen(name);
     const char *dirs;
@@ -273,7 +321,7 @@ static int resolve_external(const char *name) {
     }
     dirs = env_get("PATH", 4);
     if (!dirs || !*dirs)
-        dirs = "/";
+        dirs = "/bin:/sbin";
     while (*dirs) {
         size_t dir_len = 0;
         size_t len;
@@ -297,6 +345,22 @@ static int resolve_external(const char *name) {
             dirs++;
     }
     return -1;
+}
+
+int exec_replace(char **argv) {
+    if (resolve_external(argv[0]) != 0) {
+        out_error("exec", argv[0], "command not found");
+        return STATUS_NOT_FOUND;
+    }
+    if (env_build_envp(envp_storage, sizeof(envp_storage), envp_vector,
+                       sizeof(envp_vector) / sizeof(envp_vector[0])) != 0) {
+        out_error("exec", argv[0], "environment too large");
+        return STATUS_FAILURE;
+    }
+    out_flush();
+    execve(resolved_path, (const char *const *)argv, envp_vector);
+    out_error("exec", argv[0], "cannot execute");
+    return STATUS_CANNOT_EXECUTE;
 }
 
 /* Appends text to subshell_command in single quotes, so that a child
@@ -424,15 +488,31 @@ static void announce_job(int id, const int *pids, int count) {
     out_flush();
 }
 
+/* Tells the user how a foreground process died, as other shells do. */
+static void report_signal_death(int status) {
+    int sig = WTERMSIG(status);
+    const char *description = signal_description(sig);
+    if (sig != SIGINT)
+        out_str(2, description);
+    out_char(2, '\n');
+    out_flush();
+}
+
 static int wait_all(const int *pids, int count, long status_pid) {
     int result = 0;
+    interrupt_set_targets(pids, count);
     for (int i = 0; i < count; ++i) {
         int status = 0;
-        if (wait_pid(pids[i], &status) < 0)
+        if (wait_pid(pids[i], &status) < 0) {
             status = STATUS_NOT_FOUND;
+        } else if (WIFSIGNALED(status)) {
+            report_signal_death(status);
+        }
+        interrupt_target_reaped(pids[i]);
         if (pids[i] == status_pid)
-            result = status;
+            result = jobs_exit_code(status);
     }
+    interrupt_set_targets(0, 0);
     return result;
 }
 
@@ -555,6 +635,10 @@ int exec_line(const char *line) {
     }
     for (int i = 0; i < program.pipeline_count; ++i) {
         const ShellPipeline *pipeline = &program.pipelines[i];
+        if (interrupt_pending()) {
+            last_status = STATUS_INTERRUPTED;
+            break;
+        }
         if (pipeline->connector == CONNECT_IF_SUCCESS && last_status != 0)
             continue;
         if (pipeline->connector == CONNECT_IF_FAILURE && last_status == 0)
@@ -568,5 +652,7 @@ int exec_line(const char *line) {
         if (exit_requested)
             break;
     }
+    if (interrupt_pending())
+        last_status = STATUS_INTERRUPTED;
     return last_status;
 }

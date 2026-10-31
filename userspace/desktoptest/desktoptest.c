@@ -1,6 +1,10 @@
 #include "mini_libc.h"
+#include "anim.h"
 #include "compositor.h"
 #include "gfx_effects.h"
+#include "iconset.h"
+#include "settings.h"
+#include "settings_ui.h"
 #include "widgets.h"
 /* theme.h must precede layout.h: layout.h defines shorthand macros such as
    gap/space that collide with Theme field names. */
@@ -9,6 +13,8 @@
 #include "taskbar.h"
 #include "launcher.h"
 #include "filemanager.h"
+#include "window_geometry.h"
+#include "window_motion.h"
 
 #define TEST_SURFACE_W 320
 #define TEST_SURFACE_H 200
@@ -477,51 +483,75 @@ static const char *test_launcher(void) {
 }
 
 static const char *test_filemanager(void) {
-    Surface *surface;
-    const char *path;
-    const FmEntry *entry;
-    int index;
+    FileManager fm;
+    Settings settings;
+    SettingsPalette palette;
+    Window *win;
+    const uint32_t *pixels;
+    int folders;
 
-    surface = surface_create(TEST_SURFACE_W, TEST_SURFACE_H);
-    if (!surface) {
-        return "filemanager surface";
-    }
-
-    if (fm_init(".") != 0) {
+    settings_defaults(&settings);
+    settings_palette(&settings, &palette);
+    if (fm_init(&fm, &palette, 30, "/") != 0) {
         return "filemanager init";
     }
-    if (fm_get_count() <= 0) {
+    if (strcmp(fm.path, "/") != 0 || fm.count <= 0) {
         return "filemanager entries";
     }
-    path = fm_get_path();
-    if (!path || path[0] == '\0') {
-        return "filemanager path";
+    folders = 0;
+    for (int i = 0; i < fm.count; ++i) {
+        if (strcmp(fm.entries[i].name, ".") == 0 || strcmp(fm.entries[i].name, "..") == 0) {
+            return "filemanager dot entries";
+        }
+        if (fm.entries[i].kind == FM_KIND_FOLDER) {
+            if (folders != i) {
+                return "filemanager folders first";
+            }
+            ++folders;
+        }
     }
-    entry = fm_get_entry(0);
-    if (!entry || entry->name[0] == '\0') {
-        return "filemanager entry";
-    }
-    if (fm_get_entry(-1) != 0 || fm_get_entry(fm_get_count()) != 0) {
-        return "filemanager bounds";
-    }
-
-    if (fm_draw(surface) != 0) {
-        return "filemanager draw";
-    }
-    if (surface->pixels[0] != 0xFF1E1E2Eu) {
-        return "filemanager background";
+    if (folders == 0) {
+        return "filemanager folders";
     }
 
-    /* First icon cell starts at (8, 24); clicking it selects entry 0. */
-    index = fm_handle_click(9, 25);
-    if (index != 0) {
-        return "filemanager click";
+    win = comp_create_window(0, 0, 700, 480);
+    if (!win || !win->surface) {
+        return "filemanager window";
     }
-    if (!fm_get_selected_name()) {
-        return "filemanager selected";
+    fm_draw(&fm, win);
+    pixels = (const uint32_t *)win->surface;
+    if ((pixels[(win->h - 2) * win->w + 4] & 0x00FFFFFFu) != palette.sidebar ||
+        (pixels[(win->h - 2) * win->w + win->w - 4] & 0x00FFFFFFu) != palette.surface) {
+        return "filemanager paint";
     }
 
-    surface_destroy(surface);
+    /* Arrow keys select, Enter opens the selected folder, Backspace goes up. */
+    if (!(fm_key(&fm, win, FM_KEY_DOWN) & FM_REDRAW) || fm.selected != 0) {
+        return "filemanager select";
+    }
+    if (!(fm_key(&fm, win, '\n') & FM_REDRAW) || fm.path[1] == 0 || fm.back_count != 1) {
+        return "filemanager open folder";
+    }
+    if (!(fm_key(&fm, win, '\b') & FM_REDRAW) || strcmp(fm.path, "/") != 0) {
+        return "filemanager up";
+    }
+    if (fm_key(&fm, win, '\b') != 0) {
+        return "filemanager up at root";
+    }
+    /* Escape cancels the delete confirmation without touching the entry. */
+    if (!(fm_key(&fm, win, FM_KEY_DOWN) & FM_REDRAW) || !(fm_key(&fm, win, FM_KEY_DELETE) & FM_REDRAW) ||
+        !fm.confirm_delete) {
+        return "filemanager delete dialog";
+    }
+    if (!(fm_key(&fm, win, FM_KEY_ESCAPE) & FM_REDRAW) || fm.confirm_delete) {
+        return "filemanager escape cancels delete";
+    }
+    if (!(fm_click(&fm, win, 0, 0) == 0) || fm_hover(&fm, win, -1, -1) != 0) {
+        return "filemanager title bar";
+    }
+
+    fm_destroy(&fm);
+    comp_destroy_window(win);
     return 0;
 }
 
@@ -558,6 +588,90 @@ static void fx_fill_solid(uint32_t *pixels, int count, uint32_t color) {
 #define FX_SUM_SHADOW_MASK 0x3FB639B6u
 #define FX_SUM_SHADOW      0xB57B8775u
 #define FX_SUM_GLASS       0x54492FEDu
+
+typedef struct IconUse {
+    IconId id;
+    int size;
+    int glyph;
+} IconUse;
+
+/* Every icon and size the desktop draws; all must exist in the generated set. */
+static const IconUse icon_uses[] = {
+    { ICON_TERMINAL, ICON_SIZE_APP, 0 }, { ICON_EDITOR, ICON_SIZE_APP, 0 },
+    { ICON_FILES, ICON_SIZE_APP, 0 }, { ICON_SETTINGS, ICON_SIZE_APP, 0 },
+    { ICON_FOLDER, ICON_SIZE_FILE, 0 }, { ICON_TEXT, ICON_SIZE_FILE, 0 },
+    { ICON_PAGE, ICON_SIZE_FILE, 0 }, { ICON_PROGRAM, ICON_SIZE_FILE, 0 },
+    { ICON_ARCHIVE, ICON_SIZE_FILE, 0 }, { ICON_IMAGE, ICON_SIZE_FILE, 0 },
+    { ICON_FOLDER, ICON_SIZE_FILE_SMALL, 0 }, { ICON_TEXT, ICON_SIZE_FILE_SMALL, 0 },
+    { ICON_PAGE, ICON_SIZE_FILE_SMALL, 0 }, { ICON_PROGRAM, ICON_SIZE_FILE_SMALL, 0 },
+    { ICON_ARCHIVE, ICON_SIZE_FILE_SMALL, 0 }, { ICON_IMAGE, ICON_SIZE_FILE_SMALL, 0 },
+    { ICON_PLACE_ROOT, ICON_SIZE_TILE, 0 }, { ICON_PLACE_HOME, ICON_SIZE_TILE, 0 },
+    { ICON_PLACE_TEMP, ICON_SIZE_TILE, 0 }, { ICON_PLACE_PROGRAMS, ICON_SIZE_TILE, 0 },
+    { ICON_SECTION_APPEARANCE, ICON_SIZE_TILE, 0 }, { ICON_SECTION_KEYBOARD, ICON_SIZE_TILE, 0 },
+    { ICON_SECTION_DISPLAY, ICON_SIZE_TILE, 0 }, { ICON_SECTION_NETWORK, ICON_SIZE_TILE, 0 },
+    { ICON_SECTION_ABOUT, ICON_SIZE_TILE, 0 },
+    { ICON_GLYPH_SEARCH, ICON_SIZE_GLYPH, 1 }, { ICON_GLYPH_POWER, ICON_SIZE_GLYPH, 1 },
+    { ICON_GLYPH_RESTART, ICON_SIZE_GLYPH, 1 }, { ICON_GLYPH_CHEVRON, ICON_SIZE_GLYPH, 1 },
+    { ICON_GLYPH_POWER, ICON_SIZE_GLYPH_LARGE, 1 }, { ICON_GLYPH_RESTART, ICON_SIZE_GLYPH_LARGE, 1 },
+    { ICON_GLYPH_BACK, ICON_SIZE_TOOLBAR, 1 }, { ICON_GLYPH_FORWARD, ICON_SIZE_TOOLBAR, 1 },
+    { ICON_GLYPH_UP, ICON_SIZE_TOOLBAR, 1 }, { ICON_GLYPH_VIEW_GRID, ICON_SIZE_TOOLBAR, 1 },
+    { ICON_GLYPH_VIEW_LIST, ICON_SIZE_TOOLBAR, 1 }, { ICON_GLYPH_NEW_FOLDER, ICON_SIZE_TOOLBAR, 1 },
+    { ICON_GLYPH_RENAME, ICON_SIZE_TOOLBAR, 1 }, { ICON_GLYPH_DELETE, ICON_SIZE_TOOLBAR, 1 },
+};
+
+#define ICON_TEST_SIZE 64
+#define ICON_TEST_SURFACE 0x00102030u
+
+static const char *test_icons(void) {
+    static uint32_t pixels[ICON_TEST_SIZE * ICON_TEST_SIZE];
+    GfxCanvas canvas = { pixels, ICON_TEST_SIZE, ICON_TEST_SIZE, ICON_TEST_SIZE, 0 };
+    uint32_t dark_sum;
+    uint32_t light_sum;
+    uint32_t clean_sum;
+
+    for (size_t i = 0; i < sizeof(icon_uses) / sizeof(icon_uses[0]); ++i) {
+        if (!icon_available(icon_uses[i].id, icon_uses[i].size, icon_uses[i].glyph)) {
+            return "icons set lacks a size the desktop draws";
+        }
+    }
+
+    fx_fill_solid(pixels, ICON_TEST_SIZE * ICON_TEST_SIZE, ICON_TEST_SURFACE);
+    icon_draw(&canvas, ICON_TERMINAL, ICON_SIZE_APP, 0, 0, 0, 255);
+    if (pixels[0] != ICON_TEST_SURFACE ||
+        pixels[(ICON_SIZE_APP / 2) * ICON_TEST_SIZE + ICON_SIZE_APP / 2] == ICON_TEST_SURFACE) {
+        return "icons colour blend";
+    }
+    dark_sum = gfx_checksum(pixels, ICON_TEST_SIZE, ICON_TEST_SIZE, ICON_TEST_SIZE);
+    fx_fill_solid(pixels, ICON_TEST_SIZE * ICON_TEST_SIZE, ICON_TEST_SURFACE);
+    icon_draw(&canvas, ICON_TERMINAL, ICON_SIZE_APP, 0, 0, 1, 255);
+    light_sum = gfx_checksum(pixels, ICON_TEST_SIZE, ICON_TEST_SIZE, ICON_TEST_SIZE);
+    if (dark_sum == light_sum) {
+        return "icons theme variants";
+    }
+
+    fx_fill_solid(pixels, ICON_TEST_SIZE * ICON_TEST_SIZE, ICON_TEST_SURFACE);
+    clean_sum = gfx_checksum(pixels, ICON_TEST_SIZE, ICON_TEST_SIZE, ICON_TEST_SIZE);
+    icon_draw(&canvas, ICON_GLYPH_VIEW_GRID, ICON_SIZE_TOOLBAR, 0, 0, 0, 255);
+    icon_draw_glyph(&canvas, ICON_TERMINAL, ICON_SIZE_APP, 0, 0, 0x00FFFFFFu, 255);
+    icon_draw_glyph(&canvas, ICON_GLYPH_VIEW_GRID, ICON_SIZE_TOOLBAR + 1, 0, 0, 0x00FFFFFFu, 255);
+    if (gfx_checksum(pixels, ICON_TEST_SIZE, ICON_TEST_SIZE, ICON_TEST_SIZE) != clean_sum) {
+        return "icons wrong kind or size draws";
+    }
+    icon_draw_glyph(&canvas, ICON_GLYPH_VIEW_GRID, ICON_SIZE_TOOLBAR, 0, 0, 0x00E0A040u, 255);
+    if (pixels[6 * ICON_TEST_SIZE + 6] != 0x00E0A040u || pixels[0] != ICON_TEST_SURFACE) {
+        return "icons glyph tint";
+    }
+
+    for (int i = 0; i < ICON_TEST_SIZE * ICON_TEST_SIZE; ++i) {
+        pixels[i] = 0;
+    }
+    canvas.has_alpha = 1;
+    icon_draw_glyph(&canvas, ICON_GLYPH_VIEW_GRID, ICON_SIZE_TOOLBAR, 0, 0, 0x00E0A040u, 255);
+    if (pixels[6 * ICON_TEST_SIZE + 6] != 0xFFE0A040u || pixels[0] != 0) {
+        return "icons blend on a surface with alpha";
+    }
+    return 0;
+}
 
 static const char *test_effects(void) {
     static uint32_t pixels[FX_SHADOW_W * FX_SHADOW_H];
@@ -834,6 +948,1487 @@ static const char *test_compositor_effects(void) {
     return 0;
 }
 
+/* ---------------- window manager ---------------- */
+
+static int rect_is(CompRect r, int x, int y, int w, int h) {
+    return r.x == x && r.y == y && r.w == w && r.h == h;
+}
+
+static const char *test_window_geometry(void) {
+    CompRect work = wm_work_area(1280, 720, 24, 56);
+    int x;
+    int y;
+
+    if (!rect_is(work, 0, 24, 1280, 640) ||
+        wm_work_area(100, 40, 30, 30).h != 0) {
+        return "wm work area";
+    }
+
+    /* The window stays inside the work area vertically, and WM_MIN_TITLE_VISIBLE
+       pixels of its title bar remain at either side. */
+    work = wm_work_area(1000, 700, 0, 100);
+    x = -5000; y = -5000;
+    wm_clamp_position(&work, 400, 300, 30, &x, &y);
+    if (x != WM_MIN_TITLE_VISIBLE - 400 || y != 0) {
+        return "wm clamp top left";
+    }
+    x = 5000; y = 5000;
+    wm_clamp_position(&work, 400, 300, 30, &x, &y);
+    if (x != 1000 - WM_MIN_TITLE_VISIBLE || y != 600 - 300) {
+        return "wm clamp bottom right";
+    }
+    x = 300; y = 200;
+    wm_clamp_position(&work, 400, 300, 30, &x, &y);
+    if (x != 300 || y != 200) {
+        return "wm clamp inside";
+    }
+    x = -100; y = 0;
+    wm_clamp_position(&work, 40, 300, 30, &x, &y);
+    if (x != 0) {
+        return "wm clamp narrow window";
+    }
+    work = wm_work_area(1000, 700, 40, 100);
+    x = 0; y = 0;
+    wm_clamp_position(&work, 400, 300, 30, &x, &y);
+    if (y != 40) {
+        return "wm clamp below top bar";
+    }
+    /* A window taller than the work area keeps only its title bar inside. */
+    x = 0; y = 5000;
+    wm_clamp_position(&work, 400, 900, 30, &x, &y);
+    if (y != 40 + 560 - 30) {
+        return "wm clamp tall window";
+    }
+    /* A window taller than the work area keeps only its title bar inside. */
+    x = 0; y = 5000;
+    wm_clamp_position(&work, 400, 900, 30, &x, &y);
+    if (y != 40 + 560 - 30) {
+        return "wm clamp tall window";
+    }
+
+    if (wm_dock_action(0, 0, 0) != WM_DOCK_LAUNCH ||
+        wm_dock_action(1, 1, 0) != WM_DOCK_RESTORE ||
+        wm_dock_action(1, 1, 1) != WM_DOCK_RESTORE ||
+        wm_dock_action(1, 0, 0) != WM_DOCK_RAISE ||
+        wm_dock_action(1, 0, 1) != WM_DOCK_MINIMIZE) {
+        return "wm dock action";
+    }
+
+    if (!wm_is_double_click(1000, 50, 60, 1000 + WM_DOUBLE_CLICK_MS, 52, 58) ||
+        wm_is_double_click(1000, 50, 60, 1001 + WM_DOUBLE_CLICK_MS, 50, 60) ||
+        wm_is_double_click(1000, 50, 60, 1100, 50 + WM_DOUBLE_CLICK_SLOP + 1, 60)) {
+        return "wm double click";
+    }
+    return 0;
+}
+
+/* Renders the pending damage and checks that both buffers then hold the
+   complete frame a from-scratch repaint produces. */
+static const char *frame_check_buffers(uint32_t *front_copy, uint32_t *back_copy, const char *what) {
+    if (comp_render() != 0) {
+        return what;
+    }
+    memcpy(front_copy, comp_front_buffer(), SCENE_PIXELS * sizeof(uint32_t));
+    memcpy(back_copy, comp_back_buffer(), SCENE_PIXELS * sizeof(uint32_t));
+    comp_damage_all();
+    if (comp_render() != 0) {
+        return what;
+    }
+    const uint32_t *full = comp_front_buffer();
+    for (int i = 0; i < SCENE_PIXELS; ++i) {
+        if (front_copy[i] != full[i] || back_copy[i] != full[i]) {
+            return what;
+        }
+    }
+    return 0;
+}
+
+static int min_int(int a, int b) {
+    return a < b ? a : b;
+}
+
+static int max_int(int a, int b) {
+    return a > b ? a : b;
+}
+
+static const char *test_window_damage(void) {
+    const ThemeEffects *fx = &theme_default()->effects;
+    const GfxShadow *shadow = gfx_shadow_get(fx->window_radius, fx->shadow_blur_radius);
+    Window *bg;
+    Window *card;
+    CompWindowStyle style;
+    uint32_t *front_copy;
+    uint32_t *back_copy;
+    const char *failure;
+
+    front_copy = (uint32_t *)malloc(SCENE_PIXELS * sizeof(uint32_t));
+    back_copy = (uint32_t *)malloc(SCENE_PIXELS * sizeof(uint32_t));
+    if (!front_copy || !back_copy || !shadow) {
+        return "window damage memory";
+    }
+    if (quiet_stdout_begin() != 0) {
+        return "stdout guard";
+    }
+    if (comp_init_size(TEST_SURFACE_W, TEST_SURFACE_H) != 0) {
+        quiet_stdout_end();
+        return "window damage init";
+    }
+    if (quiet_stdout_end() != 0) {
+        return "stdout restore";
+    }
+    bg = comp_create_window(0, 0, TEST_SURFACE_W, TEST_SURFACE_H);
+    card = comp_create_window(90, 40, 120, 80);
+    if (!bg || !card) {
+        return "window damage windows";
+    }
+    for (int y = 0; y < TEST_SURFACE_H; ++y)
+        for (int x = 0; x < TEST_SURFACE_W; ++x)
+            ((uint32_t *)bg->surface)[y * TEST_SURFACE_W + x] = fx_pattern_pixel(x, y);
+    scene_fill(card, 0, 0, 120, 80, 0x00E8ECF0u);
+
+    /* The extent is the window plus the shadow the theme tokens cast. */
+    if (!rect_is(comp_window_extent(card), 90, 40, 120, 80)) {
+        return "window extent plain";
+    }
+    comp_style_window(&style);
+    style.corner_radius = fx->window_radius;
+    if (comp_set_window_style(card, &style) != 0) {
+        return "window extent style";
+    }
+    int e = shadow->extent;
+    int left = min_int(90, 90 + fx->shadow_offset_x - e);
+    int top = min_int(40, 40 + fx->shadow_offset_y - e);
+    int right = max_int(90 + 120, 90 + 120 + fx->shadow_offset_x + e);
+    int bottom = max_int(40 + 80, 40 + 80 + fx->shadow_offset_y + e);
+    if (e <= 0 || !rect_is(comp_window_extent(card), left, top, right - left, bottom - top)) {
+        return "window extent shadow";
+    }
+    style.shadow = 0;
+    if (comp_set_window_style(card, &style) != 0 ||
+        !rect_is(comp_window_extent(card), 90, 40, 120, 80)) {
+        return "window extent no shadow";
+    }
+    style.shadow = 1;
+    if (comp_set_window_style(card, &style) != 0) {
+        return "window extent restyle";
+    }
+
+    comp_damage_all();
+    failure = frame_check_buffers(front_copy, back_copy, "window damage baseline");
+    if (failure) {
+        return failure;
+    }
+
+    /* Moving, hiding, showing, resizing and destroying need no damage from
+       the caller: the corners of the shadow are repainted too. */
+    card->x += 33;
+    card->y += 61;
+    failure = frame_check_buffers(front_copy, back_copy, "window damage move");
+    if (failure) {
+        return failure;
+    }
+    card->visible = 0;
+    failure = frame_check_buffers(front_copy, back_copy, "window damage hide");
+    if (failure) {
+        return failure;
+    }
+    card->visible = 1;
+    failure = frame_check_buffers(front_copy, back_copy, "window damage show");
+    if (failure) {
+        return failure;
+    }
+    if (comp_resize_window(card, 60, 50) != 0) {
+        return "window damage resize";
+    }
+    scene_fill(card, 0, 0, 60, 50, 0x00203040u);
+    failure = frame_check_buffers(front_copy, back_copy, "window damage resize");
+    if (failure) {
+        return failure;
+    }
+
+    /* Consecutive frames over different areas leave no stale pixels behind in
+       either buffer, which presenting a merged damage box relies on. */
+    scene_fill(bg, 5, 5, 30, 30, 0x00FF0000u);
+    comp_damage_rect(bg, 5, 5, 30, 30);
+    failure = frame_check_buffers(front_copy, back_copy, "window damage first frame");
+    if (failure) {
+        return failure;
+    }
+    scene_fill(bg, 250, 150, 40, 30, 0x0000FF00u);
+    comp_damage_rect(bg, 250, 150, 40, 30);
+    failure = frame_check_buffers(front_copy, back_copy, "window damage second frame");
+    if (failure) {
+        return failure;
+    }
+
+    if (comp_destroy_window(card) != 0) {
+        return "window damage destroy";
+    }
+    failure = frame_check_buffers(front_copy, back_copy, "window damage destroyed");
+    if (failure) {
+        return failure;
+    }
+    if (comp_destroy_window(bg) != 0 || comp_window_count() != 0) {
+        return "window damage cleanup";
+    }
+    free(front_copy);
+    free(back_copy);
+    return 0;
+}
+
+/* ---------------- animation engine ---------------- */
+
+static AnimValue abs_value(AnimValue value) {
+    return value < 0 ? -value : value;
+}
+
+/* Runs a spring from 0 to 1.0 in frames of frame_ms. Returns the time it took
+   to settle, or -1 if the value ever fell or passed the target, or the spring
+   never settled within five seconds. */
+static int spring_settle_time(uint32_t frame_ms) {
+    AnimSpring spring;
+    AnimValue previous = 0;
+
+    anim_spring_init(&spring, 0, ANIM_TUNING_WINDOW);
+    anim_spring_go(&spring, ANIM_ONE, 1);
+    for (uint32_t elapsed = 0; elapsed < 5000; elapsed += frame_ms) {
+        int moving = anim_spring_advance(&spring, frame_ms);
+        if (spring.value < previous || spring.value > ANIM_ONE) {
+            return -1;
+        }
+        previous = spring.value;
+        if (!moving) {
+            return spring.value == ANIM_ONE && anim_spring_settled(&spring) ? (int)(elapsed + frame_ms) : -1;
+        }
+    }
+    return -1;
+}
+
+static const char *test_anim_engine(void) {
+    static const uint32_t frames[] = { 1, 4, 7, 16, 33, 100 };
+    AnimSpring spring;
+    AnimSpring other;
+    AnimClock clock = { 0, 0 };
+
+    /* A spring released from rest rises monotonically and lands exactly on its
+       target, at every frame rate, in about the same time. */
+    for (unsigned i = 0; i < sizeof(frames) / sizeof(frames[0]); ++i) {
+        int settled = spring_settle_time(frames[i]);
+        if (settled < 0) {
+            return "anim monotonic convergence";
+        }
+        if (settled < 150 || settled > 700) {
+            return "anim settle time";
+        }
+    }
+
+    /* The result does not depend on how the time is cut into frames. */
+    anim_spring_init(&spring, 0, ANIM_TUNING_WINDOW);
+    anim_spring_init(&other, 0, ANIM_TUNING_WINDOW);
+    anim_spring_go(&spring, ANIM_ONE, 1);
+    anim_spring_go(&other, ANIM_ONE, 1);
+    anim_spring_advance(&spring, 120);
+    for (int i = 0; i < 15; ++i) {
+        anim_spring_advance(&other, 8);
+    }
+    if (abs_value(spring.value - other.value) > ANIM_ONE / 200 || spring.value <= 0 ||
+        spring.value >= ANIM_ONE) {
+        return "anim frame independence";
+    }
+    /* Time that does not fill a sub-step is carried over, not lost. */
+    anim_spring_init(&other, 0, ANIM_TUNING_WINDOW);
+    anim_spring_go(&other, ANIM_ONE, 1);
+    for (int i = 0; i < 120; ++i) {
+        anim_spring_advance(&other, 1);
+    }
+    if (other.value != spring.value) {
+        return "anim sub-step remainder";
+    }
+
+    /* Retargeting midway keeps the position and the velocity, so the motion
+       turns around smoothly instead of jumping. */
+    anim_spring_init(&spring, 0, ANIM_TUNING_WINDOW);
+    anim_spring_go(&spring, ANIM_ONE, 1);
+    anim_spring_advance(&spring, 60);
+    AnimValue at_turn = spring.value;
+    int32_t speed_at_turn = spring.velocity;
+    if (at_turn <= 0 || at_turn >= ANIM_ONE || speed_at_turn <= 0) {
+        return "anim retarget setup";
+    }
+    anim_spring_go(&spring, 0, 1);
+    if (spring.value != at_turn || spring.velocity != speed_at_turn || spring.target != 0) {
+        return "anim retarget continuity";
+    }
+    AnimValue last = spring.value;
+    for (int i = 0; i < 600; ++i) {
+        anim_spring_advance(&spring, 8);
+        if (abs_value(spring.value - last) > ANIM_ONE / 8) {
+            return "anim retarget jump";
+        }
+        last = spring.value;
+    }
+    if (spring.value != 0 || !anim_spring_settled(&spring) || anim_spring_advance(&spring, 16) != 0) {
+        return "anim retarget settle";
+    }
+
+    /* A spring that is already at rest stays put. */
+    anim_spring_snap(&spring, ANIM_ONE);
+    if (anim_spring_advance(&spring, 50) != 0 || spring.value != ANIM_ONE || spring.velocity != 0) {
+        return "anim rest";
+    }
+
+    /* A stalled frame does not fast-forward past the clamp. */
+    anim_spring_init(&spring, 0, ANIM_TUNING_WINDOW);
+    anim_spring_go(&spring, ANIM_ONE, 1);
+    anim_spring_init(&other, 0, ANIM_TUNING_WINDOW);
+    anim_spring_go(&other, ANIM_ONE, 1);
+    anim_spring_advance(&spring, 60000);
+    anim_spring_advance(&other, ANIM_MAX_ELAPSED_MS);
+    if (spring.value != other.value) {
+        return "anim elapsed clamp";
+    }
+
+    /* Reduce motion: the target is reached at once, without any frames. */
+    anim_spring_init(&spring, 0, ANIM_TUNING_WINDOW);
+    anim_spring_go(&spring, ANIM_ONE, 0);
+    if (spring.value != ANIM_ONE || !anim_spring_settled(&spring) || anim_spring_advance(&spring, 16) != 0) {
+        return "anim reduce motion";
+    }
+    anim_spring_go(&spring, 0, 1);
+    anim_spring_go(&spring, ANIM_ONE / 2, 0);
+    if (spring.value != ANIM_ONE / 2 || spring.velocity != 0) {
+        return "anim reduce motion cancels";
+    }
+
+    if (anim_lerp(100, 300, ANIM_ONE / 2) != 200 || anim_lerp(100, 300, 0) != 100 ||
+        anim_lerp(100, 300, ANIM_ONE) != 300 || anim_round(3 * ANIM_ONE + ANIM_ONE / 2) != 4 ||
+        anim_round(-ANIM_ONE / 4) != 0 || anim_clamp_unit(-5) != 0 ||
+        anim_clamp_unit(2 * ANIM_ONE) != ANIM_ONE || anim_clamp_unit(ANIM_ONE / 3) != ANIM_ONE / 3) {
+        return "anim arithmetic";
+    }
+
+    if (anim_clock_advance(&clock, 5000) != 0 || anim_clock_advance(&clock, 5016) != 16 ||
+        anim_clock_advance(&clock, 5016) != 0 || anim_clock_advance(&clock, 4000) != 0 ||
+        anim_clock_advance(&clock, 4010) != 10 ||
+        anim_clock_advance(&clock, 99999) != ANIM_MAX_ELAPSED_MS) {
+        return "anim clock";
+    }
+    return 0;
+}
+
+/* ---------------- window motion ---------------- */
+
+static int pose_is(const MotionPose *pose, const CompRect *rect, unsigned int opacity) {
+    return rect_is(*rect, pose->rect.x, pose->rect.y, pose->rect.w, pose->rect.h) &&
+           pose->opacity == opacity;
+}
+
+static const char *test_window_motion(void) {
+    WindowMotion motion;
+    CompRect home = { 100, 80, 400, 300 };
+    MotionPose hidden = { motion_rect_scaled(&home, ANIM_ONE * 92 / 100), 0 };
+    MotionPose rest = { home, MOTION_OPAQUE };
+    CompRect half = motion_rect_scaled(&home, ANIM_ONE / 2);
+    CompRect dot = motion_rect_collapsed(60, 700, 32);
+    CompRect opened = { 116, 92, 368, 276 };
+    MotionPose pose;
+
+    if (!rect_is(half, 200, 155, 200, 150) || !rect_is(dot, 44, 684, 32, 32) ||
+        motion_rect_scaled(&home, 0).w != 1) {
+        return "motion rects";
+    }
+    if (!rect_is(hidden.rect, opened.x, opened.y, opened.w, opened.h)) {
+        return "motion open pose";
+    }
+
+    memset(&motion, 0, sizeof(motion));
+    /* With motion off nothing starts. */
+    window_motion_begin(&motion, &home, &hidden, &rest, 1, ANIM_TUNING_WINDOW, 0);
+    pose = window_motion_pose(&motion, &home);
+    if (motion.active || window_motion_advance(&motion, 16) != 0 || !pose_is(&pose, &home, 255)) {
+        return "motion reduced";
+    }
+
+    window_motion_begin(&motion, &home, &hidden, &rest, 1, ANIM_TUNING_WINDOW, 1);
+    pose = window_motion_pose(&motion, &home);
+    if (!motion.active || !pose_is(&pose, &opened, 0)) {
+        return "motion begins at the start pose";
+    }
+    /* Opacity and size rise monotonically and land exactly on the end pose. */
+    unsigned int opacity = 0;
+    int width = pose.rect.w;
+    int frames = 0;
+    while (window_motion_advance(&motion, 16)) {
+        pose = window_motion_pose(&motion, &home);
+        if (pose.opacity < opacity || pose.rect.w < width || pose.opacity > 255 || pose.rect.w > home.w) {
+            return "motion monotonic";
+        }
+        opacity = pose.opacity;
+        width = pose.rect.w;
+        if (++frames > 100) {
+            return "motion never settles";
+        }
+    }
+    pose = window_motion_pose(&motion, &home);
+    if (motion.active || !pose_is(&pose, &home, 255)) {
+        return "motion lands on the end pose";
+    }
+
+    /* The end pose follows the window when it moves meanwhile. */
+    CompRect moved = { 300, 200, 400, 300 };
+    window_motion_begin(&motion, &home, &hidden, &rest, 1, ANIM_TUNING_WINDOW, 1);
+    window_motion_advance(&motion, 16);
+    while (window_motion_advance(&motion, 16)) {
+    }
+    pose = window_motion_pose(&motion, &moved);
+    if (!pose_is(&pose, &moved, 255)) {
+        return "motion follows the window";
+    }
+
+    /* Retargeting midway (close during the opening) starts from the pose
+       reached, not from the old start pose. */
+    window_motion_begin(&motion, &home, &hidden, &rest, 1, ANIM_TUNING_WINDOW, 1);
+    for (int i = 0; i < 4; ++i) {
+        window_motion_advance(&motion, 16);
+    }
+    MotionPose midway = window_motion_pose(&motion, &home);
+    if (midway.opacity == 0 || midway.opacity == 255) {
+        return "motion retarget setup";
+    }
+    MotionPose gone = { hidden.rect, 0 };
+    window_motion_begin(&motion, &home, &rest, &gone, 0, ANIM_TUNING_WINDOW, 1);
+    pose = window_motion_pose(&motion, &home);
+    if (!pose_is(&pose, &midway.rect, midway.opacity)) {
+        return "motion retarget continuity";
+    }
+    while (window_motion_advance(&motion, 16)) {
+    }
+    pose = window_motion_pose(&motion, &home);
+    if (!pose_is(&pose, &hidden.rect, 0)) {
+        return "motion retarget lands";
+    }
+
+    window_motion_begin(&motion, &home, &hidden, &rest, 1, ANIM_TUNING_WINDOW, 1);
+    window_motion_finish(&motion);
+    pose = window_motion_pose(&motion, &home);
+    if (motion.active || !pose_is(&pose, &home, 255)) {
+        return "motion finish";
+    }
+    return 0;
+}
+
+/* ---------------- posed windows ---------------- */
+
+static int near_color(uint32_t pixel, uint32_t expected, int tolerance) {
+    for (int shift = 0; shift <= 16; shift += 8) {
+        int difference = (int)((pixel >> shift) & 0xFFu) - (int)((expected >> shift) & 0xFFu);
+        if (difference > tolerance || difference < -tolerance) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static const char *test_window_pose(void) {
+    const uint32_t card_color = 0x00E8ECF0u;
+    const uint32_t backdrop = 0x00304050u;
+    const uint32_t halfway = 0x008C96A0u;
+    Window *bg;
+    Window *card;
+    Window *glass;
+    CompWindowStyle style;
+    uint32_t *front_copy;
+    uint32_t *back_copy;
+    uint32_t *reference;
+    const uint32_t *front;
+    const char *failure;
+
+    front_copy = (uint32_t *)malloc(SCENE_PIXELS * sizeof(uint32_t));
+    back_copy = (uint32_t *)malloc(SCENE_PIXELS * sizeof(uint32_t));
+    reference = (uint32_t *)malloc(SCENE_PIXELS * sizeof(uint32_t));
+    if (!front_copy || !back_copy || !reference) {
+        return "pose memory";
+    }
+    if (quiet_stdout_begin() != 0) {
+        return "stdout guard";
+    }
+    if (comp_init_size(TEST_SURFACE_W, TEST_SURFACE_H) != 0) {
+        quiet_stdout_end();
+        return "pose init";
+    }
+    if (quiet_stdout_end() != 0) {
+        return "stdout restore";
+    }
+    bg = comp_create_window(0, 0, TEST_SURFACE_W, TEST_SURFACE_H);
+    card = comp_create_window(100, 50, 120, 80);
+    glass = comp_create_window(0, TEST_SURFACE_H - 40, TEST_SURFACE_W, 40);
+    if (!bg || !card || !glass) {
+        return "pose windows";
+    }
+    scene_fill(bg, 0, 0, TEST_SURFACE_W, TEST_SURFACE_H, backdrop);
+    scene_fill(card, 0, 0, 120, 80, card_color);
+    scene_fill(glass, 0, 0, TEST_SURFACE_W, 40, 0x00000000u);
+    comp_style_window(&style);
+    comp_set_window_style(card, &style);
+    comp_style_glass(&style);
+    comp_set_window_style(glass, &style);
+
+    comp_damage_all();
+    failure = frame_check_buffers(front_copy, back_copy, "pose baseline");
+    if (failure) {
+        return failure;
+    }
+    memcpy(reference, comp_front_buffer(), SCENE_PIXELS * sizeof(uint32_t));
+
+    /* A pose that changes nothing is invisible. */
+    CompRect same = { 100, 50, 120, 80 };
+    CompRect empty = { 0, 0, 0, 10 };
+    if (comp_set_window_pose(card, &same, 255) != 0) {
+        return "pose identity";
+    }
+    if (comp_render() != 0 || memcmp(reference, comp_front_buffer(), SCENE_PIXELS * sizeof(uint32_t)) != 0) {
+        return "pose identity frame";
+    }
+    if (comp_set_window_pose(card, &empty, 255) == 0 || comp_set_window_pose(0, &same, 255) == 0) {
+        return "pose validation";
+    }
+
+    /* Scaled and half transparent: the window shows inside the pose rectangle,
+       blended with what lies behind, and nowhere else. */
+    CompRect small = { 130, 70, 60, 40 };
+    if (comp_set_window_pose(card, &small, 128) != 0) {
+        return "pose set";
+    }
+    failure = frame_check_buffers(front_copy, back_copy, "pose scaled damage");
+    if (failure) {
+        return failure;
+    }
+    front = comp_front_buffer();
+    if (!near_color(front[90 * TEST_SURFACE_W + 160], halfway, 3)) {
+        return "pose opacity blend";
+    }
+    if (near_color(front[60 * TEST_SURFACE_W + 110], card_color, 24) ||
+        front[10 * TEST_SURFACE_W + 10] != backdrop) {
+        return "pose outside rectangle";
+    }
+
+    /* Every step of an animation repaints exactly what it changed. */
+    for (int step = 0; step <= 8; ++step) {
+        CompRect pose = { 130 - step * 3, 70 - step * 2, 60 + step * 7, 40 + step * 5 };
+        if (comp_set_window_pose(card, &pose, (unsigned int)(128 + step * 15)) != 0) {
+            return "pose step";
+        }
+        failure = frame_check_buffers(front_copy, back_copy, "pose step damage");
+        if (failure) {
+            return failure;
+        }
+    }
+
+    /* Fading out completely hides the window and its shadow. */
+    if (comp_set_window_pose(card, &small, 0) != 0) {
+        return "pose fade out";
+    }
+    failure = frame_check_buffers(front_copy, back_copy, "pose faded damage");
+    if (failure) {
+        return failure;
+    }
+    front = comp_front_buffer();
+    for (int y = 0; y < TEST_SURFACE_H - 40; ++y) {
+        for (int x = 0; x < TEST_SURFACE_W; ++x) {
+            if (front[y * TEST_SURFACE_W + x] != backdrop) {
+                return "pose faded leaves pixels";
+            }
+        }
+    }
+
+    /* Clearing the pose restores the exact frame from before: no stale pixels,
+       no shadow remnants. */
+    comp_clear_window_pose(card);
+    failure = frame_check_buffers(front_copy, back_copy, "pose clear damage");
+    if (failure) {
+        return failure;
+    }
+    if (memcmp(reference, comp_front_buffer(), SCENE_PIXELS * sizeof(uint32_t)) != 0) {
+        return "pose clear restores the frame";
+    }
+
+    /* A pose can also take a window across the screen and under the glass. */
+    CompRect travel = { 150, TEST_SURFACE_H - 50, 32, 32 };
+    if (comp_set_window_pose(card, &travel, 200) != 0) {
+        return "pose travel";
+    }
+    failure = frame_check_buffers(front_copy, back_copy, "pose travel damage");
+    if (failure) {
+        return failure;
+    }
+    comp_clear_window_pose(card);
+
+    /* Glass can be posed too: the panel fades and shrinks as a whole. */
+    CompRect panel = { 20, TEST_SURFACE_H - 36, TEST_SURFACE_W - 40, 32 };
+    if (comp_set_window_pose(glass, &panel, 160) != 0) {
+        return "pose glass";
+    }
+    failure = frame_check_buffers(front_copy, back_copy, "pose glass damage");
+    if (failure) {
+        return failure;
+    }
+    comp_clear_window_pose(glass);
+    failure = frame_check_buffers(front_copy, back_copy, "pose glass clear damage");
+    if (failure) {
+        return failure;
+    }
+    if (memcmp(reference, comp_front_buffer(), SCENE_PIXELS * sizeof(uint32_t)) != 0) {
+        return "pose glass clear restores the frame";
+    }
+
+    if (comp_destroy_window(glass) != 0 || comp_destroy_window(card) != 0 ||
+        comp_destroy_window(bg) != 0 || comp_window_count() != 0) {
+        return "pose destroy";
+    }
+    free(front_copy);
+    free(back_copy);
+    free(reference);
+    return 0;
+}
+
+/* ---------------- settings model, palette and Settings app ---------------- */
+
+#define SETTINGS_TEST_PATH "/tmp/settings_test.conf"
+#define SETTINGS_TEST_CANONICAL \
+    "# HydrogenOS desktop settings\ntheme=dark\naccent=blue\nglass=on\nlayout=de\n" \
+    "reduce_motion=off\n"
+
+static int text_equals(const char *a, const char *b) {
+    while (*a && *a == *b) {
+        ++a;
+        ++b;
+    }
+    return *a == *b;
+}
+
+static int settings_equal(const Settings *a, const Settings *b) {
+    return a->theme == b->theme && a->accent == b->accent &&
+           a->glass == b->glass && a->layout == b->layout &&
+           a->reduce_motion == b->reduce_motion;
+}
+
+static int luma(uint32_t rgb) {
+    return (int)((299u * ((rgb >> 16) & 0xFFu) + 587u * ((rgb >> 8) & 0xFFu) +
+                  114u * (rgb & 0xFFu)) / 1000u);
+}
+
+static int luma_distance(uint32_t a, uint32_t b) {
+    int distance = luma(a) - luma(b);
+    return distance < 0 ? -distance : distance;
+}
+
+static const char *test_settings_model(void) {
+    Settings settings;
+    Settings parsed;
+    char text[SETTINGS_TEXT_CAP];
+    int written;
+
+    settings_defaults(&settings);
+    if (!settings_valid(&settings) || settings.theme != SETTINGS_THEME_DARK ||
+        settings.glass != 1 || settings.layout != SETTINGS_LAYOUT_DE || settings.reduce_motion != 0) {
+        return "settings defaults";
+    }
+    written = settings_serialize(&settings, text, sizeof(text));
+    if (written != (int)strlen(SETTINGS_TEST_CANONICAL) ||
+        !text_equals(text, SETTINGS_TEST_CANONICAL)) {
+        return "settings serialize";
+    }
+
+    for (int theme = 0; theme < 2; ++theme) {
+        for (int accent = 0; accent < SETTINGS_ACCENT_COUNT; ++accent) {
+            for (int glass = 0; glass < 2; ++glass) {
+                for (int layout = 0; layout < 2; ++layout) {
+                    for (int motion = 0; motion < 2; ++motion) {
+                        settings.theme = theme;
+                        settings.accent = accent;
+                        settings.glass = glass;
+                        settings.layout = layout;
+                        settings.reduce_motion = motion;
+                        written = settings_serialize(&settings, text, sizeof(text));
+                        if (written <= 0 || written >= (int)sizeof(text)) {
+                            return "settings serialize combo";
+                        }
+                        /* Start from the opposite of every field so a missing
+                           assignment cannot pass as a match. */
+                        parsed.theme = !theme;
+                        parsed.accent = (accent + 1) % SETTINGS_ACCENT_COUNT;
+                        parsed.glass = !glass;
+                        parsed.layout = !layout;
+                        parsed.reduce_motion = !motion;
+                        if (settings_parse(&parsed, text, (size_t)written) != 5 ||
+                            !settings_equal(&settings, &parsed)) {
+                            return "settings round trip";
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    settings.theme = SETTINGS_THEME_LIGHT;
+    settings.accent = 2;
+    settings.glass = 0;
+    settings.layout = SETTINGS_LAYOUT_US;
+    written = settings_serialize(&settings, text, sizeof(text));
+    if (written != (int)strlen(text) || settings_serialize(&settings, text, (size_t)written) != -1 ||
+        settings_serialize(&settings, text, (size_t)written + 1) != written) {
+        return "settings serialize bounds";
+    }
+    settings.accent = SETTINGS_ACCENT_COUNT;
+    if (settings_valid(&settings) || settings_serialize(&settings, text, sizeof(text)) != -1) {
+        return "settings serialize invalid";
+    }
+    return 0;
+}
+
+static const char *test_settings_parse(void) {
+    static const char messy[] =
+        "  THEME = Light \r\n# comment\n\nunknown=1\naccent=nonexistent\n"
+        "no equals sign\naccent=PINK\nglass=maybe\n\tlayout=us";
+    static const char duplicate[] = "theme=light\ntheme=dark\n";
+    Settings settings;
+
+    settings_defaults(&settings);
+    if (settings_parse(&settings, messy, strlen(messy)) != 3) {
+        return "settings parse count";
+    }
+    if (settings.theme != SETTINGS_THEME_LIGHT || settings.accent != 2 ||
+        settings.glass != 1 || settings.layout != SETTINGS_LAYOUT_US) {
+        return "settings parse tolerant";
+    }
+    settings_defaults(&settings);
+    if (settings_parse(&settings, duplicate, strlen(duplicate)) != 2 ||
+        settings.theme != SETTINGS_THEME_DARK) {
+        return "settings parse last wins";
+    }
+    settings_defaults(&settings);
+    if (settings_parse(&settings, "theme=light", 5) != 0 || settings.theme != SETTINGS_THEME_DARK) {
+        return "settings parse truncated";
+    }
+    if (settings_parse(&settings, "", 0) != 0 || settings_parse(0, "x", 1) != -1 ||
+        settings_parse(&settings, 0, 4) != -1) {
+        return "settings parse arguments";
+    }
+    if (!settings_valid(&settings)) {
+        return "settings parse stays valid";
+    }
+    return 0;
+}
+
+static const char *test_settings_diff(void) {
+    Settings before;
+    Settings after;
+
+    settings_defaults(&before);
+    after = before;
+    if (settings_diff(&before, &after) != 0) {
+        return "settings diff none";
+    }
+    after.theme = SETTINGS_THEME_LIGHT;
+    after.accent = 3;
+    if (settings_diff(&before, &after) != (SETTINGS_CHANGED_THEME | SETTINGS_CHANGED_ACCENT)) {
+        return "settings diff theme accent";
+    }
+    after = before;
+    after.glass = 0;
+    after.layout = SETTINGS_LAYOUT_US;
+    if (settings_diff(&before, &after) != (SETTINGS_CHANGED_GLASS | SETTINGS_CHANGED_LAYOUT)) {
+        return "settings diff glass layout";
+    }
+    after = before;
+    after.reduce_motion = 1;
+    if (settings_diff(&before, &after) != SETTINGS_CHANGED_MOTION) {
+        return "settings diff motion";
+    }
+    return 0;
+}
+
+static const char *test_settings_palette(void) {
+    Settings settings;
+    SettingsPalette dark;
+    SettingsPalette light;
+    SettingsPalette other;
+
+    settings_defaults(&settings);
+    settings_palette(&settings, &dark);
+    settings.theme = SETTINGS_THEME_LIGHT;
+    settings_palette(&settings, &light);
+
+    if (dark.accent != settings_accent_color(0, SETTINGS_THEME_DARK) ||
+        light.accent != settings_accent_color(0, SETTINGS_THEME_LIGHT)) {
+        return "palette accent tokens";
+    }
+    if (luma(light.surface) <= luma(dark.surface) || luma(light.card) <= luma(dark.card) ||
+        luma(light.wallpaper_top) <= luma(dark.wallpaper_top) ||
+        luma(light.ink) >= luma(dark.ink)) {
+        return "palette theme switch";
+    }
+    if (luma_distance(dark.ink, dark.surface) < 150 || luma_distance(light.ink, light.surface) < 150 ||
+        luma_distance(dark.document_text, dark.document_bg) < 150 ||
+        luma_distance(light.document_text, light.document_bg) < 150 ||
+        luma_distance(dark.chrome_text, dark.taskbar) < 100 ||
+        luma_distance(light.chrome_text, light.taskbar) < 100) {
+        return "palette contrast";
+    }
+    if (luma(light.taskbar) <= luma(dark.taskbar) || luma(light.menu) <= luma(dark.menu) ||
+        luma(light.chrome_text) >= luma(dark.chrome_text)) {
+        return "palette chrome follows theme";
+    }
+    if (dark.light || !light.light) {
+        return "palette theme flag";
+    }
+    if (luma(light.title) <= luma(dark.title) || luma(light.title_focus) <= luma(dark.title_focus) ||
+        luma(light.title_text) >= luma(dark.title_text) ||
+        luma(light.title_focus) < luma(light.title)) {
+        return "palette title bar follows theme";
+    }
+    if (luma_distance(dark.title_text, dark.title) < 100 ||
+        luma_distance(light.title_text, light.title) < 100 ||
+        luma_distance(dark.title_text, dark.title_focus) < 100 ||
+        luma_distance(light.title_text, light.title_focus) < 100 ||
+        dark.title_border == dark.title || light.title_border == light.title) {
+        return "palette title bar contrast";
+    }
+    if (luma(light.document_bg) <= luma(dark.document_bg) ||
+        luma(light.document_text) >= luma(dark.document_text) ||
+        luma(light.document_selection) <= luma(dark.document_selection)) {
+        return "palette document follows theme";
+    }
+    if (dark.terminal_bg != light.terminal_bg) {
+        return "palette theme independent tokens";
+    }
+
+    for (int theme = 0; theme < 2; ++theme) {
+        for (int accent = 0; accent < SETTINGS_ACCENT_COUNT; ++accent) {
+            uint32_t color = settings_accent_color(accent, theme);
+
+            settings.theme = theme;
+            settings.accent = accent;
+            settings_palette(&settings, &other);
+            if (other.accent != color || luma_distance(other.on_accent, color) < 90) {
+                return "palette accent contrast";
+            }
+            for (int later = accent + 1; later < SETTINGS_ACCENT_COUNT; ++later) {
+                if (settings_accent_color(later, theme) == color) {
+                    return "palette accent unique";
+                }
+            }
+        }
+    }
+    if (settings_accent_name(0)[0] == '\0' || settings_accent_name(SETTINGS_ACCENT_COUNT)[0] != '\0') {
+        return "palette accent names";
+    }
+
+    settings.theme = 9;
+    settings_palette(&settings, &other);
+    if (other.surface != dark.surface || other.accent != dark.accent) {
+        return "palette invalid settings";
+    }
+    return 0;
+}
+
+static const char *test_settings_persistence(void) {
+    Settings saved;
+    Settings loaded;
+    char text[SETTINGS_TEXT_CAP];
+    long fd;
+    long got;
+    const char *failure = 0;
+
+    settings_defaults(&loaded);
+    if (settings_load("/tmp/settings_missing.conf", &loaded) >= 0) {
+        return "settings load missing";
+    }
+    settings_defaults(&saved);
+    if (!settings_equal(&saved, &loaded)) {
+        return "settings load missing untouched";
+    }
+
+    saved.theme = SETTINGS_THEME_LIGHT;
+    saved.accent = 4;
+    saved.glass = 0;
+    saved.layout = SETTINGS_LAYOUT_US;
+    if (settings_save(SETTINGS_TEST_PATH, &saved) != 0) {
+        return "settings save";
+    }
+    fd = open(SETTINGS_TEST_PATH, OPEN_READ);
+    got = fd < 0 ? -1 : read((int)fd, text, sizeof(text) - 1);
+    if (fd >= 0) {
+        close((int)fd);
+    }
+    if (got <= 0) {
+        failure = "settings file read";
+    } else {
+        text[got] = '\0';
+        if (!text_equals(text, "# HydrogenOS desktop settings\ntheme=light\naccent=orange\n"
+                               "glass=off\nlayout=us\nreduce_motion=off\n")) {
+            failure = "settings file content";
+        }
+    }
+
+    if (!failure) {
+        settings_defaults(&loaded);
+        if (settings_load(SETTINGS_TEST_PATH, &loaded) != 0 || !settings_equal(&saved, &loaded)) {
+            failure = "settings load";
+        }
+    }
+    if (!failure) {
+        static const char damaged[] = "garbage\nlayout=us\naccent=\n";
+
+        if (sys_writef(SETTINGS_TEST_PATH, damaged, sizeof(damaged) - 1) != 0) {
+            failure = "settings damaged write";
+        } else {
+            settings_defaults(&loaded);
+            if (settings_load(SETTINGS_TEST_PATH, &loaded) != 0 || loaded.layout != SETTINGS_LAYOUT_US ||
+                loaded.accent != 0 || !settings_valid(&loaded)) {
+                failure = "settings damaged load";
+            }
+        }
+    }
+    sys_unlink(SETTINGS_TEST_PATH);
+    return failure;
+}
+
+static const char *test_settings_info(void) {
+    static const char meminfo[] =
+        "MemTotal:       262144 kB\nMemFree:        200000 kB\nMemUsed:         62144 kB\n"
+        "PageSize:         4096 B\n";
+    static const unsigned char mac[6] = { 0x52, 0x54, 0x00, 0x12, 0x34, 0x56 };
+    unsigned long total;
+    unsigned long used;
+    unsigned long seconds;
+    SettingsInfo info;
+    char text[SETTINGS_INFO_TEXT_CAP];
+    char tiny[4];
+    char version_line[3 * 100];
+    size_t line_size = 0;
+
+    memset(&info, 0, sizeof(info));
+    if (settings_info_parse_meminfo(meminfo, strlen(meminfo), &total, &used) != 0 ||
+        total != 262144ul || used != 62144ul) {
+        return "info meminfo";
+    }
+    if (settings_info_parse_meminfo("MemTotal: 1 kB\n", 15, &total, &used) == 0 ||
+        settings_info_parse_meminfo("MemTotal:\nMemUsed: 5 kB\n", 24, &total, &used) == 0) {
+        return "info meminfo incomplete";
+    }
+    if (settings_info_parse_uptime("123.45\n", 7, &seconds) != 0 || seconds != 123ul ||
+        settings_info_parse_uptime("0.05\n", 5, &seconds) != 0 || seconds != 0ul ||
+        settings_info_parse_uptime("abc", 3, &seconds) == 0) {
+        return "info uptime";
+    }
+    if (settings_info_parse_version("HydrogenOS 0.3.0-dev x86_64\n", 28, &info) != 0 ||
+        !text_equals(info.os_name, "HydrogenOS") || !text_equals(info.os_version, "0.3.0-dev") ||
+        !text_equals(info.os_arch, "x86_64")) {
+        return "info version";
+    }
+    if (settings_info_parse_version("HydrogenOS\n", 11, &info) == 0) {
+        return "info version incomplete";
+    }
+    for (int word = 0; word < 3; ++word) {
+        memset(version_line + line_size, 'x', 99);
+        line_size += 99;
+        version_line[line_size++] = ' ';
+    }
+    if (settings_info_parse_version(version_line, line_size, &info) != 0 ||
+        strlen(info.os_name) != SETTINGS_INFO_TEXT_CAP - 1 ||
+        strlen(info.os_arch) != SETTINGS_INFO_TEXT_CAP - 1) {
+        return "info version truncation";
+    }
+
+    settings_info_format_ipv4(text, sizeof(text), NET_IPV4_ADDR(10, 0, 2, 15));
+    if (!text_equals(text, "10.0.2.15")) {
+        return "info ipv4";
+    }
+    settings_info_format_mac(text, sizeof(text), mac);
+    if (!text_equals(text, "52:54:00:12:34:56")) {
+        return "info mac";
+    }
+    settings_info_format_size(text, sizeof(text), 512ul);
+    if (!text_equals(text, "512 KB")) {
+        return "info size kb";
+    }
+    settings_info_format_size(text, sizeof(text), 48433ul);
+    if (!text_equals(text, "47.2 MB")) {
+        return "info size mb";
+    }
+    settings_info_format_size(text, sizeof(text), 1572864ul);
+    if (!text_equals(text, "1.5 GB")) {
+        return "info size gb";
+    }
+    settings_info_format_duration(text, sizeof(text), 5ul);
+    if (!text_equals(text, "5s")) {
+        return "info duration seconds";
+    }
+    settings_info_format_duration(text, sizeof(text), 245ul);
+    if (!text_equals(text, "4m 05s")) {
+        return "info duration minutes";
+    }
+    settings_info_format_duration(text, sizeof(text), 7380ul);
+    if (!text_equals(text, "2h 03m")) {
+        return "info duration hours";
+    }
+    settings_info_format_duration(text, sizeof(text), 90000ul);
+    if (!text_equals(text, "1d 01h")) {
+        return "info duration days";
+    }
+    settings_info_format_ping(text, sizeof(text), 3);
+    if (!text_equals(text, "Reply in 3 ms")) {
+        return "info ping reply";
+    }
+    settings_info_format_ping(text, sizeof(text), SETTINGS_PING_ETIMEDOUT);
+    if (!text_equals(text, "No reply (timed out)")) {
+        return "info ping timeout";
+    }
+    settings_info_format_ping(text, sizeof(text), SETTINGS_PING_ENODEV);
+    if (!text_equals(text, "No network adapter")) {
+        return "info ping nodev";
+    }
+    settings_info_format_ping(text, sizeof(text), -5);
+    if (!text_equals(text, "Failed (error 5)")) {
+        return "info ping error";
+    }
+    settings_info_format_ipv4(tiny, sizeof(tiny), NET_IPV4_ADDR(255, 255, 255, 255));
+    if (strlen(tiny) != sizeof(tiny) - 1) {
+        return "info format truncation";
+    }
+    info.network_valid = 0;
+    if (settings_info_ping_gateway(&info, 10) != SETTINGS_PING_ENODEV) {
+        return "info ping without adapter";
+    }
+    return 0;
+}
+
+static int rect_inside(const GfxRect *outer, const GfxRect *inner) {
+    return inner->w > 0 && inner->h > 0 && inner->x >= outer->x && inner->y >= outer->y &&
+           inner->x + inner->w <= outer->x + outer->w && inner->y + inner->h <= outer->y + outer->h;
+}
+
+static int rects_overlap(const GfxRect *a, const GfxRect *b) {
+    return a->x < b->x + b->w && b->x < a->x + a->w && a->y < b->y + b->h && b->y < a->y + a->h;
+}
+
+static int rects_disjoint(const GfxRect *rects, int rect_count) {
+    for (int i = 0; i < rect_count; ++i) {
+        for (int j = i + 1; j < rect_count; ++j) {
+            if (rects_overlap(&rects[i], &rects[j])) {
+                return 0;
+            }
+        }
+    }
+    return 1;
+}
+
+static int rect_center_hit(const SettingsUiLayout *layout, const GfxRect *rect) {
+    return settings_ui_hit_test(layout, rect->x + rect->w / 2, rect->y + rect->h / 2);
+}
+
+static const char *check_section_layout(const SettingsUiLayout *layout, int section) {
+    const GfxRect *content = &layout->content;
+
+    if (!rect_inside(&layout->body, &layout->sidebar) || !rect_inside(&layout->body, content) ||
+        layout->sidebar.x + layout->sidebar.w != content->x) {
+        return "settings layout panes";
+    }
+    if (!rects_disjoint(layout->section_item, SETTINGS_SECTION_COUNT)) {
+        return "settings layout sidebar overlap";
+    }
+    for (int i = 0; i < SETTINGS_SECTION_COUNT; ++i) {
+        if (!rect_inside(&layout->sidebar, &layout->section_item[i]) ||
+            rect_center_hit(layout, &layout->section_item[i]) != SETTINGS_HIT_SECTION + i) {
+            return "settings layout sidebar item";
+        }
+    }
+    if (layout->card_count < 1 || layout->card_count > SETTINGS_UI_MAX_CARDS ||
+        !rects_disjoint(layout->cards, layout->card_count)) {
+        return "settings layout cards";
+    }
+    for (int i = 0; i < layout->card_count; ++i) {
+        if (!rect_inside(content, &layout->cards[i])) {
+            return "settings layout card bounds";
+        }
+    }
+
+    switch (section) {
+    case SETTINGS_SECTION_APPEARANCE:
+        if (layout->card_count != 3 || !rects_disjoint(layout->theme_tile, 2) ||
+            !rects_disjoint(layout->accent_dot, SETTINGS_ACCENT_COUNT)) {
+            return "settings layout appearance";
+        }
+        for (int i = 0; i < 2; ++i) {
+            if (!rect_inside(&layout->cards[0], &layout->theme_tile[i]) ||
+                rect_center_hit(layout, &layout->theme_tile[i]) != SETTINGS_HIT_THEME + i) {
+                return "settings layout theme tile";
+            }
+        }
+        for (int i = 0; i < SETTINGS_ACCENT_COUNT; ++i) {
+            if (!rect_inside(&layout->cards[1], &layout->accent_dot[i]) ||
+                rect_center_hit(layout, &layout->accent_dot[i]) != SETTINGS_HIT_ACCENT + i) {
+                return "settings layout accent dot";
+            }
+        }
+        if (!rect_inside(&layout->cards[2], &layout->glass_switch) ||
+            rect_center_hit(layout, &layout->glass_switch) != SETTINGS_HIT_GLASS) {
+            return "settings layout glass switch";
+        }
+        if (!rect_inside(&layout->cards[2], &layout->motion_switch) ||
+            rect_center_hit(layout, &layout->motion_switch) != SETTINGS_HIT_MOTION ||
+            layout->motion_switch.y < layout->glass_switch.y + layout->glass_switch.h) {
+            return "settings layout motion switch";
+        }
+        break;
+    case SETTINGS_SECTION_KEYBOARD:
+        if (layout->card_count != 1 || !rects_disjoint(layout->layout_row, 2)) {
+            return "settings layout keyboard";
+        }
+        for (int i = 0; i < 2; ++i) {
+            if (!rect_inside(&layout->cards[0], &layout->layout_row[i]) ||
+                rect_center_hit(layout, &layout->layout_row[i]) != SETTINGS_HIT_LAYOUT + i) {
+                return "settings layout keyboard row";
+            }
+        }
+        break;
+    case SETTINGS_SECTION_NETWORK:
+        if (layout->card_count != 2 || !rect_inside(&layout->cards[1], &layout->ping_button) ||
+            rect_center_hit(layout, &layout->ping_button) != SETTINGS_HIT_PING) {
+            return "settings layout network";
+        }
+        break;
+    case SETTINGS_SECTION_ABOUT:
+        if (layout->card_count != 1 || !rect_inside(content, &layout->logo) ||
+            layout->logo.y + layout->logo.h > layout->cards[0].y) {
+            return "settings layout about";
+        }
+        break;
+    default:
+        break;
+    }
+
+    if (settings_ui_hit_test(layout, content->x + content->w - 1, content->y + content->h - 1) !=
+            SETTINGS_HIT_NONE ||
+        settings_ui_hit_test(layout, -5, -5) != SETTINGS_HIT_NONE) {
+        return "settings layout empty space";
+    }
+    return 0;
+}
+
+static const char *test_settings_layout(void) {
+    static const int sizes[][2] = {
+        { SETTINGS_UI_MIN_WIDTH, SETTINGS_UI_MIN_HEIGHT }, { 700, 480 }, { 1000, 700 },
+    };
+    SettingsUiLayout layout;
+    const char *failure;
+
+    for (int size = 0; size < 3; ++size) {
+        for (int section = 0; section < SETTINGS_SECTION_COUNT; ++section) {
+            settings_ui_layout(sizes[size][0], sizes[size][1], 30, section, &layout);
+            failure = check_section_layout(&layout, section);
+            if (failure) {
+                return failure;
+            }
+            /* Everything must fit above the bottom edge, with room for a notice. */
+            for (int card = 0; card < layout.card_count; ++card) {
+                if (layout.cards[card].y + layout.cards[card].h > sizes[size][1] - 16) {
+                    return "settings layout fits";
+                }
+            }
+        }
+    }
+
+    /* A window far below the minimum must still produce sane rectangles. */
+    settings_ui_layout(120, 60, 30, SETTINGS_SECTION_NETWORK, &layout);
+    if (layout.sidebar.w < 0 || layout.content.w < 0 || layout.content.h < 0 ||
+        layout.cards[0].w < 0 || layout.ping_button.w < 0) {
+        return "settings layout tiny";
+    }
+    settings_ui_layout(700, 480, 30, SETTINGS_SECTION_COUNT, &layout);
+    if (layout.card_count != 0) {
+        return "settings layout unknown section";
+    }
+    return 0;
+}
+
+static const char *test_settings_ui_events(void) {
+    Settings settings;
+    SettingsPalette palette;
+    SettingsUi ui;
+    SettingsUiLayout layout;
+    Window win;
+    unsigned int result;
+
+    settings_defaults(&settings);
+    settings_palette(&settings, &palette);
+    settings_ui_init(&ui, &settings, &palette, 0, 30);
+    memset(&win, 0, sizeof(win));
+    win.w = 700;
+    win.h = 480;
+
+    settings_ui_layout(win.w, win.h, 30, SETTINGS_SECTION_APPEARANCE, &layout);
+    result = settings_ui_click(&ui, &win, layout.theme_tile[1].x + 5, layout.theme_tile[1].y + 5);
+    if (result != (SETTINGS_UI_REDRAW | SETTINGS_UI_CHANGED) || settings.theme != SETTINGS_THEME_LIGHT) {
+        return "settings ui theme click";
+    }
+    if (settings_ui_click(&ui, &win, layout.theme_tile[1].x + 5, layout.theme_tile[1].y + 5) != 0) {
+        return "settings ui theme click repeat";
+    }
+    result = settings_ui_click(&ui, &win, layout.accent_dot[3].x + 14, layout.accent_dot[3].y + 14);
+    if (!(result & SETTINGS_UI_CHANGED) || settings.accent != 3) {
+        return "settings ui accent click";
+    }
+    result = settings_ui_click(&ui, &win, layout.cards[2].x + 20, layout.cards[2].y + 20);
+    if (!(result & SETTINGS_UI_CHANGED) || settings.glass != 0) {
+        return "settings ui glass off";
+    }
+    result = settings_ui_click(&ui, &win, layout.glass_switch.x + 3, layout.glass_switch.y + 3);
+    if (!(result & SETTINGS_UI_CHANGED) || settings.glass != 1) {
+        return "settings ui glass on";
+    }
+    result = settings_ui_click(&ui, &win, layout.motion_switch.x + 3, layout.motion_switch.y + 3);
+    if (!(result & SETTINGS_UI_CHANGED) || settings.reduce_motion != 1 || settings.glass != 1) {
+        return "settings ui motion on";
+    }
+    result = settings_ui_click(&ui, &win, layout.cards[2].x + 20, layout.motion_switch.y + 3);
+    if (!(result & SETTINGS_UI_CHANGED) || settings.reduce_motion != 0) {
+        return "settings ui motion off";
+    }
+    if (settings_ui_click(&ui, &win, layout.content.x + layout.content.w - 2, layout.title_y) != 0) {
+        return "settings ui empty click";
+    }
+
+    result = settings_ui_click(&ui, &win, layout.section_item[SETTINGS_SECTION_KEYBOARD].x + 4,
+                               layout.section_item[SETTINGS_SECTION_KEYBOARD].y + 4);
+    if (result != SETTINGS_UI_REDRAW || ui.section != SETTINGS_SECTION_KEYBOARD) {
+        return "settings ui section click";
+    }
+    if (settings_ui_click(&ui, &win, layout.section_item[SETTINGS_SECTION_KEYBOARD].x + 4,
+                          layout.section_item[SETTINGS_SECTION_KEYBOARD].y + 4) != 0) {
+        return "settings ui section repeat";
+    }
+    settings_ui_layout(win.w, win.h, 30, SETTINGS_SECTION_KEYBOARD, &layout);
+    result = settings_ui_click(&ui, &win, layout.layout_row[1].x + 10, layout.layout_row[1].y + 10);
+    if (!(result & SETTINGS_UI_CHANGED) || settings.layout != SETTINGS_LAYOUT_US) {
+        return "settings ui layout click";
+    }
+    if (settings_ui_click(&ui, &win, layout.layout_row[1].x + 10, layout.layout_row[1].y + 10) != 0) {
+        return "settings ui layout repeat";
+    }
+    if (!settings_valid(&settings)) {
+        return "settings ui keeps model valid";
+    }
+    /* An accent dot is not clickable on another page. */
+    settings_ui_layout(win.w, win.h, 30, SETTINGS_SECTION_APPEARANCE, &layout);
+    if (settings_ui_click(&ui, &win, layout.accent_dot[0].x + 14, layout.accent_dot[0].y + 14) != 0 ||
+        settings.accent != 3) {
+        return "settings ui foreign click";
+    }
+
+    result = settings_ui_hover(&ui, &win, layout.section_item[0].x + 4, layout.section_item[0].y + 4);
+    if (result != SETTINGS_UI_REDRAW || ui.hover != SETTINGS_HIT_SECTION) {
+        return "settings ui hover";
+    }
+    if (settings_ui_hover(&ui, &win, layout.section_item[0].x + 6, layout.section_item[0].y + 6) != 0) {
+        return "settings ui hover repeat";
+    }
+    if (settings_ui_hover(&ui, &win, -1, -1) != SETTINGS_UI_REDRAW || ui.hover != SETTINGS_HIT_NONE) {
+        return "settings ui hover leave";
+    }
+
+    ui.section = SETTINGS_SECTION_NETWORK;
+    ui.info.network_valid = 0;
+    settings_ui_layout(win.w, win.h, 30, SETTINGS_SECTION_NETWORK, &layout);
+    if (settings_ui_click(&ui, &win, layout.ping_button.x + 5, layout.ping_button.y + 5) != 0 ||
+        ui.ping_pending) {
+        return "settings ui ping without adapter";
+    }
+    ui.section = SETTINGS_SECTION_APPEARANCE;
+    if (settings_ui_service(&ui, ui.info_refreshed_ms + 60000ul) != 0) {
+        return "settings ui service idle";
+    }
+    settings_ui_select(&ui, SETTINGS_SECTION_COUNT);
+    if (ui.section != SETTINGS_SECTION_APPEARANCE) {
+        return "settings ui select invalid";
+    }
+    return 0;
+}
+
+static void settings_test_info(SettingsInfo *info) {
+    memset(info, 0, sizeof(*info));
+    info->display_valid = 1;
+    info->display_width = 1280;
+    info->display_height = 720;
+    info->display_bits_per_pixel = 32;
+    info->network_valid = 1;
+    info->network.mac[0] = 0x52;
+    info->network.mac[1] = 0x54;
+    info->network.mac[5] = 0x56;
+    info->network.flags = NET_INFO_PRESENT | NET_INFO_LINK_UP;
+    info->network.ipv4 = NET_IPV4_ADDR(10, 0, 2, 15);
+    info->network.netmask = NET_IPV4_ADDR(255, 255, 255, 0);
+    info->network.gateway = NET_IPV4_ADDR(10, 0, 2, 2);
+    info->memory_valid = 1;
+    info->memory_total_kib = 262144;
+    info->memory_used_kib = 62144;
+    info->storage_valid = 1;
+    info->storage_total_kib = 16000;
+    info->storage_free_kib = 12000;
+    info->uptime_valid = 1;
+    info->uptime_seconds = 245;
+    info->version_valid = 1;
+    memcpy(info->os_name, "HydrogenOS", 11);
+    memcpy(info->os_version, "0.3.0-dev", 10);
+    memcpy(info->os_arch, "x86_64", 7);
+}
+
+static uint32_t window_pixel(const Window *win, int x, int y) {
+    return ((const uint32_t *)win->surface)[y * win->w + x] & 0x00FFFFFFu;
+}
+
+static uint32_t window_checksum(const Window *win) {
+    return gfx_checksum((const uint32_t *)win->surface, win->w, win->h, win->w);
+}
+
+/* A pixel inside a sidebar item, right of its label. */
+static uint32_t selected_item_pixel(const Window *win, const SettingsUiLayout *layout, int section) {
+    const GfxRect *item = &layout->section_item[section];
+
+    return window_pixel(win, item->x + item->w - 5, item->y + item->h / 2);
+}
+
+static const char *check_ui_section_paint(SettingsUi *ui, Window *win, const SettingsPalette *palette,
+                                          uint32_t *sums) {
+    SettingsUiLayout layout;
+
+    for (int section = 0; section < SETTINGS_SECTION_COUNT; ++section) {
+        ui->section = section;
+        settings_ui_draw(ui, win);
+        settings_ui_layout(win->w, win->h, 30, section, &layout);
+        sums[section] = window_checksum(win);
+
+        if (window_pixel(win, win->w - 1, win->h - 1) != palette->surface ||
+            window_pixel(win, 3, win->h - 3) != palette->sidebar ||
+            selected_item_pixel(win, &layout, section) != palette->accent) {
+            return "settings ui paints tokens";
+        }
+        settings_ui_draw(ui, win);
+        if (window_checksum(win) != sums[section]) {
+            return "settings ui deterministic";
+        }
+    }
+    for (int section = 1; section < SETTINGS_SECTION_COUNT; ++section) {
+        if (sums[section] == sums[section - 1]) {
+            return "settings ui sections differ";
+        }
+    }
+    return 0;
+}
+
+static const char *check_ui_live_preview(SettingsUi *ui, Window *win, Settings *settings,
+                                         SettingsPalette *palette) {
+    SettingsUiLayout layout;
+    uint32_t dark_sum;
+
+    ui->section = SETTINGS_SECTION_APPEARANCE;
+    settings_ui_layout(win->w, win->h, 30, SETTINGS_SECTION_APPEARANCE, &layout);
+    settings_ui_draw(ui, win);
+    dark_sum = window_checksum(win);
+
+    /* Theme switching repaints with the light tokens. */
+    settings->theme = SETTINGS_THEME_LIGHT;
+    settings_palette(settings, palette);
+    settings_ui_draw(ui, win);
+    if (window_pixel(win, win->w - 1, win->h - 1) != palette->surface ||
+        window_pixel(win, 3, win->h - 3) != palette->sidebar ||
+        window_checksum(win) == dark_sum) {
+        return "settings ui light theme";
+    }
+
+    /* The accent shows up in the selected sidebar item and the selected dot. */
+    settings->accent = 5;
+    settings_palette(settings, palette);
+    settings_ui_draw(ui, win);
+    if (palette->accent != settings_accent_color(5, SETTINGS_THEME_LIGHT) ||
+        selected_item_pixel(win, &layout, SETTINGS_SECTION_APPEARANCE) != palette->accent ||
+        window_pixel(win, layout.accent_dot[5].x + 14, layout.accent_dot[5].y + 14) != palette->accent ||
+        window_pixel(win, layout.accent_dot[2].x + 14, layout.accent_dot[2].y + 14) == palette->accent) {
+        return "settings ui accent paint";
+    }
+
+    /* The glass switch is accent coloured when on and grey when off. */
+    settings->glass = 0;
+    settings_ui_draw(ui, win);
+    if (window_pixel(win, layout.glass_switch.x + layout.glass_switch.w - 6,
+                     layout.glass_switch.y + 13) != palette->control_off) {
+        return "settings ui switch off";
+    }
+    settings->glass = 1;
+    settings_ui_draw(ui, win);
+    if (window_pixel(win, layout.glass_switch.x + 6, layout.glass_switch.y + 13) != palette->accent) {
+        return "settings ui switch on";
+    }
+    settings->reduce_motion = 1;
+    settings_ui_draw(ui, win);
+    if (window_pixel(win, layout.motion_switch.x + 6, layout.motion_switch.y + 13) != palette->accent) {
+        return "settings ui motion switch on";
+    }
+    settings->reduce_motion = 0;
+    settings_ui_draw(ui, win);
+    if (window_pixel(win, layout.motion_switch.x + layout.motion_switch.w - 6,
+                     layout.motion_switch.y + 13) != palette->control_off) {
+        return "settings ui motion switch off";
+    }
+
+    ui->save_failed = 1;
+    settings_ui_draw(ui, win);
+    ui->save_failed = 0;
+    return 0;
+}
+
+static const char *test_settings_ui_draw(void) {
+    static const int sizes[][2] = { { SETTINGS_UI_MIN_WIDTH, SETTINGS_UI_MIN_HEIGHT }, { 700, 480 } };
+    Settings settings;
+    SettingsPalette palette;
+    SettingsUi ui;
+    uint32_t sums[SETTINGS_SECTION_COUNT];
+    const char *failure = 0;
+
+    if (quiet_stdout_begin() != 0) {
+        return "stdout guard";
+    }
+    if (comp_init_size(TEST_SURFACE_W, TEST_SURFACE_H) != 0) {
+        quiet_stdout_end();
+        return "settings ui compositor";
+    }
+    if (quiet_stdout_end() != 0) {
+        return "stdout restore";
+    }
+
+    for (int size = 0; size < 2 && !failure; ++size) {
+        Window *win = comp_create_window(0, 0, sizes[size][0], sizes[size][1]);
+
+        if (!win || !win->surface) {
+            return "settings ui window";
+        }
+        settings_defaults(&settings);
+        settings_palette(&settings, &palette);
+        settings_ui_init(&ui, &settings, &palette, 0, 30);
+        settings_test_info(&ui.info);
+
+        failure = check_ui_section_paint(&ui, win, &palette, sums);
+        if (!failure) {
+            failure = check_ui_live_preview(&ui, win, &settings, &palette);
+        }
+        if (comp_destroy_window(win) != 0 && !failure) {
+            failure = "settings ui window destroy";
+        }
+    }
+    return failure;
+}
+
 static void report_fail(const char *reason) {
     write(1, "DESKTOPTEST FAIL: ", 18);
     write(1, reason, strlen(reason));
@@ -863,10 +2458,55 @@ int main(void) {
         failure = test_filemanager();
     }
     if (!failure) {
+        failure = test_icons();
+    }
+    if (!failure) {
         failure = test_effects();
     }
     if (!failure) {
         failure = test_compositor_effects();
+    }
+    if (!failure) {
+        failure = test_window_geometry();
+    }
+    if (!failure) {
+        failure = test_window_damage();
+    }
+    if (!failure) {
+        failure = test_anim_engine();
+    }
+    if (!failure) {
+        failure = test_window_motion();
+    }
+    if (!failure) {
+        failure = test_window_pose();
+    }
+    if (!failure) {
+        failure = test_settings_model();
+    }
+    if (!failure) {
+        failure = test_settings_parse();
+    }
+    if (!failure) {
+        failure = test_settings_diff();
+    }
+    if (!failure) {
+        failure = test_settings_palette();
+    }
+    if (!failure) {
+        failure = test_settings_persistence();
+    }
+    if (!failure) {
+        failure = test_settings_info();
+    }
+    if (!failure) {
+        failure = test_settings_layout();
+    }
+    if (!failure) {
+        failure = test_settings_ui_events();
+    }
+    if (!failure) {
+        failure = test_settings_ui_draw();
     }
 
     if (failure) {

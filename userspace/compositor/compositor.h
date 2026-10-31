@@ -88,7 +88,22 @@ void comp_style_window(CompWindowStyle *style);
 void comp_style_glass(CompWindowStyle *style);
 int comp_set_window_style(Window *win, const CompWindowStyle *style);
 
+/* A pose presents the window scaled into `rect` and faded to `opacity`
+   (0..255) instead of at its own geometry, shadow included. The surface and
+   all hit-testing stay as they are; only what reaches the screen changes.
+   Animation drives it frame by frame: each change repaints the old and the
+   new extent. Content is resampled bilinearly, so it is meant for motion, not
+   for resting windows. Returns -1 for an empty rectangle. */
+int comp_set_window_pose(Window *win, const CompRect *rect, unsigned int opacity);
+/* Back to the window's own geometry, fully opaque. */
+void comp_clear_window_pose(Window *win);
+
 /* Damage tracking */
+/* Screen area the window paints: its rectangle (or pose) plus the shadow it
+   casts, as set by its style and the theme's shadow tokens. Anything that moves, resizes,
+   hides or destroys a window must repaint this, not just the rectangle. */
+CompRect comp_window_extent(const Window *win);
+/* Damages the whole extent of the window, shadow included. */
 int comp_damage_window(Window *win);
 int comp_damage_rectp(Window *win, const CompRect *rect);
 int comp_damage_rect(Window *win, int x, int y, int w, int h);
@@ -104,6 +119,16 @@ uint32_t *comp_front_buffer(void);
 uint32_t *comp_back_buffer(void);
 int comp_width(void);
 int comp_height(void);
+
+/* Draws 8x16 bitmap text with its top-left at (x, y) and damages the window. */
+void comp_text_render(Window *win, int x, int y, const char *text, uint32_t color);
+
+/* Draws the first length bytes of text (or up to its NUL) inside the
+   window-local clip rectangle (NULL: the whole window). Unlike
+   comp_text_render it leaves damage to the caller, so a text view can repaint
+   one line and damage just that line. */
+void comp_text_draw(Window *win, int x, int y, const char *text, size_t length,
+                    uint32_t color, const CompRect *clip);
 
 /* Event loop */
 void comp_event_loop(void);

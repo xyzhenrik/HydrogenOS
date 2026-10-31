@@ -16,24 +16,24 @@
 #define FS_TYPE_EXT2 1
 
 static const char *const cleanup_files[] = {
-    "/dtree/a/b/c/leaf.txt",
-    "/dtree/c/leaf.txt",
-    "/dtree/a/note.txt",
-    "/dtree/r1",
-    "/dtree/r2",
+    "/tmp/dtree/a/b/c/leaf.txt",
+    "/tmp/dtree/c/leaf.txt",
+    "/tmp/dtree/a/note.txt",
+    "/tmp/dtree/r1",
+    "/tmp/dtree/r2",
 };
 
 static const char *const cleanup_dirs[] = {
-    "/dtree/a/b/c",
-    "/dtree/c",
-    "/dtree/a/b",
-    "/dtree/a",
-    "/dtree/many",
-    "/dtree",
+    "/tmp/dtree/a/b/c",
+    "/tmp/dtree/c",
+    "/tmp/dtree/a/b",
+    "/tmp/dtree/a",
+    "/tmp/dtree/many",
+    "/tmp/dtree",
 };
 
 static int fail(const char *reason) {
-    fprintf(2, "DIRTEST FAIL: %s\n", reason);
+    dprintf(2, "DIRTEST FAIL: %s\n", reason);
     return 1;
 }
 
@@ -47,9 +47,9 @@ static int str_same(const char *a, const char *b) {
 
 static void many_name(char *buf, size_t cap, int index, int short_form) {
     if (short_form) {
-        snprintf(buf, cap, "/dtree/many/s%d", index);
+        snprintf(buf, cap, "/tmp/dtree/many/s%d", index);
     } else {
-        snprintf(buf, cap, "/dtree/many/entry-with-a-rather-long-name-%d", index);
+        snprintf(buf, cap, "/tmp/dtree/many/entry-with-a-rather-long-name-%d", index);
     }
 }
 
@@ -114,7 +114,7 @@ static int check_listing(void) {
     int seen_dot = 0, seen_dotdot = 0, seen_b = 0, seen_note = 0;
     int pos = 0;
     for (;;) {
-        int rc = readdir_pos("/dtree/a", pos, &ent);
+        int rc = readdir_pos("/tmp/dtree/a", pos, &ent);
         if (rc < 0)
             return fail("readdir error");
         if (rc == 0)
@@ -144,18 +144,18 @@ static int check_listing(void) {
 static int check_many(void) {
     char path[96];
     sysinfo_t info;
-    if (sys_mkdir("/dtree/many") != 0)
+    if (sys_mkdir("/tmp/dtree/many") != 0)
         return fail("mkdir many");
     for (int i = 0; i < MANY_COUNT; ++i) {
         many_name(path, sizeof(path), i, 0);
         if (sys_writef(path, "x", 1) != 0)
             return fail("create many entry");
     }
-    if (count_entries("/dtree/many") != MANY_COUNT + 2)
+    if (count_entries("/tmp/dtree/many") != MANY_COUNT + 2)
         return fail("many count after create");
 
     stat_t st;
-    if (sys_sysinfo(&info) != 0 || stat("/dtree/many", &st) != 0)
+    if (sys_sysinfo(&info) != 0 || stat("/tmp/dtree/many", &st) != 0)
         return fail("many stat");
     if (st.st_size <= info.block_size || st.st_size % info.block_size != 0)
         return fail("many did not grow to several blocks");
@@ -165,19 +165,19 @@ static int check_many(void) {
         if (sys_unlink(path) != 0)
             return fail("unlink even entry");
     }
-    if (count_entries("/dtree/many") != MANY_COUNT / 2 + 2)
+    if (count_entries("/tmp/dtree/many") != MANY_COUNT / 2 + 2)
         return fail("many count after unlink");
     for (int i = 0; i < MANY_COUNT; i += 2) {
         many_name(path, sizeof(path), i, 1);
         if (sys_writef(path, "y", 1) != 0)
             return fail("reuse freed records");
     }
-    if (count_entries("/dtree/many") != MANY_COUNT + 2)
+    if (count_entries("/tmp/dtree/many") != MANY_COUNT + 2)
         return fail("many count after reuse");
     stat_t st2;
-    if (stat("/dtree/many", &st2) != 0 || st2.st_size != st.st_size)
+    if (stat("/tmp/dtree/many", &st2) != 0 || st2.st_size != st.st_size)
         return fail("freed records not reused");
-    if (sys_rmdir("/dtree/many") != -ERR_ENOTEMPTY)
+    if (sys_rmdir("/tmp/dtree/many") != -ERR_ENOTEMPTY)
         return fail("rmdir many not empty");
 
     for (int i = 0; i < MANY_COUNT; ++i) {
@@ -185,36 +185,36 @@ static int check_many(void) {
         if (sys_unlink(path) != 0)
             return fail("unlink many entry");
     }
-    if (count_entries("/dtree/many") != 2)
+    if (count_entries("/tmp/dtree/many") != 2)
         return fail("many not empty after unlink");
-    if (sys_rmdir("/dtree/many") != 0)
+    if (sys_rmdir("/tmp/dtree/many") != 0)
         return fail("rmdir many");
-    if (exists("/dtree/many"))
+    if (exists("/tmp/dtree/many"))
         return fail("many still exists");
     return 0;
 }
 
 static int check_rename(void) {
-    if (sys_rename("/dtree/a/b/c", "/dtree/c") != 0)
+    if (sys_rename("/tmp/dtree/a/b/c", "/tmp/dtree/c") != 0)
         return fail("rename dir across parents");
-    if (exists("/dtree/a/b/c") || !is_dir("/dtree/c"))
+    if (exists("/tmp/dtree/a/b/c") || !is_dir("/tmp/dtree/c"))
         return fail("rename dir result");
-    if (!file_has("/dtree/c/leaf.txt", "leaf\n"))
+    if (!file_has("/tmp/dtree/c/leaf.txt", "leaf\n"))
         return fail("moved dir lost its file");
-    if (sys_rename("/dtree/a", "/dtree/a/b/inside") != -ERR_EINVAL)
+    if (sys_rename("/tmp/dtree/a", "/tmp/dtree/a/b/inside") != -ERR_EINVAL)
         return fail("rename dir into itself");
-    if (sys_rename("/dtree/c", "/dtree/a") != -ERR_ENOTEMPTY)
+    if (sys_rename("/tmp/dtree/c", "/tmp/dtree/a") != -ERR_ENOTEMPTY)
         return fail("rename onto non-empty dir");
-    if (sys_rename("/dtree/a/note.txt", "/dtree/c") != -ERR_EISDIR)
+    if (sys_rename("/tmp/dtree/a/note.txt", "/tmp/dtree/c") != -ERR_EISDIR)
         return fail("rename file onto dir");
 
-    if (sys_writef("/dtree/r1", "one", 3) != 0 || sys_writef("/dtree/r2", "two", 3) != 0)
+    if (sys_writef("/tmp/dtree/r1", "one", 3) != 0 || sys_writef("/tmp/dtree/r2", "two", 3) != 0)
         return fail("create rename files");
-    if (sys_rename("/dtree/r1", "/dtree/r2") != 0)
+    if (sys_rename("/tmp/dtree/r1", "/tmp/dtree/r2") != 0)
         return fail("rename replace");
-    if (exists("/dtree/r1") || !file_has("/dtree/r2", "one"))
+    if (exists("/tmp/dtree/r1") || !file_has("/tmp/dtree/r2", "one"))
         return fail("rename replace result");
-    if (sys_unlink("/dtree/r2") != 0)
+    if (sys_unlink("/tmp/dtree/r2") != 0)
         return fail("unlink r2");
     return 0;
 }
@@ -224,48 +224,48 @@ int main(void) {
     if (sys_sysinfo(&info) != 0)
         return fail("sysinfo");
     if (info.fs_type != FS_TYPE_EXT2) {
-        fprintf(2, "dirtest: root is not ext2, skipping\n");
+        dprintf(2, "dirtest: root is not ext2, skipping\n");
         printf("DIRTEST PASS\n");
         return 0;
     }
 
     remove_leftovers();
 
-    if (sys_mkdir("/dtree") != 0)
+    if (sys_mkdir("/tmp/dtree") != 0)
         return fail("mkdir /dtree");
-    if (sys_mkdir("/dtree") != -ERR_EEXIST)
+    if (sys_mkdir("/tmp/dtree") != -ERR_EEXIST)
         return fail("mkdir existing");
-    if (sys_mkdir("/dtree/a") != 0 || sys_mkdir("/dtree/a/b") != 0 ||
-        sys_mkdir("/dtree/a/b/c") != 0)
+    if (sys_mkdir("/tmp/dtree/a") != 0 || sys_mkdir("/tmp/dtree/a/b") != 0 ||
+        sys_mkdir("/tmp/dtree/a/b/c") != 0)
         return fail("mkdir nested");
-    if (sys_mkdir("/dtree/missing/child") != -ERR_ENOENT)
+    if (sys_mkdir("/tmp/dtree/missing/child") != -ERR_ENOENT)
         return fail("mkdir without parent");
-    if (!is_dir("/dtree/a") || !is_dir("/dtree/a/b") || !is_dir("/dtree/a/b/c"))
+    if (!is_dir("/tmp/dtree/a") || !is_dir("/tmp/dtree/a/b") || !is_dir("/tmp/dtree/a/b/c"))
         return fail("stat nested");
 
-    if (sys_writef("/dtree/a/b/c/leaf.txt", "leaf\n", 5) != 0 ||
-        sys_writef("/dtree/a/note.txt", "note\n", 5) != 0)
+    if (sys_writef("/tmp/dtree/a/b/c/leaf.txt", "leaf\n", 5) != 0 ||
+        sys_writef("/tmp/dtree/a/note.txt", "note\n", 5) != 0)
         return fail("writef nested");
-    if (!file_has("/dtree/a/b/c/leaf.txt", "leaf\n") || !file_has("/dtree/a/note.txt", "note\n"))
+    if (!file_has("/tmp/dtree/a/b/c/leaf.txt", "leaf\n") || !file_has("/tmp/dtree/a/note.txt", "note\n"))
         return fail("read nested");
-    if (sys_mkdir("/dtree/a/note.txt/sub") != -ERR_ENOTDIR)
+    if (sys_mkdir("/tmp/dtree/a/note.txt/sub") != -ERR_ENOTDIR)
         return fail("mkdir below file");
     if (check_listing() != 0)
         return 1;
-    if (count_entries("/dtree/absent") != -1)
+    if (count_entries("/tmp/dtree/absent") != -1)
         return fail("readdir missing dir");
 
-    if (sys_rmdir("/dtree/a") != -ERR_ENOTEMPTY)
+    if (sys_rmdir("/tmp/dtree/a") != -ERR_ENOTEMPTY)
         return fail("rmdir non-empty");
-    if (sys_rmdir("/dtree/a/note.txt") != -ERR_ENOTDIR)
+    if (sys_rmdir("/tmp/dtree/a/note.txt") != -ERR_ENOTDIR)
         return fail("rmdir file");
-    if (sys_unlink("/dtree/a/b") != -ERR_EISDIR)
+    if (sys_unlink("/tmp/dtree/a/b") != -ERR_EISDIR)
         return fail("unlink dir");
-    if (sys_rmdir("/dtree/absent") != -ERR_ENOENT)
+    if (sys_rmdir("/tmp/dtree/absent") != -ERR_ENOENT)
         return fail("rmdir missing");
     if (sys_rmdir("/") != -ERR_EBUSY)
         return fail("rmdir root");
-    if (!is_dir("/dtree/a/b"))
+    if (!is_dir("/tmp/dtree/a/b"))
         return fail("unlink damaged dir");
 
     if (check_many() != 0)
@@ -273,18 +273,18 @@ int main(void) {
     if (check_rename() != 0)
         return 1;
 
-    if (sys_unlink("/dtree/c/leaf.txt") != 0 || sys_rmdir("/dtree/c") != 0)
+    if (sys_unlink("/tmp/dtree/c/leaf.txt") != 0 || sys_rmdir("/tmp/dtree/c") != 0)
         return fail("cleanup c");
-    if (sys_unlink("/dtree/a/note.txt") != 0 || sys_rmdir("/dtree/a/b") != 0 ||
-        sys_rmdir("/dtree/a") != 0)
+    if (sys_unlink("/tmp/dtree/a/note.txt") != 0 || sys_rmdir("/tmp/dtree/a/b") != 0 ||
+        sys_rmdir("/tmp/dtree/a") != 0)
         return fail("cleanup a");
-    if (count_entries("/dtree") != 2)
+    if (count_entries("/tmp/dtree") != 2)
         return fail("dtree not empty");
-    if (sys_rmdir("/dtree") != 0)
+    if (sys_rmdir("/tmp/dtree") != 0)
         return fail("rmdir /dtree");
-    if (exists("/dtree"))
+    if (exists("/tmp/dtree"))
         return fail("dtree still exists");
-    if (sys_rmdir("/dtree") != -ERR_ENOENT)
+    if (sys_rmdir("/tmp/dtree") != -ERR_ENOENT)
         return fail("rmdir twice");
 
     printf("DIRTEST PASS\n");

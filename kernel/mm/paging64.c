@@ -1,5 +1,7 @@
 #include "paging.h"
 #include "msr.h"
+#include "oom.h"
+#include "panic.h"
 #include "pmm.h"
 
 #include <stddef.h>
@@ -17,10 +19,11 @@
 #define CPUID_EXT_FEATURES 0x80000001u
 #define CPUID_EXT_EDX_NX (1u << 20)
 
+#define CR0_WP (1ULL << 16)
+
 #define PAGING_SPAN_2M 0x200000ULL
 #define PAGING_SPAN_1G 0x40000000ULL
 #define PAGING_SPAN_512G 0x8000000000ULL
-#define PAGING_USER_TOP 0x0000800000000000ULL
 
 extern uint64_t pml4[];
 extern uint64_t pdpt[];
@@ -37,11 +40,17 @@ static inline void invlpg(uintptr_t addr) {
     __asm__ volatile("invlpg (%0)" ::"r"(addr) : "memory");
 }
 
+/* PROT_NONE pages keep their frame but lose PAGE_USER, so ownership is
+ * recognised by the software bit instead. */
+static int user_leaf_owned(uint64_t entry) {
+    return (entry & PAGE_PRESENT) && (entry & (PAGE_USER | PAGE_PROT_NONE));
+}
+
 static void paging_free_user_pt(uint64_t *pt_tbl) {
     if (!pt_tbl)
         return;
     for (int i = 0; i < 512; ++i) {
-        if (!(pt_tbl[i] & PAGE_PRESENT) || !(pt_tbl[i] & PAGE_USER))
+        if (!user_leaf_owned(pt_tbl[i]))
             continue;
         uintptr_t phys = (uintptr_t)(pt_tbl[i] & PAGE_ADDR_MASK);
         pmm_free_page(phys);
@@ -85,7 +94,7 @@ static void paging_free_user_pdpt(uint64_t *pdpt_tbl) {
 }
 
 static uint64_t *alloc_table(void) {
-    uintptr_t phys = pmm_alloc_page();
+    uintptr_t phys = oom_alloc_page();
     if (!phys)
         return 0;
     uint64_t *tbl = (uint64_t *)(uintptr_t)phys;
@@ -114,6 +123,17 @@ static void paging_enable_nx(void) {
     nx_enabled = 1;
 }
 
+/* Without CR0.WP the CPU lets supervisor code write through read-only
+   mappings, so a kernel bug could silently modify read-only user pages. */
+static void paging_enable_write_protect(void) {
+    uint64_t cr0;
+    __asm__ volatile("mov %%cr0, %0" : "=r"(cr0));
+    cr0 |= CR0_WP;
+    __asm__ volatile("mov %0, %%cr0" ::"r"(cr0) : "memory");
+    __asm__ volatile("mov %%cr0, %0" : "=r"(cr0));
+    ASSERT((cr0 & CR0_WP) != 0);
+}
+
 void paging_init(void) {
     // In boot.S we created identity mappings; we still build a table
     // structure so we can map later.
@@ -121,6 +141,7 @@ void paging_init(void) {
     current_pml4_tbl = pml4;
     load_cr3((uint64_t)(uintptr_t)current_pml4_tbl);
     paging_enable_nx();
+    paging_enable_write_protect();
 }
 
 uint64_t *paging_kernel_pml4(void) { return kernel_pml4_tbl; }
@@ -226,7 +247,7 @@ size_t paging_count_user_pages(const uint64_t *pml4_root) {
                 const uint64_t *pt_tbl =
                     (const uint64_t *)(uintptr_t)(pd_tbl[k] & ~0xFFFULL);
                 for (int l = 0; l < 512; ++l) {
-                    if ((pt_tbl[l] & PAGE_PRESENT) && (pt_tbl[l] & PAGE_USER))
+                    if (user_leaf_owned(pt_tbl[l]))
                         ++count;
                 }
             }
@@ -355,6 +376,19 @@ static void flush_if_current(uint64_t *pml4_root, uintptr_t virt) {
         invlpg(virt);
 }
 
+static uint64_t user_leaf_entry(uintptr_t phys, uint64_t flags) {
+    uint64_t entry = (uint64_t)phys | PAGE_PRESENT;
+    if (flags & PAGE_PROT_NONE)
+        entry |= PAGE_PROT_NONE;
+    else
+        entry |= PAGE_USER;
+    if ((flags & PAGE_RW) && !(flags & PAGE_PROT_NONE))
+        entry |= PAGE_RW;
+    if (((flags & PAGE_NO_EXEC) || (flags & PAGE_PROT_NONE)) && nx_enabled)
+        entry |= PAGE_NX_BIT;
+    return entry;
+}
+
 int paging_user_map_page(uint64_t *pml4_root, uintptr_t virt, uintptr_t phys,
                          uint64_t flags) {
     if (!pml4_root || pml4_root == kernel_pml4_tbl)
@@ -375,13 +409,45 @@ int paging_user_map_page(uint64_t *pml4_root, uintptr_t virt, uintptr_t phys,
     if (*pte & PAGE_PRESENT)
         return -1;
 
-    uint64_t entry = (uint64_t)phys | PAGE_PRESENT | PAGE_USER;
-    if (flags & PAGE_RW)
-        entry |= PAGE_RW;
-    if ((flags & PAGE_NO_EXEC) && nx_enabled)
-        entry |= PAGE_NX_BIT;
-    *pte = entry;
+    *pte = user_leaf_entry(phys, flags);
     return 0;
+}
+
+void paging_user_protect_range(uint64_t *pml4_root, uintptr_t virt,
+                               size_t size_bytes, uint64_t flags) {
+    if (!pml4_root || pml4_root == kernel_pml4_tbl || size_bytes == 0)
+        return;
+    uintptr_t addr = virt & ~0xFFFULL;
+    uintptr_t end = virt + size_bytes;
+    if (end < virt || end > PAGING_USER_TOP)
+        end = PAGING_USER_TOP;
+
+    while (addr < end) {
+        uint64_t *pml4e = &pml4_root[(addr >> 39) & 0x1FF];
+        if (!user_table_entry(*pml4e)) {
+            addr = (addr | (PAGING_SPAN_512G - 1)) + 1;
+            continue;
+        }
+        uint64_t *pdpte = &user_table_at(*pml4e)[(addr >> 30) & 0x1FF];
+        if (!user_table_entry(*pdpte)) {
+            addr = (addr | (PAGING_SPAN_1G - 1)) + 1;
+            continue;
+        }
+        uint64_t *pde = &user_table_at(*pdpte)[(addr >> 21) & 0x1FF];
+        uintptr_t chunk_end = (addr | (PAGING_SPAN_2M - 1)) + 1;
+        if (user_table_entry(*pde)) {
+            uint64_t *pt_tbl = user_table_at(*pde);
+            uintptr_t stop = chunk_end < end ? chunk_end : end;
+            for (uintptr_t a = addr; a < stop; a += 0x1000) {
+                uint64_t *pte = &pt_tbl[(a >> 12) & 0x1FF];
+                if (!user_leaf_owned(*pte))
+                    continue;
+                *pte = user_leaf_entry((uintptr_t)(*pte & PAGE_ADDR_MASK), flags);
+                flush_if_current(pml4_root, a);
+            }
+        }
+        addr = chunk_end;
+    }
 }
 
 void paging_user_unmap_range(uint64_t *pml4_root, uintptr_t virt,

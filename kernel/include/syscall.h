@@ -55,7 +55,50 @@
 #define SYS_NET_PING 51
 #define SYS_SPAWN_ARGS 52
 #define SYS_TRY_WAIT 53
+#define SYS_MPROTECT 55
+#define SYS_KILL 56
+#define SYS_SIGACTION 57
+#define SYS_SIGRETURN 58
+#define SYS_SOCKET 59
+#define SYS_BIND 60
+#define SYS_SENDTO 61
+#define SYS_RECVFROM 62
+#define SYS_LINK 63
+#define SYS_SYMLINK 64
+#define SYS_READLINK 65
+#define SYS_SIGPROCMASK 68
+#define SYS_CONNECT 69
+#define SYS_LISTEN 70
+#define SYS_ACCEPT 71
+#define SYS_SHUTDOWN_SOCK 72
+#define SYS_EXECVE 73
+#define SYS_GETUID 74
+#define SYS_SETUID 75
+#define SYS_GETGID 76
+#define SYS_SETGID 77
+#define SYS_CHMOD 78
+#define SYS_CHOWN 79
+#define SYS_TRUNCATE 80
+#define SYS_PERF_READ 81
+#define SYS_CRASH 82
+#define SYS_MEMINFO 83
+#define SYS_SYNC 84
+#define SYS_FTRUNCATE 85
 #define SYS_PUTCHAR 255
 
 uint64_t syscall_handle(regs_t *r);
 void syscall_set_user_return(uintptr_t rip, uintptr_t rsp);
+
+struct process;
+
+/* True for the first user process, whose death hands the CPU back to the
+ * kernel shell. */
+int syscall_is_bootstrap(const struct process *proc);
+
+/*
+ * Called once `exited` is dead. If it is the bootstrap process and nothing
+ * else can run, rewrites r to resume in the kernel shell and returns 1; the
+ * caller then owns destroying `exited`. Returns 0 otherwise.
+ */
+int syscall_bootstrap_exited(const struct process *exited, regs_t *r,
+                             uint64_t status);

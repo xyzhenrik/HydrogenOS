@@ -1,0 +1,4 @@
+name greeter
+version 1.2.0
+description Prints a greeting in several languages
+depends libgreet

@@ -14,6 +14,7 @@ void block_init(void) {
         primary_dev.sector_count = (uint32_t)virtio_blk_capacity();
         primary_dev.read = virtio_blk_read;
         primary_dev.write = virtio_blk_write;
+        primary_dev.flush = virtio_blk_flush;
         has_primary = 1;
     } else if (ata_is_present()) {
         primary_dev.name = "ata0";
@@ -22,6 +23,7 @@ void block_init(void) {
         primary_dev.sector_count = ata_sector_count();
         primary_dev.read = ata_read28;
         primary_dev.write = 0; // ATA write not implemented
+        primary_dev.flush = 0;
         has_primary = 1;
     } else {
         has_primary = 0;
@@ -40,4 +42,10 @@ int block_read(uint32_t lba, uint8_t count, void *buffer) {
 int block_write(uint32_t lba, uint8_t count, void *buffer) {
     if (!has_primary || !primary_dev.write) return -1;
     return primary_dev.write(lba, count, buffer);
+}
+
+int block_flush(void) {
+    if (!has_primary) return -1;
+    if (!primary_dev.flush) return 0;
+    return primary_dev.flush();
 }

@@ -18,5 +18,17 @@ void out_error(const char *prefix, const char *subject, const char *message);
 void out_error_to(int fd, const char *prefix, const char *subject,
                   const char *message);
 
-/* Error messages are tinted on the console only in interactive mode. */
-void out_set_color(int enabled);
+/* Error messages are tinted in interactive mode: through the console's colour
+ * syscall, or as ANSI escape sequences when the shell talks to a terminal
+ * emulator over pipes. */
+typedef enum OutColor {
+    OUT_COLOR_NONE,
+    OUT_COLOR_CONSOLE,
+    OUT_COLOR_ANSI,
+} OutColor;
+
+void out_set_color(OutColor mode);
+
+/* Escape sequences would end up in the redirect target, so tinting is paused
+ * while a builtin writes to a redirected stream. */
+void out_pause_color(int paused);

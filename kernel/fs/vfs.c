@@ -2,8 +2,9 @@
 #include "ext2.h"
 #include "ramfs.h"
 #include "procfs.h"
+#include "dcache.h"
 #include "errno.h"
-#include "kheap.h"
+#include "drivers/block_cache.h"
 
 typedef enum vfs_fs_type {
     VFS_FS_NONE = 0,
@@ -159,6 +160,10 @@ int vfs_umount(const char *path) {
     if (path_copy_mount(norm, path, sizeof(norm)) != 0) return -1;
     for (int i = 0; i < VFS_MAX_MOUNTS; ++i) {
         if (mounts[i].fs != VFS_FS_NONE && path_eq(mounts[i].path, norm)) {
+            if (mounts[i].fs == VFS_FS_EXT2) {
+                if (ext2_sync() != 0) return -EIO;
+                dcache_invalidate_fs(DCACHE_FS_EXT2);
+            }
             mounts[i].fs = VFS_FS_NONE;
             mounts[i].path[0] = 0;
             mounts[i].fs_name = 0;
@@ -217,19 +222,37 @@ int vfs_read_file(const char *path, uint8_t *out, uint32_t out_sz, uint32_t *out
     return vfs_read_file_at(path, 0, out, out_sz, out_len);
 }
 
+/* ramfs and procfs store no attributes: everything belongs to root. The
+   initrd is all executables and only root may modify ramfs, so its files are
+   0755; procfs is read-only. */
+static void set_fixed_attrs(vfs_stat_t *out, uint32_t dir_mode, uint32_t file_mode) {
+    out->mode = out->type == 2 ? dir_mode : file_mode;
+    out->uid = 0;
+    out->gid = 0;
+}
+
 int vfs_stat(const char *path, vfs_stat_t *out) {
     if (!ready || !out) return -1;
     const char *sub = 0;
     const vfs_mount_t *m = mount_for_path(path, &sub);
     if (!m) return -1;
+    out->nlink = 0;
+    out->ino = 0;
+    out->mtime = 0;
     if (m->fs == VFS_FS_EXT2) {
-        if (ext2_stat(sub, &out->type, &out->size) != 0) return -1;
+        if (ext2_stat(sub, out) != 0) return -1;
         return 0;
     }
     if (m->fs == VFS_FS_RAMFS) {
-        return ramfs_stat(sub, out);
+        if (ramfs_stat(sub, out) != 0) return -1;
+        set_fixed_attrs(out, 0755, 0755);
+        return 0;
     }
-    if (m->fs == VFS_FS_PROCFS) return procfs_stat(sub, out);
+    if (m->fs == VFS_FS_PROCFS) {
+        if (procfs_stat(sub, out) != 0) return -1;
+        set_fixed_attrs(out, 0555, 0444);
+        return 0;
+    }
     return -1;
 }
 
@@ -242,15 +265,20 @@ int vfs_stat_full(const char *path, hydrogen_stat_t *out) {
     vfs_stat_t st;
     if (vfs_stat(path, &st) != 0) return -1;
     if (st.type == 2) {
-        out->st_mode  = S_IFDIR | 0755;
-        out->st_nlink = 2;
+        out->st_mode  = S_IFDIR | st.mode;
+        out->st_nlink = st.nlink ? st.nlink : 2;
+    } else if (st.type == 3) {
+        out->st_mode  = S_IFLNK | st.mode;
+        out->st_nlink = st.nlink ? st.nlink : 1;
     } else {
-        out->st_mode  = S_IFREG | 0644;
-        out->st_nlink = 1;
+        out->st_mode  = S_IFREG | st.mode;
+        out->st_nlink = st.nlink ? st.nlink : 1;
     }
     out->st_size  = st.size;
-    out->st_ino   = 0;
-    out->st_mtime = 0;
+    out->st_ino   = st.ino;
+    out->st_uid   = st.uid;
+    out->st_gid   = st.gid;
+    out->st_mtime = st.mtime;
     return 0;
 }
 
@@ -271,7 +299,7 @@ static void readdir_cb(const char *name, uint8_t type, void *ctx) {
     if (r->current == r->target) {
         r->found = 1;
         r->out->d_ino  = 0;
-        r->out->d_type = (type == 2) ? 4 : 8;
+        r->out->d_type = (type == 2) ? 4 : (type == 7) ? 10 : 8;
         uint32_t i = 0;
         while (name[i] && i < DIRENT_NAME_MAX) {
             r->out->d_name[i] = name[i];
@@ -352,6 +380,104 @@ int vfs_close(int fd) {
 }
 
 /* ------------------------------------------------------------------ */
+/* Symlink resolution                                                  */
+/* ------------------------------------------------------------------ */
+
+/* Overlapping move within one buffer; the kernel has no memmove. */
+static void buf_move(char *dst, const char *src, uint32_t n) {
+    if (dst < src) {
+        for (uint32_t i = 0; i < n; ++i) dst[i] = src[i];
+    } else {
+        for (uint32_t i = n; i > 0; --i) dst[i - 1] = src[i - 1];
+    }
+}
+
+/* Drops the last component of an absolute path; the root stays the root. */
+static void resolved_pop(char *path, uint32_t *len) {
+    while (*len > 1 && path[*len - 1] != '/') (*len)--;
+    if (*len > 1) (*len)--;
+    path[*len] = 0;
+}
+
+static int resolved_push(char *path, uint32_t *len, uint32_t cap,
+                         const char *name, uint32_t name_len) {
+    uint32_t need = *len + name_len + (*len > 1 ? 1 : 0);
+    if (need >= cap) return -ENAMETOOLONG;
+    if (*len > 1) path[(*len)++] = '/';
+    for (uint32_t i = 0; i < name_len; ++i) path[(*len)++] = name[i];
+    path[*len] = 0;
+    return 0;
+}
+
+/* Returns the length of the target if path is a symlink, 0 if it is not one
+   (including components that do not exist yet; the operation itself reports
+   those) and a negative errno value on failure. */
+static int symlink_target(const char *path, char *target, uint32_t cap) {
+    int n = vfs_readlink(path, target, cap);
+    if (n == -ENOENT || n == -EINVAL || n == -ENOTDIR) return 0;
+    return n;
+}
+
+int vfs_resolve(const char *path, int follow_final, char *out, uint32_t out_sz) {
+    if (!ready || !path || !out || out_sz < 2 || path[0] != '/') return -EINVAL;
+    char work[VFS_PATH_MAX];
+    char target[VFS_PATH_MAX];
+    uint32_t work_len = str_len(path);
+    if (work_len >= sizeof(work)) return -ENAMETOOLONG;
+    for (uint32_t i = 0; i <= work_len; ++i) work[i] = path[i];
+
+    uint32_t out_len = 1;
+    out[0] = '/';
+    out[1] = 0;
+    uint32_t pos = 0;
+    int expansions = 0;
+    for (;;) {
+        while (work[pos] == '/') pos++;
+        if (!work[pos]) return 0;
+        uint32_t start = pos;
+        while (work[pos] && work[pos] != '/') pos++;
+        uint32_t seg_len = pos - start;
+        if (seg_len == 1 && work[start] == '.') continue;
+        if (seg_len == 2 && work[start] == '.' && work[start + 1] == '.') {
+            resolved_pop(out, &out_len);
+            continue;
+        }
+
+        uint32_t parent_len = out_len;
+        int rc = resolved_push(out, &out_len, out_sz, work + start, seg_len);
+        if (rc != 0) return rc;
+        uint32_t rest = pos;
+        while (work[rest] == '/') rest++;
+        if (!work[rest] && !follow_final) return 0;
+
+        int target_len = symlink_target(out, target, sizeof(target));
+        if (target_len < 0) return target_len;
+        if (target_len == 0) continue;
+        if (++expansions > VFS_SYMLINK_DEPTH_MAX) return -ELOOP;
+
+        /* Continue with target + "/" + remainder; a relative target starts
+           from the directory that held the link. */
+        out_len = parent_len;
+        out[out_len] = 0;
+        if (target[0] == '/') {
+            out_len = 1;
+            out[1] = 0;
+        }
+        uint32_t rest_len = str_len(work + rest);
+        uint32_t joined = (uint32_t)target_len + (rest_len ? 1 + rest_len : 0);
+        if (joined >= sizeof(work)) return -ENAMETOOLONG;
+        if (rest_len) {
+            buf_move(work + target_len + 1, work + rest, rest_len + 1);
+            work[target_len] = '/';
+        } else {
+            work[target_len] = 0;
+        }
+        for (int i = 0; i < target_len; ++i) work[i] = target[i];
+        pos = 0;
+    }
+}
+
+/* ------------------------------------------------------------------ */
 /* Write operations                                                    */
 /* ------------------------------------------------------------------ */
 
@@ -399,6 +525,56 @@ int vfs_rename(const char *old_path, const char *new_path) {
     return -1;
 }
 
+int vfs_link(const char *old_path, const char *new_path) {
+    if (!ready || !old_path || !new_path) return -EINVAL;
+    const char *old_sub = 0;
+    const char *new_sub = 0;
+    const vfs_mount_t *mo = mount_for_path(old_path, &old_sub);
+    const vfs_mount_t *mn = mount_for_path(new_path, &new_sub);
+    if (!mo || !mn) return -ENOENT;
+    if (mo != mn) return -EXDEV;
+    if (mo->fs == VFS_FS_EXT2) return ext2_link(old_sub, new_sub);
+    return -EOPNOTSUPP;
+}
+
+int vfs_symlink(const char *target, const char *link_path) {
+    if (!ready || !target || !link_path) return -EINVAL;
+    /* Longer targets could never be followed. */
+    if (str_len(target) >= VFS_PATH_MAX) return -ENAMETOOLONG;
+    const char *sub = 0;
+    const vfs_mount_t *m = mount_for_path(link_path, &sub);
+    if (!m) return -ENOENT;
+    if (m->fs == VFS_FS_EXT2) return ext2_symlink(target, sub);
+    return -EOPNOTSUPP;
+}
+
+int vfs_readlink(const char *path, char *buf, uint32_t cap) {
+    if (!ready || !path || !buf || cap == 0) return -EINVAL;
+    const char *sub = 0;
+    const vfs_mount_t *m = mount_for_path(path, &sub);
+    if (!m) return -ENOENT;
+    if (m->fs == VFS_FS_EXT2) return ext2_readlink(sub, buf, cap);
+    return -EINVAL;
+}
+
+int vfs_chmod(const char *path, uint32_t mode) {
+    if (!ready || !path) return -EINVAL;
+    const char *sub = 0;
+    const vfs_mount_t *m = mount_for_path(path, &sub);
+    if (!m) return -ENOENT;
+    if (m->fs == VFS_FS_EXT2) return ext2_chmod(sub, mode);
+    return -EOPNOTSUPP;
+}
+
+int vfs_chown(const char *path, uint32_t uid, uint32_t gid) {
+    if (!ready || !path) return -EINVAL;
+    const char *sub = 0;
+    const vfs_mount_t *m = mount_for_path(path, &sub);
+    if (!m) return -ENOENT;
+    if (m->fs == VFS_FS_EXT2) return ext2_chown(sub, uid, gid);
+    return -EOPNOTSUPP;
+}
+
 int vfs_write_file(const char *path, const uint8_t *data, uint32_t size) {
     if (!ready || !path) return -1;
     const char *sub = 0;
@@ -406,36 +582,41 @@ int vfs_write_file(const char *path, const uint8_t *data, uint32_t size) {
     if (!m) return -1;
     if (m->fs == VFS_FS_RAMFS) return ramfs_write_file(sub, data, size);
     if (m->fs == VFS_FS_EXT2) return ext2_write_file(sub, data, size);
+    if (m->fs == VFS_FS_PROCFS) return procfs_write_file(sub, data, size);
     return -1;
 }
 
-/* The backends only replace whole files, so a positioned write is a
- * read-modify-write of the complete file. Bytes between the old end of file
- * and offset read back as zero. */
 int vfs_write_file_at(const char *path, uint32_t offset, const uint8_t *data,
-                      uint32_t size) {
-    if (!ready || !path || (size > 0 && !data)) return -1;
-    if (size > UINT32_MAX - offset) return -1;
-    vfs_stat_t st;
-    if (vfs_stat(path, &st) != 0 || st.type != 1) return -1;
-    if (size == 0) return 0;
-    uint32_t end = offset + size;
-    uint32_t new_size = end > st.size ? end : st.size;
-    uint8_t *buf = (uint8_t *)kalloc(new_size);
-    if (!buf) return -1;
-    uint32_t have = 0;
-    while (have < st.size) {
-        uint32_t got = 0;
-        if (vfs_read_file_at(path, have, buf + have, st.size - have, &got) != 0 ||
-            got == 0) {
-            kfree(buf);
-            return -1;
-        }
-        have += got;
+                      uint32_t size, uint32_t *written) {
+    *written = 0;
+    if (!ready || !path || (size > 0 && !data)) return -EINVAL;
+    const char *sub = 0;
+    const vfs_mount_t *m = mount_for_path(path, &sub);
+    if (!m) return -ENOENT;
+    if (m->fs == VFS_FS_RAMFS) {
+        int rc = ramfs_write_at(sub, offset, data, size);
+        if (rc == 0) *written = size;
+        return rc;
     }
-    for (uint32_t i = st.size; i < offset; ++i) buf[i] = 0;
-    for (uint32_t i = 0; i < size; ++i) buf[offset + i] = data[i];
-    int rc = vfs_write_file(path, buf, new_size);
-    kfree(buf);
-    return rc;
+    if (m->fs == VFS_FS_EXT2) return ext2_write_at(sub, offset, data, size, written);
+    return -EROFS;
+}
+
+int vfs_truncate(const char *path, uint32_t size) {
+    if (!ready || !path) return -EINVAL;
+    const char *sub = 0;
+    const vfs_mount_t *m = mount_for_path(path, &sub);
+    if (!m) return -ENOENT;
+    if (m->fs == VFS_FS_RAMFS) return ramfs_truncate(sub, size);
+    if (m->fs == VFS_FS_EXT2) return ext2_truncate(sub, size);
+    return -EROFS;
+}
+
+int vfs_sync(void) {
+    if (!ready) return -EINVAL;
+    return ext2_is_mounted() ? ext2_sync() : 0;
+}
+
+void vfs_writeback_tick(void) {
+    block_cache_tick();
 }
