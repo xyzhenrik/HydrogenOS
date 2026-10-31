@@ -114,16 +114,16 @@
 - [x] **82.** RTC-Treiber (CMOS, Wanduhrzeit beim Boot lesen)
 - [x] **83.** ACPI-Tabellen-Parser (RSDP → RSDT/XSDT → FADT, Shutdown via SLP_TYPx)
 - [x] **84.** Power-Management: sauberes Shutdown / Reboot via ACPI
-- [ ] **85.** Benutzer-Authentifizierung (`/etc/passwd`-Stil, `sys_getuid` / `sys_setuid`)
-- [ ] **86.** Datei-Permissions (Inode-Bits rwxrwxrwx, UID/GID, Kernel-Enforcement)
+- [x] **85.** Benutzer-Authentifizierung (`/etc/passwd`-Stil, `sys_getuid` / `sys_setuid`)
+- [x] **86.** Datei-Permissions (Inode-Bits rwxrwxrwx, UID/GID, Kernel-Enforcement)
 - [x] **87.** Paketformat `.hpkg` (Textmanifest + sortierte Dateitabelle mit SHA-256, siehe `docs/HPKG.md`)
 - [x] **88.** Paketmanager-CLI `hpkg` (install / remove / list / info / verify / update; Paketdatenbank, Dateibesitz, Abhängigkeitsprüfung, Rollback)
 - [x] **89.** Paket-Repository-Metadaten-Format + lokales Repo-Tool (`index`, `tools/hpkg_repo.py`, `/var/lib/hpkg/repo`)
 - [ ] **90.** UEFI-Boot-Stub (EFI-Handoff → Kernel, neben BIOS/GRUB erhalten)
-- [ ] **91.** Boot-Splash-Screen (Framebuffer-Logo + Ladebalken)
+- [x] **91.** Boot-Splash-Screen (Framebuffer-Logo + Ladebalken)
 - [ ] **92.** GRUB-Konfiguration: Timeout, Menü-Styling, Kernel-Parameter-Passing
 - [x] **93.** Kernel-Crash-Dump: Oops-State auf Disk schreiben (`/var/crash/`)
-- [ ] **94.** Kernel-Perf-Counter: Syscall-Counts, Scheduler-Wakeups, Pipe-Latenz
+- [x] **94.** Kernel-Perf-Counter: Syscall-Counts, Scheduler-Wakeups, Pipe-Latenz
 - [x] **95.** OOM-Policy: Prozess-Killer bei Speicherdruck (Scoring nach Größe/Prio)
 - [x] **96.** `sys_mprotect` (RW/RX-Flags auf Mappings setzen, SIGSEGV-Basis)
 - [x] **97.** Signal-Grundgerüst: `sys_kill` / `sys_signal` / `sys_sigreturn` (SIGTERM, SIGKILL, SIGSEGV)

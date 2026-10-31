@@ -386,3 +386,11 @@ to run in the background without a Terminal window.
 
 - `virtio_input` now drives `virtio-tablet-pci` (EV_ABS, buttons, wheel) into the shared mouse state, so the cursor follows the host pointer without a QEMU grab; PS/2 stays the fallback, last report wins. See `docs/POINTER_INPUT.md`.
 - The desktop clips the cursor blit at the screen edge; before, the cursor vanished in the bottom 13 pixel rows.
+
+## Milestone 0.6 (2026-10-31)
+
+hpkg package manager with local repository (`docs/HPKG.md`), crash dumps and OOM policy (`docs/CRASH_OOM.md`),
+`SYS_SYNC`/`SYS_FTRUNCATE`, RTC-based ext2 mtimes, real logo artwork and a vector icon set
+(`tools/mklogo.py`, `tools/mkicons.py`), absolute pointer via virtio-tablet (`docs/POINTER_INPUT.md`).
+Boot-time regression fixed: virtio-blk register access is volatile (write cache/flush now negotiated) and the
+block cache writes back sorted, merged runs; boot to desktop takes ~22 s headless.
