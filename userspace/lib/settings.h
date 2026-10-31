@@ -26,12 +26,14 @@
 #define SETTINGS_CHANGED_ACCENT (1u << 1)
 #define SETTINGS_CHANGED_GLASS  (1u << 2)
 #define SETTINGS_CHANGED_LAYOUT (1u << 3)
+#define SETTINGS_CHANGED_MOTION (1u << 4)
 
 typedef struct Settings {
     int theme;   /* SETTINGS_THEME_* */
     int accent;  /* index into the accent table */
     int glass;   /* nonzero: blurred, translucent bars and launcher */
     int layout;  /* SETTINGS_LAYOUT_* */
+    int reduce_motion;  /* nonzero: windows and controls change without animating */
 } Settings;
 
 /* Colour tokens of the desktop session, all 0x00RRGGBB. Everything follows

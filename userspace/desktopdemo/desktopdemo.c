@@ -1,4 +1,5 @@
 #include "mini_libc.h"
+#include "anim.h"
 #include "app_editor.h"
 #include "app_terminal.h"
 #include "compositor.h"
@@ -13,6 +14,7 @@
 #include "syscall.h"
 #include "wallclock.h"
 #include "window_geometry.h"
+#include "window_motion.h"
 
 #define TITLE_H   30
 #define PAD       12
@@ -69,6 +71,9 @@ typedef struct App {
     int resizing;
     int drag_ox, drag_oy;
     int rx, ry, rw, rh;
+    /* Opening, minimizing, restoring and resizing run as a pose of the window;
+       its geometry and flags above already hold the end state. */
+    WindowMotion motion;
     char title[64];
     /* terminal */
     Terminal *term;
@@ -304,6 +309,86 @@ static uint32_t chrome_clear(uint32_t solid_tint) {
     return g_settings.glass ? GLASS_CLEAR : solid_tint;
 }
 
+/* The launcher button and one icon per app kind. Each has a highlight under
+   the pointer and, for apps, an indicator that its windows are open; all of
+   them ease in and out as springs. */
+#define DOCK_ITEMS         (APP_KIND_COUNT + 1)
+#define DOCK_CELL_W        44
+#define DOCK_CELL_INSET    6
+#define DOCK_PAD           4
+#define DOCK_PAD_RADIUS    10
+#define DOCK_HOVER_OPACITY 40
+#define DOCK_INDICATOR_H   3
+
+typedef struct DockItem {
+    AnimSpring hover;    /* the pointer is over it, or the launcher is open */
+    AnimSpring shown;    /* the app has a window */
+    AnimSpring active;   /* ... that is not minimized */
+    /* What the taskbar surface currently shows, quantized as drawn. */
+    int painted_hover, painted_shown, painted_active;
+} DockItem;
+
+static DockItem g_dock[DOCK_ITEMS];
+
+/* Item 0 is the launcher button, item n + 1 the app of kind n. */
+static int dock_icon_x(int item) { return item == 0 ? tb_logo_x() : tb_icon_x(item - 1); }
+static int dock_icon_y(int item) { return item == 0 ? tb_logo_y() : tb_y(); }
+
+static int dock_hover_level(const DockItem *item) {
+    return (int)(((int64_t)anim_clamp_unit(item->hover.value) * DOCK_HOVER_OPACITY) >> 16);
+}
+
+static void dock_item_paint(int index) {
+    DockItem *item = &g_dock[index];
+    int ty = SH - TASKBAR_H;
+    int x = dock_icon_x(index);
+    int y = dock_icon_y(index) - ty;
+    GfxCanvas canvas = window_canvas(g_taskbar);
+
+    item->painted_hover = dock_hover_level(item);
+    item->painted_shown = anim_clamp_unit(item->shown.value) >> 8;
+    item->painted_active = anim_clamp_unit(item->active.value) >> 8;
+
+    if (item->painted_hover > 0)
+        gfx_fill_round_rect(&canvas, x - DOCK_PAD, y - DOCK_PAD, tb_icon_s() + 2 * DOCK_PAD,
+                            tb_icon_s() + 2 * DOCK_PAD, DOCK_PAD_RADIUS,
+                            COL_CHROME_TEXT & 0x00FFFFFFu, (unsigned int)item->painted_hover);
+    if (index == 0) {
+        draw_icon_os(g_taskbar, x, y, 32);
+        return;
+    }
+    draw_kind_icon(g_taskbar, index - 1, x, y, tb_icon_s());
+    if (item->painted_shown > 0) {
+        int width = (tb_icon_s() * item->painted_shown + 128) / 256;
+        uint32_t color = gfx_mix(COL_CHROME_DIM, COL_ACCENT, (unsigned int)item->painted_active);
+        unsigned int opacity = item->painted_shown > 255 ? 255u : (unsigned int)item->painted_shown;
+        if (width > 0)
+            gfx_fill_round_rect(&canvas, x + (tb_icon_s() - width) / 2, TASKBAR_H - DOCK_INDICATOR_H,
+                                width, DOCK_INDICATOR_H, 1, color & 0x00FFFFFFu, opacity);
+    }
+}
+
+static void draw_taskbar(void) {
+    fill_rect(g_taskbar, 0, 0, SW, TASKBAR_H, chrome_clear(COL_TASKBAR));
+    for (int i = 0; i < DOCK_ITEMS; ++i) dock_item_paint(i);
+}
+
+/* Repaints one item's cell of the taskbar: the surface is cleared there first,
+   so a shrinking highlight or indicator leaves nothing behind. */
+static void dock_item_refresh(int index) {
+    int cell_x = dock_icon_x(index) - DOCK_CELL_INSET;
+    fill_rect(g_taskbar, cell_x, 0, DOCK_CELL_W, TASKBAR_H, chrome_clear(COL_TASKBAR));
+    dock_item_paint(index);
+    comp_damage_rect(g_bg, cell_x, SH - TASKBAR_H, DOCK_CELL_W, TASKBAR_H);
+}
+
+static int dock_item_stale(int index) {
+    const DockItem *item = &g_dock[index];
+    return item->painted_hover != dock_hover_level(item) ||
+           item->painted_shown != (anim_clamp_unit(item->shown.value) >> 8) ||
+           item->painted_active != (anim_clamp_unit(item->active.value) >> 8);
+}
+
 /* The text of a top bar row sits centred between its edges. */
 #define TOPBAR_TEXT_Y ((TOPBAR_H - 16) / 2)
 
@@ -325,19 +410,6 @@ static void draw_topbar(void) {
     comp_text_render(g_topbar, TOPBAR_PAD, TOPBAR_TEXT_Y, name, COL_CHROME_TEXT);
     draw_clock(g_topbar, SW - TOPBAR_PAD, TOPBAR_TEXT_Y);
     fill_rect(g_topbar, 0, TOPBAR_H - 1, SW, 1, GLASS_INK | COL_TITLE_BORDER);
-}
-
-static void draw_taskbar(void) {
-    int ty = SH - TASKBAR_H;
-    fill_rect(g_taskbar, 0, 0, SW, TASKBAR_H, chrome_clear(COL_TASKBAR));
-    draw_icon_os(g_taskbar, tb_logo_x(), tb_logo_y() - ty, 32);
-    for (int k = 0; k < APP_KIND_COUNT; ++k) {
-        draw_kind_icon(g_taskbar, k, tb_icon_x(k), tb_y() - ty, tb_icon_s());
-        int presence = app_presence(k);
-        if (presence)
-            fill_rect(g_taskbar, tb_icon_x(k), TASKBAR_H - 3, tb_icon_s(), 3,
-                      GLASS_INK | (presence == 2 ? COL_ACCENT : COL_CHROME_DIM));
-    }
 }
 
 static void style_chrome_window(Window *win, uint32_t tint, unsigned int tint_alpha, int radius, int shadow) {
@@ -540,6 +612,238 @@ static App *app_at(int mx, int my) {
     return hit;
 }
 
+/* ---------------- motion ---------------- */
+
+/* Windows grow from and shrink to this fraction of their size as they open and
+   close; the launcher moves less because it is smaller and sits under the pointer. */
+#define OPEN_SCALE     (ANIM_ONE * 92 / 100)
+#define LAUNCHER_SCALE (ANIM_ONE * 96 / 100)
+/* The size a minimized window shrinks to, at its taskbar icon. */
+#define MINIMIZE_SIZE  32
+/* Animation frames are not rendered more often than this. */
+#define MOTION_FRAME_MS 8
+#define MAX_GHOSTS     4
+
+/* A closed window that is still fading out. Its app is already gone; the
+   window is destroyed once the motion ends. */
+typedef struct Ghost {
+    int used;
+    Window *win;
+    WindowMotion motion;
+} Ghost;
+
+static Ghost g_ghosts[MAX_GHOSTS];
+static WindowMotion g_launcher_motion;
+static AnimClock g_motion_clock;
+static uint32_t g_motion_pending_ms;
+static int g_motion_running;
+
+static void style_app_window(Window *win, int maximized);
+
+static int motion_enabled(void) { return !g_settings.reduce_motion; }
+
+static CompRect window_home(const Window *win) {
+    CompRect home = { win->x, win->y, win->w, win->h };
+    return home;
+}
+
+/* Hands the compositor the pose of the current frame, or none once at rest. */
+static void window_show_pose(Window *win, const WindowMotion *motion) {
+    if (!motion->active) {
+        comp_clear_window_pose(win);
+        return;
+    }
+    CompRect home = window_home(win);
+    MotionPose pose = window_motion_pose(motion, &home);
+    comp_set_window_pose(win, &pose.rect, pose.opacity);
+}
+
+static void window_start_motion(Window *win, WindowMotion *motion, const MotionPose *from,
+                                const MotionPose *to, int to_is_home, AnimTuning tuning) {
+    CompRect home = window_home(win);
+    window_motion_begin(motion, &home, from, to, to_is_home, tuning, motion_enabled());
+    window_show_pose(win, motion);
+}
+
+static CompRect dock_icon_rect(int kind) {
+    return motion_rect_collapsed(tb_icon_x(kind) + tb_icon_s() / 2, tb_y() + tb_icon_s() / 2, MINIMIZE_SIZE);
+}
+
+/* The window rests: no pose, the final style, and out of sight if minimized. */
+static void app_motion_settled(App *a) {
+    window_motion_finish(&a->motion);
+    comp_clear_window_pose(a->win);
+    if (a->minimized) a->win->visible = 0;
+    style_app_window(a->win, a->maximized);
+}
+
+/* A press on a window that is still moving takes it to where it is going, so
+   dragging and resizing work from its resting geometry. */
+static void app_settle_motion(App *a) {
+    if (a->win && a->motion.active) app_motion_settled(a);
+}
+
+static void launcher_motion_settled(void) {
+    window_motion_finish(&g_launcher_motion);
+    comp_clear_window_pose(g_launcher);
+    g_launcher->visible = spotlight_is_open();
+}
+
+/* The launcher fades and scales in and out instead of appearing. It stays
+   visible until the motion out has finished. */
+static void launcher_shown_changed(Window *win, int shown) {
+    CompRect home = window_home(win);
+    MotionPose rest = { home, MOTION_OPAQUE };
+    MotionPose away = { motion_rect_scaled(&home, LAUNCHER_SCALE), 0 };
+
+    if (shown) {
+        win->visible = 1;
+        window_start_motion(win, &g_launcher_motion, &away, &rest, 1, ANIM_TUNING_PANEL);
+        return;
+    }
+    window_start_motion(win, &g_launcher_motion, &rest, &away, 0, ANIM_TUNING_PANEL);
+    if (!g_launcher_motion.active) win->visible = 0;
+}
+
+/* Takes over the window of an app that is closing so it can fade out. Returns
+   0 when it cannot (no motion, nothing to see, no slot); the caller then
+   destroys the window. */
+static int ghost_adopt(App *a) {
+    Window *win = a->win;
+    if (!motion_enabled() || !win->visible || a->minimized) return 0;
+    Ghost *ghost = 0;
+    for (int i = 0; i < MAX_GHOSTS && !ghost; ++i)
+        if (!g_ghosts[i].used) ghost = &g_ghosts[i];
+    if (!ghost) return 0;
+
+    CompRect home = window_home(win);
+    MotionPose rest = { home, MOTION_OPAQUE };
+    MotionPose away = { motion_rect_scaled(&home, OPEN_SCALE), 0 };
+    ghost->used = 1;
+    ghost->win = win;
+    ghost->motion = a->motion;
+    window_start_motion(win, &ghost->motion, &rest, &away, 0, ANIM_TUNING_WINDOW);
+    return 1;
+}
+
+static void dock_init(void) {
+    for (int i = 0; i < DOCK_ITEMS; ++i) {
+        anim_spring_init(&g_dock[i].hover, 0, ANIM_TUNING_CONTROL);
+        anim_spring_init(&g_dock[i].shown, 0, ANIM_TUNING_CONTROL);
+        anim_spring_init(&g_dock[i].active, 0, ANIM_TUNING_CONTROL);
+    }
+}
+
+/* Points every dock spring at where its item should be: highlighted under the
+   pointer or while the launcher is open, marked while the app has windows. */
+static void dock_retarget(void) {
+    int hovered = -1;
+    if (g_my >= SH - TASKBAR_H) {
+        for (int i = 0; i < DOCK_ITEMS; ++i)
+            if (point_in_rect(g_mx, g_my, dock_icon_x(i), dock_icon_y(i), tb_icon_s(), tb_icon_s()))
+                hovered = i;
+    }
+    for (int i = 0; i < DOCK_ITEMS; ++i) {
+        int presence = i == 0 ? 0 : app_presence(i - 1);
+        int highlighted = i == hovered || (i == 0 && spotlight_is_open());
+        anim_spring_go(&g_dock[i].hover, highlighted ? ANIM_ONE : 0, motion_enabled());
+        anim_spring_go(&g_dock[i].shown, presence ? ANIM_ONE : 0, motion_enabled());
+        anim_spring_go(&g_dock[i].active, presence == 2 ? ANIM_ONE : 0, motion_enabled());
+    }
+}
+
+/* Repaints the dock items whose appearance changed. */
+static int dock_repaint(void) {
+    int repainted = 0;
+    for (int i = 0; i < DOCK_ITEMS; ++i) {
+        if (!dock_item_stale(i)) continue;
+        dock_item_refresh(i);
+        repainted = 1;
+    }
+    return repainted;
+}
+
+static int dock_moving(void) {
+    for (int i = 0; i < DOCK_ITEMS; ++i)
+        if (!anim_spring_settled(&g_dock[i].hover) || !anim_spring_settled(&g_dock[i].shown) ||
+            !anim_spring_settled(&g_dock[i].active))
+            return 1;
+    return 0;
+}
+
+static int motion_running(void) {
+    if (g_launcher_motion.active || dock_moving()) return 1;
+    for (int i = 0; i < MAX_GHOSTS; ++i)
+        if (g_ghosts[i].used) return 1;
+    for (int i = 0; i < MAX_APPS; ++i)
+        if (g_apps[i].used && g_apps[i].win && g_apps[i].motion.active) return 1;
+    return 0;
+}
+
+/* Lets elapsed_ms pass for every running motion and presents their new poses. */
+static void motion_advance(uint32_t elapsed_ms) {
+    for (int i = 0; i < MAX_APPS; ++i) {
+        App *a = &g_apps[i];
+        if (!a->used || !a->win || !a->motion.active) continue;
+        if (window_motion_advance(&a->motion, elapsed_ms)) window_show_pose(a->win, &a->motion);
+        else app_motion_settled(a);
+    }
+    for (int i = 0; i < MAX_GHOSTS; ++i) {
+        Ghost *ghost = &g_ghosts[i];
+        if (!ghost->used) continue;
+        if (window_motion_advance(&ghost->motion, elapsed_ms)) {
+            window_show_pose(ghost->win, &ghost->motion);
+        } else {
+            comp_destroy_window(ghost->win);
+            ghost->used = 0;
+        }
+    }
+    if (g_launcher_motion.active) {
+        if (window_motion_advance(&g_launcher_motion, elapsed_ms)) window_show_pose(g_launcher, &g_launcher_motion);
+        else launcher_motion_settled();
+    }
+    for (int i = 0; i < DOCK_ITEMS; ++i) {
+        anim_spring_advance(&g_dock[i].hover, elapsed_ms);
+        anim_spring_advance(&g_dock[i].shown, elapsed_ms);
+        anim_spring_advance(&g_dock[i].active, elapsed_ms);
+    }
+}
+
+/* One step of the motion clock per loop pass. Returns nonzero when something
+   was moved or repainted and the frame must be rendered. */
+static int motion_frame(void) {
+    uint32_t elapsed = anim_clock_advance(&g_motion_clock, time_ms());
+    dock_retarget();
+    int moved = 0;
+    if (motion_running()) {
+        /* The first pass of a motion has had no time to move yet. */
+        if (g_motion_running) g_motion_pending_ms += elapsed;
+        g_motion_running = 1;
+        if (g_motion_pending_ms >= MOTION_FRAME_MS) {
+            motion_advance(g_motion_pending_ms);
+            g_motion_pending_ms = 0;
+            moved = 1;
+        }
+    } else {
+        g_motion_running = 0;
+        g_motion_pending_ms = 0;
+    }
+    return dock_repaint() || moved;
+}
+
+/* Reduce motion was switched on: everything in flight lands where it was going. */
+static void motion_settle_all(void) {
+    for (int i = 0; i < MAX_APPS; ++i)
+        if (g_apps[i].used) app_settle_motion(&g_apps[i]);
+    for (int i = 0; i < MAX_GHOSTS; ++i) {
+        if (!g_ghosts[i].used) continue;
+        comp_destroy_window(g_ghosts[i].win);
+        g_ghosts[i].used = 0;
+    }
+    if (g_launcher_motion.active) launcher_motion_settled();
+    dock_retarget();
+}
+
 static void bring_to_front(App *a, int idx) {
     g_focus = idx;
     if (a->win) raise_app_window(a);
@@ -556,7 +860,15 @@ static void app_minimize(App *a) {
     a->minimized = 1;
     a->dragging = 0;
     a->resizing = 0;
-    if (a->win) a->win->visible = 0;
+    if (a->win) {
+        /* The window stays visible while it shrinks into its taskbar icon;
+           app_motion_settled() hides it. */
+        CompRect home = window_home(a->win);
+        MotionPose rest = { home, MOTION_OPAQUE };
+        MotionPose docked = { dock_icon_rect(a->kind), 0 };
+        window_start_motion(a->win, &a->motion, &rest, &docked, 0, ANIM_TUNING_WINDOW);
+        if (!a->motion.active) a->win->visible = 0;
+    }
     if (g_focus == app_index_of(a)) g_focus = topmost_app();
     refresh_focus_chrome();
     refresh_taskbar();
@@ -565,7 +877,13 @@ static void app_minimize(App *a) {
 static void app_restore(App *a) {
     if (!a->used || !a->minimized) return;
     a->minimized = 0;
-    if (a->win) a->win->visible = 1;
+    if (a->win) {
+        CompRect home = window_home(a->win);
+        MotionPose rest = { home, MOTION_OPAQUE };
+        MotionPose docked = { dock_icon_rect(a->kind), 0 };
+        a->win->visible = 1;
+        window_start_motion(a->win, &a->motion, &docked, &rest, 1, ANIM_TUNING_WINDOW);
+    }
     bring_to_front(a, app_index_of(a));
     refresh_taskbar();
 }
@@ -578,7 +896,7 @@ static void app_close(App *a) {
         a->term = 0;
     }
     if (a->win) {
-        comp_destroy_window(a->win);
+        if (!ghost_adopt(a)) comp_destroy_window(a->win);
         a->win = 0;
     }
     editor_destroy(a->editor);
@@ -610,6 +928,7 @@ static void style_app_window(Window *win, int maximized) {
 static void app_toggle_maximize(App *a) {
     Window *w = a->win;
     if (!w) return;
+    CompRect before = window_home(w);
     if (!a->maximized) {
         CompRect work = work_area();
         int rx = w->x, ry = w->y, rw = w->w, rh = w->h;
@@ -622,8 +941,14 @@ static void app_toggle_maximize(App *a) {
         w->x = a->rx; w->y = a->ry;
         a->maximized = 0;
     }
-    style_app_window(w, a->maximized);
+    /* The window keeps its floating look, corners and shadow, while it
+       travels; app_motion_settled() applies the final style. */
+    style_app_window(w, motion_enabled() ? 0 : a->maximized);
     draw_app_content(a);
+    CompRect home = window_home(w);
+    MotionPose from = { before, MOTION_OPAQUE };
+    MotionPose rest = { home, MOTION_OPAQUE };
+    window_start_motion(w, &a->motion, &from, &rest, 1, ANIM_TUNING_WINDOW);
 }
 
 /* Alt+Tab: focuses the next open window. */
@@ -732,6 +1057,12 @@ static int app_open_new(int kind) {
     }
 
     draw_app_content(a);
+    {
+        CompRect home = window_home(a->win);
+        MotionPose rest = { home, MOTION_OPAQUE };
+        MotionPose small = { motion_rect_scaled(&home, OPEN_SCALE), 0 };
+        window_start_motion(a->win, &a->motion, &small, &rest, 1, ANIM_TUNING_WINDOW);
+    }
     bring_to_front(a, idx);
     refresh_taskbar();
     return idx;
@@ -798,6 +1129,7 @@ static void apply_settings(void) {
     g_settings_save_failed = settings_save(SETTINGS_PATH, &g_settings) != 0;
     g_applied = g_settings;
     settings_palette(&g_settings, &g_th);
+    if ((changed & SETTINGS_CHANGED_MOTION) && g_settings.reduce_motion) motion_settle_all();
     redraw_session();
 }
 
@@ -908,7 +1240,7 @@ static void launcher_launch(int id) {
 
 static const SpotlightHost g_launcher_host = {
     g_launcher_apps, (int)(sizeof(g_launcher_apps) / sizeof(g_launcher_apps[0])),
-    launcher_draw_icon, launcher_launch,
+    launcher_draw_icon, launcher_launch, launcher_shown_changed,
 };
 
 static void handle_press(int mx, int my) {
@@ -942,6 +1274,7 @@ static void handle_press(int mx, int my) {
 
         /* resize handle: bottom-right 16x16 */
         if (!a->maximized && lx >= w->w - 16 && ly >= w->h - 16) {
+            app_settle_motion(a);
             a->resizing = 1;
             a->drag_ox = lx;
             a->drag_oy = ly;
@@ -969,6 +1302,7 @@ static void handle_press(int mx, int my) {
             if (twice) {
                 app_toggle_maximize(a);
             } else if (!a->maximized) {
+                app_settle_motion(a);
                 a->dragging = 1;
                 a->drag_ox = lx;
                 a->drag_oy = ly;
@@ -1110,6 +1444,7 @@ int main(void) {
         return 1;
     }
     settings_startup();
+    dock_init();
     g_bg = comp_create_window(0, 0, SW, SH);
     if (!g_bg || !g_bg->surface) return 1;
     g_bg->bg_color = COL_BG_TOP;
@@ -1224,6 +1559,8 @@ int main(void) {
             comp_damage_rect(g_bg, clock_x, TOPBAR_TEXT_Y, CLOCK_W + 4, 16);
             dirty = 1;
         }
+
+        if (motion_frame()) dirty = 1;
 
         if (dirty) {
             if (g_prev_mx >= 0) comp_damage_rect(g_bg, g_prev_mx, g_prev_my, 14, 17);

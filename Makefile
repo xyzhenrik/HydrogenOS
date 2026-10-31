@@ -228,6 +228,9 @@ USER_SHELLTEST_ELF = $(BUILD_DIR)/user_shelltest.elf
 USER_CRT0_OBJ = $(BUILD_DIR)/user_crt0.o
 USER_LIBC_OBJ = $(BUILD_DIR)/user_libc.o
 USER_WALLCLOCK_OBJ = $(BUILD_DIR)/user_wallclock.o
+USER_ANIM_OBJ = $(BUILD_DIR)/user_anim.o
+USER_WINDOW_MOTION_OBJ = $(BUILD_DIR)/user_window_motion.o
+USER_MOTION_OBJS = $(USER_ANIM_OBJ) $(USER_WINDOW_MOTION_OBJ)
 USER_SETTINGS_OBJ = $(BUILD_DIR)/user_settings.o
 USER_SETTINGS_INFO_OBJ = $(BUILD_DIR)/user_settings_info.o
 USER_SETTINGS_UI_OBJ = $(BUILD_DIR)/user_settings_ui.o
@@ -1153,7 +1156,7 @@ $(LOGO_SPLASH_HEADER): tools/mklogo.py $(LOGO_LIGHT_SOURCE) $(LOGO_DARK_SOURCE)
 	mkdir -p $(LOGO_GEN_DIR)
 	python3 tools/mklogo.py --light $(LOGO_LIGHT_SOURCE) --dark $(LOGO_DARK_SOURCE) --sizes 128,256 --gradients dark --out $@
 
-$(USER_DESKTOPDEMO_OBJ): userspace/desktopdemo/desktopdemo.c $(LOGO_UI_HEADER) userspace/desktopdemo/spotlight.h userspace/compositor/compositor.h userspace/lib/mini_libc.h userspace/lib/syscall.h userspace/lib/wallclock.h userspace/lib/settings.h userspace/lib/settings_ui.h userspace/lib/window_geometry.h userspace/lib/filemanager.h userspace/desktopdemo/app_terminal.h userspace/lib/terminal.h userspace/lib/iconset.h $(ICONSET_DATA_H)
+$(USER_DESKTOPDEMO_OBJ): userspace/desktopdemo/desktopdemo.c $(LOGO_UI_HEADER) userspace/desktopdemo/spotlight.h userspace/compositor/compositor.h userspace/lib/mini_libc.h userspace/lib/syscall.h userspace/lib/wallclock.h userspace/lib/settings.h userspace/lib/settings_ui.h userspace/lib/window_geometry.h userspace/lib/anim.h userspace/lib/window_motion.h userspace/lib/filemanager.h userspace/desktopdemo/app_terminal.h userspace/lib/terminal.h userspace/lib/iconset.h $(ICONSET_DATA_H)
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(USER_CFLAGS) -Iuserspace/compositor -Iuserspace/desktopdemo -I$(LOGO_GEN_DIR) -c $< -o $@
 
@@ -1169,8 +1172,8 @@ $(USER_SPOTLIGHT_OBJ): userspace/desktopdemo/spotlight.c userspace/desktopdemo/s
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(USER_CFLAGS) -Iuserspace/compositor -Iuserspace/desktopdemo -c $< -o $@
 
-$(USER_DESKTOPDEMO_ELF): $(USER_DESKTOPDEMO_OBJ) $(USER_LAUNCHER_OBJS) $(USER_APP_TERMINAL_OBJ) $(USER_TERMINAL_OBJ) $(USER_APP_EDITOR_OBJ) $(USER_EDITOR_LIB_OBJS) $(USER_COMPOSITOR_OBJ) $(USER_GFX_EFFECTS_OBJ) $(USER_DESKTOPTEST_THEME_OBJ) $(USER_DESKTOPTEST_FILEMANAGER_OBJ) $(USER_WALLCLOCK_OBJ) $(USER_SETTINGS_OBJS) $(USER_ICONSET_OBJS) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
-	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_DESKTOPDEMO_OBJ) $(USER_LAUNCHER_OBJS) $(USER_APP_TERMINAL_OBJ) $(USER_TERMINAL_OBJ) $(USER_APP_EDITOR_OBJ) $(USER_EDITOR_LIB_OBJS) $(USER_COMPOSITOR_OBJ) $(USER_GFX_EFFECTS_OBJ) $(USER_DESKTOPTEST_THEME_OBJ) $(USER_DESKTOPTEST_FILEMANAGER_OBJ) $(USER_WALLCLOCK_OBJ) $(USER_SETTINGS_OBJS) $(USER_ICONSET_OBJS)
+$(USER_DESKTOPDEMO_ELF): $(USER_DESKTOPDEMO_OBJ) $(USER_LAUNCHER_OBJS) $(USER_APP_TERMINAL_OBJ) $(USER_TERMINAL_OBJ) $(USER_APP_EDITOR_OBJ) $(USER_EDITOR_LIB_OBJS) $(USER_COMPOSITOR_OBJ) $(USER_GFX_EFFECTS_OBJ) $(USER_DESKTOPTEST_THEME_OBJ) $(USER_DESKTOPTEST_FILEMANAGER_OBJ) $(USER_WALLCLOCK_OBJ) $(USER_SETTINGS_OBJS) $(USER_ICONSET_OBJS) $(USER_MOTION_OBJS) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
+	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_DESKTOPDEMO_OBJ) $(USER_LAUNCHER_OBJS) $(USER_APP_TERMINAL_OBJ) $(USER_TERMINAL_OBJ) $(USER_APP_EDITOR_OBJ) $(USER_EDITOR_LIB_OBJS) $(USER_COMPOSITOR_OBJ) $(USER_GFX_EFFECTS_OBJ) $(USER_DESKTOPTEST_THEME_OBJ) $(USER_DESKTOPTEST_FILEMANAGER_OBJ) $(USER_WALLCLOCK_OBJ) $(USER_SETTINGS_OBJS) $(USER_ICONSET_OBJS) $(USER_MOTION_OBJS)
 
 $(USER_APP_EDITOR_OBJ): userspace/desktopdemo/app_editor.c
 	mkdir -p $(BUILD_DIR)
@@ -1203,7 +1206,7 @@ $(USER_EDITORTEST_OBJ): userspace/editortest/editortest.c
 $(USER_EDITORTEST_ELF): $(USER_EDITORTEST_OBJ) $(USER_EDITOR_LIB_OBJS) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
 	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_EDITORTEST_OBJ) $(USER_EDITOR_LIB_OBJS)
 
-$(USER_DESKTOPTEST_OBJ): userspace/desktoptest/desktoptest.c userspace/compositor/compositor.h userspace/lib/gfx_effects.h userspace/lib/mini_libc.h userspace/lib/widgets.h userspace/lib/layout.h userspace/lib/theme.h userspace/lib/taskbar.h userspace/lib/launcher.h userspace/lib/filemanager.h userspace/lib/settings.h userspace/lib/settings_info.h userspace/lib/settings_ui.h userspace/lib/window_geometry.h userspace/lib/iconset.h $(ICONSET_DATA_H)
+$(USER_DESKTOPTEST_OBJ): userspace/desktoptest/desktoptest.c userspace/compositor/compositor.h userspace/lib/gfx_effects.h userspace/lib/mini_libc.h userspace/lib/widgets.h userspace/lib/layout.h userspace/lib/theme.h userspace/lib/taskbar.h userspace/lib/launcher.h userspace/lib/filemanager.h userspace/lib/settings.h userspace/lib/settings_info.h userspace/lib/settings_ui.h userspace/lib/window_geometry.h userspace/lib/anim.h userspace/lib/window_motion.h userspace/lib/iconset.h $(ICONSET_DATA_H)
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(USER_CFLAGS) -Iuserspace/compositor -c $< -o $@
 
@@ -1231,8 +1234,8 @@ $(USER_DESKTOPTEST_FILEMANAGER_OBJ): userspace/lib/filemanager.c userspace/lib/f
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(USER_CFLAGS) -Iuserspace/compositor -c $< -o $@
 
-$(USER_DESKTOPTEST_ELF): $(USER_DESKTOPTEST_OBJ) $(USER_COMPOSITOR_OBJ) $(USER_GFX_EFFECTS_OBJ) $(USER_DESKTOPTEST_WIDGETS_OBJ) $(USER_DESKTOPTEST_LAYOUT_OBJ) $(USER_DESKTOPTEST_THEME_OBJ) $(USER_DESKTOPTEST_TASKBAR_OBJ) $(USER_DESKTOPTEST_LAUNCHER_OBJ) $(USER_DESKTOPTEST_FILEMANAGER_OBJ) $(USER_WALLCLOCK_OBJ) $(USER_SETTINGS_OBJS) $(USER_ICONSET_OBJS) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
-	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_DESKTOPTEST_OBJ) $(USER_COMPOSITOR_OBJ) $(USER_GFX_EFFECTS_OBJ) $(USER_DESKTOPTEST_WIDGETS_OBJ) $(USER_DESKTOPTEST_LAYOUT_OBJ) $(USER_DESKTOPTEST_THEME_OBJ) $(USER_DESKTOPTEST_TASKBAR_OBJ) $(USER_DESKTOPTEST_LAUNCHER_OBJ) $(USER_DESKTOPTEST_FILEMANAGER_OBJ) $(USER_WALLCLOCK_OBJ) $(USER_SETTINGS_OBJS) $(USER_ICONSET_OBJS)
+$(USER_DESKTOPTEST_ELF): $(USER_DESKTOPTEST_OBJ) $(USER_COMPOSITOR_OBJ) $(USER_GFX_EFFECTS_OBJ) $(USER_DESKTOPTEST_WIDGETS_OBJ) $(USER_DESKTOPTEST_LAYOUT_OBJ) $(USER_DESKTOPTEST_THEME_OBJ) $(USER_DESKTOPTEST_TASKBAR_OBJ) $(USER_DESKTOPTEST_LAUNCHER_OBJ) $(USER_DESKTOPTEST_FILEMANAGER_OBJ) $(USER_WALLCLOCK_OBJ) $(USER_SETTINGS_OBJS) $(USER_ICONSET_OBJS) $(USER_MOTION_OBJS) $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) userspace/hello/linker.ld
+	$(LD) $(USER_LDFLAGS) -o $@ $(USER_CRT0_OBJ) $(USER_LIBC_OBJ) $(USER_DESKTOPTEST_OBJ) $(USER_COMPOSITOR_OBJ) $(USER_GFX_EFFECTS_OBJ) $(USER_DESKTOPTEST_WIDGETS_OBJ) $(USER_DESKTOPTEST_LAYOUT_OBJ) $(USER_DESKTOPTEST_THEME_OBJ) $(USER_DESKTOPTEST_TASKBAR_OBJ) $(USER_DESKTOPTEST_LAUNCHER_OBJ) $(USER_DESKTOPTEST_FILEMANAGER_OBJ) $(USER_WALLCLOCK_OBJ) $(USER_SETTINGS_OBJS) $(USER_ICONSET_OBJS) $(USER_MOTION_OBJS)
 
 $(USER_SETTINGS_OBJ): userspace/lib/settings.c userspace/lib/settings.h userspace/lib/syscall.h userspace/lib/mini_libc.h
 	mkdir -p $(BUILD_DIR)
@@ -1264,6 +1267,14 @@ $(USER_CRT0_OBJ): userspace/lib/crt0.S
 $(USER_LIBC_CORE_OBJ): userspace/lib/mini_libc.c userspace/lib/mini_libc.h userspace/lib/syscall.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(USER_ANIM_OBJ): userspace/lib/anim.c userspace/lib/anim.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -c $< -o $@
+
+$(USER_WINDOW_MOTION_OBJ): userspace/lib/window_motion.c userspace/lib/window_motion.h userspace/lib/anim.h userspace/compositor/compositor.h
+	mkdir -p $(BUILD_DIR)
+	$(CC) $(USER_CFLAGS) -Iuserspace/compositor -c $< -o $@
 
 $(USER_WALLCLOCK_OBJ): userspace/lib/wallclock.c userspace/lib/wallclock.h userspace/lib/syscall.h
 	mkdir -p $(BUILD_DIR)

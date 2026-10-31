@@ -518,6 +518,15 @@ int spotlight_is_open(void) {
     return g.open;
 }
 
+static void set_shown(int shown) {
+    if (g.host->shown_changed) {
+        g.host->shown_changed(g.window, shown);
+        return;
+    }
+    g.window->visible = shown;
+    if (!shown) comp_damage_window(g.window);
+}
+
 void spotlight_open(void) {
     if (g.open) return;
     g.open = 1;
@@ -529,15 +538,14 @@ void spotlight_open(void) {
     rebuild_items();
     g.selected = first_selection();
     draw();
-    g.window->visible = 1;
     comp_raise(g.window);
+    set_shown(1);
 }
 
 void spotlight_close(void) {
     if (!g.open) return;
     g.open = 0;
-    g.window->visible = 0;
-    comp_damage_window(g.window);
+    set_shown(0);
 }
 
 void spotlight_redraw(void) {
