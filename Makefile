@@ -274,9 +274,11 @@ OBJS = $(BUILD_DIR)/boot.o $(BUILD_DIR)/kernel.o $(BUILD_DIR)/console.o $(BUILD_
 OBJS += $(BUILD_DIR)/perf.o
 OBJS += $(BUILD_DIR)/kmsg.o $(BUILD_DIR)/crash.o $(BUILD_DIR)/oom.o $(BUILD_DIR)/meminfo.o
 OBJS += $(USER_HELLO_BINOBJ) $(USER_ECHO_BINOBJ) $(USER_CAT_BINOBJ) $(USER_TIME_BINOBJ) $(USER_SLEEP_BINOBJ)
-RUN_DEPS = $(ISO)
+RUN_DEPS = $(KERNEL32) $(INITRD) $(DISK_IMG)
 BUILD_DEPS = $(KERNEL_BIN) $(INITRD) $(DISK_IMG)
-RUN_CMD = qemu-system-x86_64 -cdrom $(ISO) -m 512M -vga std -serial stdio -netdev user,id=n0 -device virtio-net-pci,netdev=n0 -device virtio-tablet-pci
+RUN_COMMON = -m 512M -vga std -serial stdio -netdev user,id=n0 -device virtio-net-pci,netdev=n0 -device virtio-tablet-pci
+RUN_CMD = qemu-system-x86_64 -kernel $(KERNEL32) -initrd $(INITRD) -drive if=virtio,format=raw,file=$(DISK_IMG) $(RUN_COMMON)
+RUN_ISO_CMD = qemu-system-x86_64 -cdrom $(ISO) -drive if=virtio,format=raw,file=$(DISK_IMG) $(RUN_COMMON)
 ISO_DEPS = $(KERNEL_BIN) $(GRUB_CFG) $(INITRD)
 else
 CFLAGS = $(CFLAGS_BASE) -m32 -mno-red-zone
@@ -330,7 +332,7 @@ endif
 
 -include $(wildcard $(BUILD_DIR)/*.d)
 
-.PHONY: all clean iso build run smoke kernel32
+.PHONY: all clean iso build run run-iso smoke kernel32
 
 all: build
 build: $(BUILD_DEPS)
@@ -1480,6 +1482,9 @@ $(KERNEL32): $(KERNEL_BIN)
 
 run: $(RUN_DEPS)
 	$(RUN_CMD)
+
+run-iso: $(ISO) $(DISK_IMG)
+	$(RUN_ISO_CMD)
 
 smoke:
 	tools/boot_smoke.sh
