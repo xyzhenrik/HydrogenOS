@@ -1,4 +1,5 @@
 #include "mini_libc.h"
+#include "anim.h"
 #include "compositor.h"
 #include "gfx_effects.h"
 #include "iconset.h"
@@ -13,6 +14,7 @@
 #include "launcher.h"
 #include "filemanager.h"
 #include "window_geometry.h"
+#include "window_motion.h"
 
 #define TEST_SURFACE_W 320
 #define TEST_SURFACE_H 200
@@ -1174,11 +1176,427 @@ static const char *test_window_damage(void) {
     return 0;
 }
 
+/* ---------------- animation engine ---------------- */
+
+static AnimValue abs_value(AnimValue value) {
+    return value < 0 ? -value : value;
+}
+
+/* Runs a spring from 0 to 1.0 in frames of frame_ms. Returns the time it took
+   to settle, or -1 if the value ever fell or passed the target, or the spring
+   never settled within five seconds. */
+static int spring_settle_time(uint32_t frame_ms) {
+    AnimSpring spring;
+    AnimValue previous = 0;
+
+    anim_spring_init(&spring, 0, ANIM_TUNING_WINDOW);
+    anim_spring_go(&spring, ANIM_ONE, 1);
+    for (uint32_t elapsed = 0; elapsed < 5000; elapsed += frame_ms) {
+        int moving = anim_spring_advance(&spring, frame_ms);
+        if (spring.value < previous || spring.value > ANIM_ONE) {
+            return -1;
+        }
+        previous = spring.value;
+        if (!moving) {
+            return spring.value == ANIM_ONE && anim_spring_settled(&spring) ? (int)(elapsed + frame_ms) : -1;
+        }
+    }
+    return -1;
+}
+
+static const char *test_anim_engine(void) {
+    static const uint32_t frames[] = { 1, 4, 7, 16, 33, 100 };
+    AnimSpring spring;
+    AnimSpring other;
+    AnimClock clock = { 0, 0 };
+
+    /* A spring released from rest rises monotonically and lands exactly on its
+       target, at every frame rate, in about the same time. */
+    for (unsigned i = 0; i < sizeof(frames) / sizeof(frames[0]); ++i) {
+        int settled = spring_settle_time(frames[i]);
+        if (settled < 0) {
+            return "anim monotonic convergence";
+        }
+        if (settled < 150 || settled > 700) {
+            return "anim settle time";
+        }
+    }
+
+    /* The result does not depend on how the time is cut into frames. */
+    anim_spring_init(&spring, 0, ANIM_TUNING_WINDOW);
+    anim_spring_init(&other, 0, ANIM_TUNING_WINDOW);
+    anim_spring_go(&spring, ANIM_ONE, 1);
+    anim_spring_go(&other, ANIM_ONE, 1);
+    anim_spring_advance(&spring, 120);
+    for (int i = 0; i < 15; ++i) {
+        anim_spring_advance(&other, 8);
+    }
+    if (abs_value(spring.value - other.value) > ANIM_ONE / 200 || spring.value <= 0 ||
+        spring.value >= ANIM_ONE) {
+        return "anim frame independence";
+    }
+    /* Time that does not fill a sub-step is carried over, not lost. */
+    anim_spring_init(&other, 0, ANIM_TUNING_WINDOW);
+    anim_spring_go(&other, ANIM_ONE, 1);
+    for (int i = 0; i < 120; ++i) {
+        anim_spring_advance(&other, 1);
+    }
+    if (other.value != spring.value) {
+        return "anim sub-step remainder";
+    }
+
+    /* Retargeting midway keeps the position and the velocity, so the motion
+       turns around smoothly instead of jumping. */
+    anim_spring_init(&spring, 0, ANIM_TUNING_WINDOW);
+    anim_spring_go(&spring, ANIM_ONE, 1);
+    anim_spring_advance(&spring, 60);
+    AnimValue at_turn = spring.value;
+    int32_t speed_at_turn = spring.velocity;
+    if (at_turn <= 0 || at_turn >= ANIM_ONE || speed_at_turn <= 0) {
+        return "anim retarget setup";
+    }
+    anim_spring_go(&spring, 0, 1);
+    if (spring.value != at_turn || spring.velocity != speed_at_turn || spring.target != 0) {
+        return "anim retarget continuity";
+    }
+    AnimValue last = spring.value;
+    for (int i = 0; i < 600; ++i) {
+        anim_spring_advance(&spring, 8);
+        if (abs_value(spring.value - last) > ANIM_ONE / 8) {
+            return "anim retarget jump";
+        }
+        last = spring.value;
+    }
+    if (spring.value != 0 || !anim_spring_settled(&spring) || anim_spring_advance(&spring, 16) != 0) {
+        return "anim retarget settle";
+    }
+
+    /* A spring that is already at rest stays put. */
+    anim_spring_snap(&spring, ANIM_ONE);
+    if (anim_spring_advance(&spring, 50) != 0 || spring.value != ANIM_ONE || spring.velocity != 0) {
+        return "anim rest";
+    }
+
+    /* A stalled frame does not fast-forward past the clamp. */
+    anim_spring_init(&spring, 0, ANIM_TUNING_WINDOW);
+    anim_spring_go(&spring, ANIM_ONE, 1);
+    anim_spring_init(&other, 0, ANIM_TUNING_WINDOW);
+    anim_spring_go(&other, ANIM_ONE, 1);
+    anim_spring_advance(&spring, 60000);
+    anim_spring_advance(&other, ANIM_MAX_ELAPSED_MS);
+    if (spring.value != other.value) {
+        return "anim elapsed clamp";
+    }
+
+    /* Reduce motion: the target is reached at once, without any frames. */
+    anim_spring_init(&spring, 0, ANIM_TUNING_WINDOW);
+    anim_spring_go(&spring, ANIM_ONE, 0);
+    if (spring.value != ANIM_ONE || !anim_spring_settled(&spring) || anim_spring_advance(&spring, 16) != 0) {
+        return "anim reduce motion";
+    }
+    anim_spring_go(&spring, 0, 1);
+    anim_spring_go(&spring, ANIM_ONE / 2, 0);
+    if (spring.value != ANIM_ONE / 2 || spring.velocity != 0) {
+        return "anim reduce motion cancels";
+    }
+
+    if (anim_lerp(100, 300, ANIM_ONE / 2) != 200 || anim_lerp(100, 300, 0) != 100 ||
+        anim_lerp(100, 300, ANIM_ONE) != 300 || anim_round(3 * ANIM_ONE + ANIM_ONE / 2) != 4 ||
+        anim_round(-ANIM_ONE / 4) != 0 || anim_clamp_unit(-5) != 0 ||
+        anim_clamp_unit(2 * ANIM_ONE) != ANIM_ONE || anim_clamp_unit(ANIM_ONE / 3) != ANIM_ONE / 3) {
+        return "anim arithmetic";
+    }
+
+    if (anim_clock_advance(&clock, 5000) != 0 || anim_clock_advance(&clock, 5016) != 16 ||
+        anim_clock_advance(&clock, 5016) != 0 || anim_clock_advance(&clock, 4000) != 0 ||
+        anim_clock_advance(&clock, 4010) != 10 ||
+        anim_clock_advance(&clock, 99999) != ANIM_MAX_ELAPSED_MS) {
+        return "anim clock";
+    }
+    return 0;
+}
+
+/* ---------------- window motion ---------------- */
+
+static int pose_is(const MotionPose *pose, const CompRect *rect, unsigned int opacity) {
+    return rect_is(*rect, pose->rect.x, pose->rect.y, pose->rect.w, pose->rect.h) &&
+           pose->opacity == opacity;
+}
+
+static const char *test_window_motion(void) {
+    WindowMotion motion;
+    CompRect home = { 100, 80, 400, 300 };
+    MotionPose hidden = { motion_rect_scaled(&home, ANIM_ONE * 92 / 100), 0 };
+    MotionPose rest = { home, MOTION_OPAQUE };
+    CompRect half = motion_rect_scaled(&home, ANIM_ONE / 2);
+    CompRect dot = motion_rect_collapsed(60, 700, 32);
+    CompRect opened = { 116, 92, 368, 276 };
+    MotionPose pose;
+
+    if (!rect_is(half, 200, 155, 200, 150) || !rect_is(dot, 44, 684, 32, 32) ||
+        motion_rect_scaled(&home, 0).w != 1) {
+        return "motion rects";
+    }
+    if (!rect_is(hidden.rect, opened.x, opened.y, opened.w, opened.h)) {
+        return "motion open pose";
+    }
+
+    memset(&motion, 0, sizeof(motion));
+    /* With motion off nothing starts. */
+    window_motion_begin(&motion, &home, &hidden, &rest, 1, ANIM_TUNING_WINDOW, 0);
+    pose = window_motion_pose(&motion, &home);
+    if (motion.active || window_motion_advance(&motion, 16) != 0 || !pose_is(&pose, &home, 255)) {
+        return "motion reduced";
+    }
+
+    window_motion_begin(&motion, &home, &hidden, &rest, 1, ANIM_TUNING_WINDOW, 1);
+    pose = window_motion_pose(&motion, &home);
+    if (!motion.active || !pose_is(&pose, &opened, 0)) {
+        return "motion begins at the start pose";
+    }
+    /* Opacity and size rise monotonically and land exactly on the end pose. */
+    unsigned int opacity = 0;
+    int width = pose.rect.w;
+    int frames = 0;
+    while (window_motion_advance(&motion, 16)) {
+        pose = window_motion_pose(&motion, &home);
+        if (pose.opacity < opacity || pose.rect.w < width || pose.opacity > 255 || pose.rect.w > home.w) {
+            return "motion monotonic";
+        }
+        opacity = pose.opacity;
+        width = pose.rect.w;
+        if (++frames > 100) {
+            return "motion never settles";
+        }
+    }
+    pose = window_motion_pose(&motion, &home);
+    if (motion.active || !pose_is(&pose, &home, 255)) {
+        return "motion lands on the end pose";
+    }
+
+    /* The end pose follows the window when it moves meanwhile. */
+    CompRect moved = { 300, 200, 400, 300 };
+    window_motion_begin(&motion, &home, &hidden, &rest, 1, ANIM_TUNING_WINDOW, 1);
+    window_motion_advance(&motion, 16);
+    while (window_motion_advance(&motion, 16)) {
+    }
+    pose = window_motion_pose(&motion, &moved);
+    if (!pose_is(&pose, &moved, 255)) {
+        return "motion follows the window";
+    }
+
+    /* Retargeting midway (close during the opening) starts from the pose
+       reached, not from the old start pose. */
+    window_motion_begin(&motion, &home, &hidden, &rest, 1, ANIM_TUNING_WINDOW, 1);
+    for (int i = 0; i < 4; ++i) {
+        window_motion_advance(&motion, 16);
+    }
+    MotionPose midway = window_motion_pose(&motion, &home);
+    if (midway.opacity == 0 || midway.opacity == 255) {
+        return "motion retarget setup";
+    }
+    MotionPose gone = { hidden.rect, 0 };
+    window_motion_begin(&motion, &home, &rest, &gone, 0, ANIM_TUNING_WINDOW, 1);
+    pose = window_motion_pose(&motion, &home);
+    if (!pose_is(&pose, &midway.rect, midway.opacity)) {
+        return "motion retarget continuity";
+    }
+    while (window_motion_advance(&motion, 16)) {
+    }
+    pose = window_motion_pose(&motion, &home);
+    if (!pose_is(&pose, &hidden.rect, 0)) {
+        return "motion retarget lands";
+    }
+
+    window_motion_begin(&motion, &home, &hidden, &rest, 1, ANIM_TUNING_WINDOW, 1);
+    window_motion_finish(&motion);
+    pose = window_motion_pose(&motion, &home);
+    if (motion.active || !pose_is(&pose, &home, 255)) {
+        return "motion finish";
+    }
+    return 0;
+}
+
+/* ---------------- posed windows ---------------- */
+
+static int near_color(uint32_t pixel, uint32_t expected, int tolerance) {
+    for (int shift = 0; shift <= 16; shift += 8) {
+        int difference = (int)((pixel >> shift) & 0xFFu) - (int)((expected >> shift) & 0xFFu);
+        if (difference > tolerance || difference < -tolerance) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+static const char *test_window_pose(void) {
+    const uint32_t card_color = 0x00E8ECF0u;
+    const uint32_t backdrop = 0x00304050u;
+    const uint32_t halfway = 0x008C96A0u;
+    Window *bg;
+    Window *card;
+    Window *glass;
+    CompWindowStyle style;
+    uint32_t *front_copy;
+    uint32_t *back_copy;
+    uint32_t *reference;
+    const uint32_t *front;
+    const char *failure;
+
+    front_copy = (uint32_t *)malloc(SCENE_PIXELS * sizeof(uint32_t));
+    back_copy = (uint32_t *)malloc(SCENE_PIXELS * sizeof(uint32_t));
+    reference = (uint32_t *)malloc(SCENE_PIXELS * sizeof(uint32_t));
+    if (!front_copy || !back_copy || !reference) {
+        return "pose memory";
+    }
+    if (quiet_stdout_begin() != 0) {
+        return "stdout guard";
+    }
+    if (comp_init_size(TEST_SURFACE_W, TEST_SURFACE_H) != 0) {
+        quiet_stdout_end();
+        return "pose init";
+    }
+    if (quiet_stdout_end() != 0) {
+        return "stdout restore";
+    }
+    bg = comp_create_window(0, 0, TEST_SURFACE_W, TEST_SURFACE_H);
+    card = comp_create_window(100, 50, 120, 80);
+    glass = comp_create_window(0, TEST_SURFACE_H - 40, TEST_SURFACE_W, 40);
+    if (!bg || !card || !glass) {
+        return "pose windows";
+    }
+    scene_fill(bg, 0, 0, TEST_SURFACE_W, TEST_SURFACE_H, backdrop);
+    scene_fill(card, 0, 0, 120, 80, card_color);
+    scene_fill(glass, 0, 0, TEST_SURFACE_W, 40, 0x00000000u);
+    comp_style_window(&style);
+    comp_set_window_style(card, &style);
+    comp_style_glass(&style);
+    comp_set_window_style(glass, &style);
+
+    comp_damage_all();
+    failure = frame_check_buffers(front_copy, back_copy, "pose baseline");
+    if (failure) {
+        return failure;
+    }
+    memcpy(reference, comp_front_buffer(), SCENE_PIXELS * sizeof(uint32_t));
+
+    /* A pose that changes nothing is invisible. */
+    CompRect same = { 100, 50, 120, 80 };
+    CompRect empty = { 0, 0, 0, 10 };
+    if (comp_set_window_pose(card, &same, 255) != 0) {
+        return "pose identity";
+    }
+    if (comp_render() != 0 || memcmp(reference, comp_front_buffer(), SCENE_PIXELS * sizeof(uint32_t)) != 0) {
+        return "pose identity frame";
+    }
+    if (comp_set_window_pose(card, &empty, 255) == 0 || comp_set_window_pose(0, &same, 255) == 0) {
+        return "pose validation";
+    }
+
+    /* Scaled and half transparent: the window shows inside the pose rectangle,
+       blended with what lies behind, and nowhere else. */
+    CompRect small = { 130, 70, 60, 40 };
+    if (comp_set_window_pose(card, &small, 128) != 0) {
+        return "pose set";
+    }
+    failure = frame_check_buffers(front_copy, back_copy, "pose scaled damage");
+    if (failure) {
+        return failure;
+    }
+    front = comp_front_buffer();
+    if (!near_color(front[90 * TEST_SURFACE_W + 160], halfway, 3)) {
+        return "pose opacity blend";
+    }
+    if (near_color(front[60 * TEST_SURFACE_W + 110], card_color, 24) ||
+        front[10 * TEST_SURFACE_W + 10] != backdrop) {
+        return "pose outside rectangle";
+    }
+
+    /* Every step of an animation repaints exactly what it changed. */
+    for (int step = 0; step <= 8; ++step) {
+        CompRect pose = { 130 - step * 3, 70 - step * 2, 60 + step * 7, 40 + step * 5 };
+        if (comp_set_window_pose(card, &pose, (unsigned int)(128 + step * 15)) != 0) {
+            return "pose step";
+        }
+        failure = frame_check_buffers(front_copy, back_copy, "pose step damage");
+        if (failure) {
+            return failure;
+        }
+    }
+
+    /* Fading out completely hides the window and its shadow. */
+    if (comp_set_window_pose(card, &small, 0) != 0) {
+        return "pose fade out";
+    }
+    failure = frame_check_buffers(front_copy, back_copy, "pose faded damage");
+    if (failure) {
+        return failure;
+    }
+    front = comp_front_buffer();
+    for (int y = 0; y < TEST_SURFACE_H - 40; ++y) {
+        for (int x = 0; x < TEST_SURFACE_W; ++x) {
+            if (front[y * TEST_SURFACE_W + x] != backdrop) {
+                return "pose faded leaves pixels";
+            }
+        }
+    }
+
+    /* Clearing the pose restores the exact frame from before: no stale pixels,
+       no shadow remnants. */
+    comp_clear_window_pose(card);
+    failure = frame_check_buffers(front_copy, back_copy, "pose clear damage");
+    if (failure) {
+        return failure;
+    }
+    if (memcmp(reference, comp_front_buffer(), SCENE_PIXELS * sizeof(uint32_t)) != 0) {
+        return "pose clear restores the frame";
+    }
+
+    /* A pose can also take a window across the screen and under the glass. */
+    CompRect travel = { 150, TEST_SURFACE_H - 50, 32, 32 };
+    if (comp_set_window_pose(card, &travel, 200) != 0) {
+        return "pose travel";
+    }
+    failure = frame_check_buffers(front_copy, back_copy, "pose travel damage");
+    if (failure) {
+        return failure;
+    }
+    comp_clear_window_pose(card);
+
+    /* Glass can be posed too: the panel fades and shrinks as a whole. */
+    CompRect panel = { 20, TEST_SURFACE_H - 36, TEST_SURFACE_W - 40, 32 };
+    if (comp_set_window_pose(glass, &panel, 160) != 0) {
+        return "pose glass";
+    }
+    failure = frame_check_buffers(front_copy, back_copy, "pose glass damage");
+    if (failure) {
+        return failure;
+    }
+    comp_clear_window_pose(glass);
+    failure = frame_check_buffers(front_copy, back_copy, "pose glass clear damage");
+    if (failure) {
+        return failure;
+    }
+    if (memcmp(reference, comp_front_buffer(), SCENE_PIXELS * sizeof(uint32_t)) != 0) {
+        return "pose glass clear restores the frame";
+    }
+
+    if (comp_destroy_window(glass) != 0 || comp_destroy_window(card) != 0 ||
+        comp_destroy_window(bg) != 0 || comp_window_count() != 0) {
+        return "pose destroy";
+    }
+    free(front_copy);
+    free(back_copy);
+    free(reference);
+    return 0;
+}
+
 /* ---------------- settings model, palette and Settings app ---------------- */
 
 #define SETTINGS_TEST_PATH "/tmp/settings_test.conf"
 #define SETTINGS_TEST_CANONICAL \
-    "# HydrogenOS desktop settings\ntheme=dark\naccent=blue\nglass=on\nlayout=de\n"
+    "# HydrogenOS desktop settings\ntheme=dark\naccent=blue\nglass=on\nlayout=de\n" \
+    "reduce_motion=off\n"
 
 static int text_equals(const char *a, const char *b) {
     while (*a && *a == *b) {
@@ -1190,7 +1608,8 @@ static int text_equals(const char *a, const char *b) {
 
 static int settings_equal(const Settings *a, const Settings *b) {
     return a->theme == b->theme && a->accent == b->accent &&
-           a->glass == b->glass && a->layout == b->layout;
+           a->glass == b->glass && a->layout == b->layout &&
+           a->reduce_motion == b->reduce_motion;
 }
 
 static int luma(uint32_t rgb) {
@@ -1211,7 +1630,7 @@ static const char *test_settings_model(void) {
 
     settings_defaults(&settings);
     if (!settings_valid(&settings) || settings.theme != SETTINGS_THEME_DARK ||
-        settings.glass != 1 || settings.layout != SETTINGS_LAYOUT_DE) {
+        settings.glass != 1 || settings.layout != SETTINGS_LAYOUT_DE || settings.reduce_motion != 0) {
         return "settings defaults";
     }
     written = settings_serialize(&settings, text, sizeof(text));
@@ -1224,23 +1643,27 @@ static const char *test_settings_model(void) {
         for (int accent = 0; accent < SETTINGS_ACCENT_COUNT; ++accent) {
             for (int glass = 0; glass < 2; ++glass) {
                 for (int layout = 0; layout < 2; ++layout) {
-                    settings.theme = theme;
-                    settings.accent = accent;
-                    settings.glass = glass;
-                    settings.layout = layout;
-                    written = settings_serialize(&settings, text, sizeof(text));
-                    if (written <= 0 || written >= (int)sizeof(text)) {
-                        return "settings serialize combo";
-                    }
-                    /* Start from the opposite of every field so a missing
-                       assignment cannot pass as a match. */
-                    parsed.theme = !theme;
-                    parsed.accent = (accent + 1) % SETTINGS_ACCENT_COUNT;
-                    parsed.glass = !glass;
-                    parsed.layout = !layout;
-                    if (settings_parse(&parsed, text, (size_t)written) != 4 ||
-                        !settings_equal(&settings, &parsed)) {
-                        return "settings round trip";
+                    for (int motion = 0; motion < 2; ++motion) {
+                        settings.theme = theme;
+                        settings.accent = accent;
+                        settings.glass = glass;
+                        settings.layout = layout;
+                        settings.reduce_motion = motion;
+                        written = settings_serialize(&settings, text, sizeof(text));
+                        if (written <= 0 || written >= (int)sizeof(text)) {
+                            return "settings serialize combo";
+                        }
+                        /* Start from the opposite of every field so a missing
+                           assignment cannot pass as a match. */
+                        parsed.theme = !theme;
+                        parsed.accent = (accent + 1) % SETTINGS_ACCENT_COUNT;
+                        parsed.glass = !glass;
+                        parsed.layout = !layout;
+                        parsed.reduce_motion = !motion;
+                        if (settings_parse(&parsed, text, (size_t)written) != 5 ||
+                            !settings_equal(&settings, &parsed)) {
+                            return "settings round trip";
+                        }
                     }
                 }
             }
@@ -1316,6 +1739,11 @@ static const char *test_settings_diff(void) {
     after.layout = SETTINGS_LAYOUT_US;
     if (settings_diff(&before, &after) != (SETTINGS_CHANGED_GLASS | SETTINGS_CHANGED_LAYOUT)) {
         return "settings diff glass layout";
+    }
+    after = before;
+    after.reduce_motion = 1;
+    if (settings_diff(&before, &after) != SETTINGS_CHANGED_MOTION) {
+        return "settings diff motion";
     }
     return 0;
 }
@@ -1438,7 +1866,7 @@ static const char *test_settings_persistence(void) {
     } else {
         text[got] = '\0';
         if (!text_equals(text, "# HydrogenOS desktop settings\ntheme=light\naccent=orange\n"
-                               "glass=off\nlayout=us\n")) {
+                               "glass=off\nlayout=us\nreduce_motion=off\n")) {
             failure = "settings file content";
         }
     }
@@ -1648,6 +2076,11 @@ static const char *check_section_layout(const SettingsUiLayout *layout, int sect
             rect_center_hit(layout, &layout->glass_switch) != SETTINGS_HIT_GLASS) {
             return "settings layout glass switch";
         }
+        if (!rect_inside(&layout->cards[2], &layout->motion_switch) ||
+            rect_center_hit(layout, &layout->motion_switch) != SETTINGS_HIT_MOTION ||
+            layout->motion_switch.y < layout->glass_switch.y + layout->glass_switch.h) {
+            return "settings layout motion switch";
+        }
         break;
     case SETTINGS_SECTION_KEYBOARD:
         if (layout->card_count != 1 || !rects_disjoint(layout->layout_row, 2)) {
@@ -1754,6 +2187,14 @@ static const char *test_settings_ui_events(void) {
     result = settings_ui_click(&ui, &win, layout.glass_switch.x + 3, layout.glass_switch.y + 3);
     if (!(result & SETTINGS_UI_CHANGED) || settings.glass != 1) {
         return "settings ui glass on";
+    }
+    result = settings_ui_click(&ui, &win, layout.motion_switch.x + 3, layout.motion_switch.y + 3);
+    if (!(result & SETTINGS_UI_CHANGED) || settings.reduce_motion != 1 || settings.glass != 1) {
+        return "settings ui motion on";
+    }
+    result = settings_ui_click(&ui, &win, layout.cards[2].x + 20, layout.motion_switch.y + 3);
+    if (!(result & SETTINGS_UI_CHANGED) || settings.reduce_motion != 0) {
+        return "settings ui motion off";
     }
     if (settings_ui_click(&ui, &win, layout.content.x + layout.content.w - 2, layout.title_y) != 0) {
         return "settings ui empty click";
@@ -1929,6 +2370,17 @@ static const char *check_ui_live_preview(SettingsUi *ui, Window *win, Settings *
     if (window_pixel(win, layout.glass_switch.x + 6, layout.glass_switch.y + 13) != palette->accent) {
         return "settings ui switch on";
     }
+    settings->reduce_motion = 1;
+    settings_ui_draw(ui, win);
+    if (window_pixel(win, layout.motion_switch.x + 6, layout.motion_switch.y + 13) != palette->accent) {
+        return "settings ui motion switch on";
+    }
+    settings->reduce_motion = 0;
+    settings_ui_draw(ui, win);
+    if (window_pixel(win, layout.motion_switch.x + layout.motion_switch.w - 6,
+                     layout.motion_switch.y + 13) != palette->control_off) {
+        return "settings ui motion switch off";
+    }
 
     ui->save_failed = 1;
     settings_ui_draw(ui, win);
@@ -2019,6 +2471,15 @@ int main(void) {
     }
     if (!failure) {
         failure = test_window_damage();
+    }
+    if (!failure) {
+        failure = test_anim_engine();
+    }
+    if (!failure) {
+        failure = test_window_motion();
+    }
+    if (!failure) {
+        failure = test_window_pose();
     }
     if (!failure) {
         failure = test_settings_model();

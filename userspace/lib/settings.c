@@ -22,7 +22,7 @@ static const AccentEntry accents[SETTINGS_ACCENT_COUNT] = {
 };
 
 static const char *const theme_names[] = { "dark", "light" };
-static const char *const glass_names[] = { "off", "on" };
+static const char *const switch_names[] = { "off", "on" };
 static const char *const layout_names[] = { "de", "us" };
 
 #define COUNT_OF(array) (sizeof(array) / sizeof((array)[0]))
@@ -70,6 +70,7 @@ void settings_defaults(Settings *settings) {
     settings->accent = 0;
     settings->glass = 1;
     settings->layout = SETTINGS_LAYOUT_DE;
+    settings->reduce_motion = 0;
 }
 
 int settings_valid(const Settings *settings) {
@@ -77,6 +78,7 @@ int settings_valid(const Settings *settings) {
            (settings->theme == SETTINGS_THEME_DARK || settings->theme == SETTINGS_THEME_LIGHT) &&
            settings->accent >= 0 && settings->accent < SETTINGS_ACCENT_COUNT &&
            (settings->glass == 0 || settings->glass == 1) &&
+           (settings->reduce_motion == 0 || settings->reduce_motion == 1) &&
            (settings->layout == SETTINGS_LAYOUT_DE || settings->layout == SETTINGS_LAYOUT_US);
 }
 
@@ -92,6 +94,8 @@ unsigned int settings_diff(const Settings *before, const Settings *after) {
         changed |= SETTINGS_CHANGED_GLASS;
     if (before->layout != after->layout)
         changed |= SETTINGS_CHANGED_LAYOUT;
+    if ((before->reduce_motion != 0) != (after->reduce_motion != 0))
+        changed |= SETTINGS_CHANGED_MOTION;
     return changed;
 }
 
@@ -111,10 +115,15 @@ static int apply_assignment(Settings *settings, const char *key, size_t key_size
             return 0;
         settings->accent = index;
     } else if (token_is(key, key_size, "glass")) {
-        index = token_index(value, value_size, glass_names, COUNT_OF(glass_names));
+        index = token_index(value, value_size, switch_names, COUNT_OF(switch_names));
         if (index < 0)
             return 0;
         settings->glass = index;
+    } else if (token_is(key, key_size, "reduce_motion")) {
+        index = token_index(value, value_size, switch_names, COUNT_OF(switch_names));
+        if (index < 0)
+            return 0;
+        settings->reduce_motion = index;
     } else if (token_is(key, key_size, "layout")) {
         index = token_index(value, value_size, layout_names, COUNT_OF(layout_names));
         if (index < 0)
@@ -178,11 +187,13 @@ int settings_serialize(const Settings *settings, char *buffer, size_t buffer_siz
                            "theme=%s\n"
                            "accent=%s\n"
                            "glass=%s\n"
-                           "layout=%s\n",
+                           "layout=%s\n"
+                           "reduce_motion=%s\n",
                            theme_names[settings->theme],
                            accents[settings->accent].name,
-                           glass_names[settings->glass],
-                           layout_names[settings->layout]);
+                           switch_names[settings->glass],
+                           layout_names[settings->layout],
+                           switch_names[settings->reduce_motion]);
     if (written < 0 || (size_t)written >= buffer_size) {
         buffer[0] = '\0';
         return -1;

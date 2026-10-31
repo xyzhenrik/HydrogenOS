@@ -35,6 +35,7 @@ enum {
 #define SETTINGS_HIT_GLASS   24
 #define SETTINGS_HIT_LAYOUT  32
 #define SETTINGS_HIT_PING    40
+#define SETTINGS_HIT_MOTION  48
 
 /* Result bits of the event functions. */
 #define SETTINGS_UI_REDRAW  (1u << 0)  /* repaint the Settings window */
@@ -60,6 +61,7 @@ typedef struct SettingsUiLayout {
     GfxRect theme_tile[2];
     GfxRect accent_dot[SETTINGS_ACCENT_COUNT];
     GfxRect glass_switch;
+    GfxRect motion_switch;
     GfxRect layout_row[2];
     GfxRect ping_button;
     GfxRect logo;

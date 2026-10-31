@@ -155,7 +155,7 @@
   - `handlelimitcheck` now probes the real 64-slot handle table instead of assuming 8 slots.
   - `INIT_MAX_SERVICES` raised to 48 and large init buffers moved to static storage; `init.rc` grew beyond the old limits.
 - Userspace desktop: `compositor` (window list, Z-order, focus, damage, render/event loop, ready banner), `hydrogen_window` client library, `input_router`, widget toolkit (Label/Button/TextInput/Container), flex layout, theme tokens, window decorations, taskbar with clock, Spotlight-style launcher, file-manager grid, desktop background.
-- Verification programs: `fstest` (mkdir/write/stat/read/rename/unlink) and `desktoptest` (compositor + widgets + layout + theme + taskbar + launcher + filemanager).
+- Verification programs: `fstest` (mkdir/write/stat/read/rename/unlink) and `desktoptest` (compositor + widgets + layout + theme + taskbar + launcher + filemanager + animation engine + window motion + posed windows).
 - `init` now supports `daemon` services: they are spawned once and the init loop stays alive, so compositor, desktop demo and shell run concurrently.
 - `tools/boot_smoke.sh` asserts `FSTEST PASS`, `DESKTOPTEST PASS`, the compositor ready banner and `FRAME CHECKSUM:`.
 - Boot smoke passes locally (with grub extracted from the Arch package because `grub-mkrescue` is not installed system-wide). (The former pollwaitcheck/pollmanycheck gap is resolved in milestone 0.3, see below.)

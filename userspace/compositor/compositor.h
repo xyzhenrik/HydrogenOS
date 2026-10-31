@@ -88,9 +88,19 @@ void comp_style_window(CompWindowStyle *style);
 void comp_style_glass(CompWindowStyle *style);
 int comp_set_window_style(Window *win, const CompWindowStyle *style);
 
+/* A pose presents the window scaled into `rect` and faded to `opacity`
+   (0..255) instead of at its own geometry, shadow included. The surface and
+   all hit-testing stay as they are; only what reaches the screen changes.
+   Animation drives it frame by frame: each change repaints the old and the
+   new extent. Content is resampled bilinearly, so it is meant for motion, not
+   for resting windows. Returns -1 for an empty rectangle. */
+int comp_set_window_pose(Window *win, const CompRect *rect, unsigned int opacity);
+/* Back to the window's own geometry, fully opaque. */
+void comp_clear_window_pose(Window *win);
+
 /* Damage tracking */
-/* Screen area the window paints: its rectangle plus the shadow it casts, as
-   set by its style and the theme's shadow tokens. Anything that moves, resizes,
+/* Screen area the window paints: its rectangle (or pose) plus the shadow it
+   casts, as set by its style and the theme's shadow tokens. Anything that moves, resizes,
    hides or destroys a window must repaint this, not just the rectangle. */
 CompRect comp_window_extent(const Window *win);
 /* Damages the whole extent of the window, shadow included. */

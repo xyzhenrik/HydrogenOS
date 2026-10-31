@@ -37,12 +37,18 @@ struct CompWindowState {
     size_t surface_capacity;   /* pixels the surface can hold */
     int owns_surface;
 
+    /* Pose: where and how opaque the window is presented while it moves. */
+    int posed;
+    CompRect pose_rect;
+    unsigned int pose_opacity;
+
     /* What the last comp_render() put on screen for this window. */
     int presented;
     int last_visible;
     CompRect last_rect;
     CompRect last_extent;
     CompWindowStyle last_style;
+    unsigned int last_opacity;
 
     /* Glass: the unblurred backdrop (everything beneath the window over
        glass_area) is kept so damage below can be checked for real changes;
@@ -64,6 +70,10 @@ typedef struct {
 
 static CompScratch comp_compose_scratch;
 static CompScratch comp_blur_scratch;
+/* Posed windows: the unscaled window where it is not simply its surface, and
+   the source column of every destination column. */
+static CompScratch comp_pose_scratch;
+static CompScratch comp_pose_columns;
 
 static DamageRect comp_damages[COMP_MAX_DAMAGES];
 static int comp_damage_cnt = 0;
@@ -107,6 +117,15 @@ static void rect_union(CompRect *acc, const CompRect *r) {
     if (r->y < acc->y) acc->y = r->y;
     acc->w = x1 - acc->x;
     acc->h = y1 - acc->y;
+}
+
+/* Whether repainting the bounding box of a and b once costs no more than
+   repainting each: true for the heavily overlapping before and after of a
+   window that moved or scaled a little, false for a jump across the screen. */
+static int rect_overlap_is_cheaper(const CompRect *a, const CompRect *b) {
+    CompRect both = *a;
+    rect_union(&both, b);
+    return (long)both.w * both.h <= (long)a->w * a->h + (long)b->w * b->h;
 }
 
 static void damage_add_rect(int x, int y, int w, int h) {
@@ -169,14 +188,29 @@ static const GfxShadow *window_shadow(const Window *win) {
     return gfx_shadow_get(radius, fx->shadow_blur_radius);
 }
 
+/* A pose that changes nothing is no pose: the window takes the plain path. */
+static int window_posed(const Window *win) {
+    const struct CompWindowState *st = win->state;
+    return st->posed &&
+           (st->pose_opacity < 255u || st->pose_rect.x != win->x || st->pose_rect.y != win->y ||
+            st->pose_rect.w != win->w || st->pose_rect.h != win->h);
+}
+
+/* Where the window is drawn. */
+static CompRect window_shape(const Window *win) {
+    if (window_posed(win)) return win->state->pose_rect;
+    CompRect shape = { win->x, win->y, win->w, win->h };
+    return shape;
+}
+
 CompRect comp_window_extent(const Window *win) {
-    CompRect extent = { win->x, win->y, win->w, win->h };
+    CompRect extent = window_shape(win);
     const GfxShadow *shadow = window_shadow(win);
     if (shadow) {
         const ThemeEffects *fx = comp_effects();
         int e = shadow->extent;
-        CompRect cast = { win->x + fx->shadow_offset_x - e, win->y + fx->shadow_offset_y - e,
-                          win->w + 2 * e, win->h + 2 * e };
+        CompRect cast = { extent.x + fx->shadow_offset_x - e, extent.y + fx->shadow_offset_y - e,
+                          extent.w + 2 * e, extent.h + 2 * e };
         rect_union(&extent, &cast);
     }
     return extent;
@@ -382,6 +416,19 @@ int comp_set_window_style(Window *win, const CompWindowStyle *style) {
     return 0;
 }
 
+int comp_set_window_pose(Window *win, const CompRect *rect, unsigned int opacity) {
+    if (!win || !rect || rect->w <= 0 || rect->h <= 0) return -1;
+    struct CompWindowState *st = win->state;
+    st->posed = 1;
+    st->pose_rect = *rect;
+    st->pose_opacity = opacity > 255u ? 255u : opacity;
+    return 0;
+}
+
+void comp_clear_window_pose(Window *win) {
+    if (win) win->state->posed = 0;
+}
+
 int comp_raise(Window *win) {
     if (!win) return -1;
     /* move to top of z */
@@ -421,7 +468,11 @@ int comp_damage_rectp(Window *win, const CompRect *rect) {
     if (!rect) return comp_damage_window(win);
     /* win may be NULL? if so, treat rect as screen */
     int x = rect->x, y = rect->y, w = rect->w, h = rect->h;
-    if (win) {
+    if (win && window_posed(win)) {
+        /* The pixels of a posed window sit elsewhere than its geometry says. */
+        CompRect extent = comp_window_extent(win);
+        damage_add(&extent);
+    } else if (win) {
         /* clip to window */
         int ix, iy, iw, ih;
         if (rect_intersect(x, y, w, h, win->x, win->y, win->w, win->h, &ix, &iy, &iw, &ih)) {
@@ -463,8 +514,10 @@ static int window_surface_ok(const Window *win) {
     return win->surface && (size_t)win->w * (size_t)win->h <= win->state->surface_capacity;
 }
 
+/* Paints the window at its own geometry. Unshaped, it is the bare rectangle
+   without rounded corners or glass highlight (the posed path adds those). */
 static void compose_window_body(uint32_t *dst, const CompRect *buffer,
-                                const CompRect *region, const Window *win) {
+                                const CompRect *region, const Window *win, int shaped) {
     CompRect rect = { win->x, win->y, win->w, win->h };
     CompRect area;
     if (!rect_clip(&rect, region, &area)) return;
@@ -475,7 +528,7 @@ static void compose_window_body(uint32_t *dst, const CompRect *buffer,
     const uint32_t *backdrop = glass && st->glass_valid ? st->glass_out : 0;
     const ThemeEffects *fx = comp_effects();
     GfxRoundRect rr;
-    gfx_round_rect_init(&rr, win->w, win->h, win->style.corner_radius);
+    gfx_round_rect_init(&rr, win->w, win->h, shaped ? win->style.corner_radius : 0);
 
     for (int sy = area.y; sy < area.y + area.h; ++sy) {
         int wy = sy - win->y;
@@ -483,7 +536,7 @@ static void compose_window_body(uint32_t *dst, const CompRect *buffer,
         const uint32_t *srow = surf ? surf + (size_t)wy * (size_t)win->w : 0;
         int corner_row = rr.radius > 0 && (wy < rr.radius || wy >= win->h - rr.radius);
         /* The glass highlight lights the upper half of the border only. */
-        int edge_row = glass && 2 * wy < win->h && wy <= rr.radius;
+        int edge_row = shaped && glass && 2 * wy < win->h && wy <= rr.radius;
 
         if (!glass && !corner_row) {
             if (srow) {
@@ -494,8 +547,11 @@ static void compose_window_body(uint32_t *dst, const CompRect *buffer,
             continue;
         }
 
-        const uint32_t *brow = backdrop
-            ? backdrop + (size_t)(sy - st->glass_view.y) * (size_t)st->glass_view.w
+        /* A posed window composes parts of itself that lie off screen, where
+           there is no backdrop. */
+        const CompRect *view = &st->glass_view;
+        const uint32_t *brow = backdrop && sy >= view->y && sy < view->y + view->h
+            ? backdrop + (size_t)(sy - view->y) * (size_t)view->w
             : 0;
         for (int sx = area.x; sx < area.x + area.w; ++sx) {
             int wx = sx - win->x;
@@ -503,7 +559,8 @@ static void compose_window_body(uint32_t *dst, const CompRect *buffer,
             if (cover == 0) continue;
             uint32_t src = srow ? srow[wx] : win->bg_color;
             if (glass) {
-                uint32_t base = brow ? brow[sx - st->glass_view.x] : win->style.glass_tint;
+                int behind = brow && sx >= view->x && sx < view->x + view->w;
+                uint32_t base = behind ? brow[sx - view->x] : win->style.glass_tint;
                 base = gfx_mix(base, src, srow ? src >> 24 : 0u);
                 if (edge_row) {
                     unsigned int edge = gfx_round_rect_edge(&rr, wx, wy);
@@ -516,6 +573,114 @@ static void compose_window_body(uint32_t *dst, const CompRect *buffer,
             *d = cover == 255u ? src : gfx_mix(*d, src, cover);
         }
     }
+}
+
+/* Source row/column of destination pixel `index` of `size` when a source of
+   `source` pixels is stretched over it: a base pixel and a 0..255 weight
+   towards its successor. */
+static void axis_sample(int index, int size, int source, int *base, unsigned int *weight) {
+    long position = ((2L * index + 1) * source * 256) / (2L * size) - 128;
+    long whole = position >> 8;
+    unsigned int fraction = (unsigned int)(position & 0xFF);
+    if (whole < 0) { whole = 0; fraction = 0; }
+    if (whole >= source - 1) { whole = source - 1; fraction = 0; }
+    *base = (int)whole;
+    *weight = fraction;
+}
+
+/* a towards b by weight/256, all four channels at once. */
+static uint32_t pixel_lerp(uint32_t a, uint32_t b, unsigned int weight) {
+    if (weight == 0) return a;
+    uint32_t rb = ((a & 0x00FF00FFu) * (256u - weight) + (b & 0x00FF00FFu) * weight) >> 8;
+    uint32_t g = ((a & 0x0000FF00u) * (256u - weight) + (b & 0x0000FF00u) * weight) >> 8;
+    return (rb & 0x00FF00FFu) | (g & 0x0000FF00u);
+}
+
+/* Paints the window stretched into its pose rectangle at its pose opacity:
+   bilinear resampling of the window as it would look unposed, with the
+   rounded corners and the glass highlight laid on afterwards at the new size. */
+static void compose_posed_body(uint32_t *dst, const CompRect *buffer,
+                               const CompRect *region, const Window *win) {
+    const struct CompWindowState *st = win->state;
+    const CompRect shape = st->pose_rect;
+    const unsigned int opacity = st->pose_opacity;
+    CompRect area;
+    if (opacity == 0 || !rect_clip(&shape, region, &area)) return;
+
+    const int sw = win->w, sh = win->h;
+    uint32_t *columns = scratch_reserve(&comp_pose_columns, (size_t)area.w);
+    if (!columns) return;
+    int min_x = sw, max_x = 0;
+    for (int i = 0; i < area.w; ++i) {
+        int base;
+        unsigned int weight;
+        axis_sample(area.x + i - shape.x, shape.w, sw, &base, &weight);
+        columns[i] = ((uint32_t)base << 8) | weight;
+        if (base < min_x) min_x = base;
+        int last = weight ? (base + 1 < sw ? base + 1 : sw - 1) : base;
+        if (last > max_x) max_x = last;
+    }
+    int first_y, last_y;
+    unsigned int ignored;
+    axis_sample(area.y - shape.y, shape.h, sh, &first_y, &ignored);
+    axis_sample(area.y + area.h - 1 - shape.y, shape.h, sh, &last_y, &ignored);
+    int max_y = last_y + 1 < sh ? last_y + 1 : sh - 1;
+
+    int glass = win->style.material == COMP_MATERIAL_GLASS;
+    const uint32_t *source = window_surface_ok(win) ? (const uint32_t *)win->surface : 0;
+    if (glass || !source) {
+        uint32_t *whole = scratch_reserve(&comp_pose_scratch, (size_t)sw * (size_t)sh);
+        if (!whole) return;
+        CompRect home = { win->x, win->y, sw, sh };
+        CompRect needed = { win->x + min_x, win->y + first_y, max_x - min_x + 1, max_y - first_y + 1 };
+        compose_window_body(whole, &home, &needed, win, 0);
+        source = whole;
+    }
+
+    const ThemeEffects *fx = comp_effects();
+    int radius = (int)((long)win->style.corner_radius * shape.w / sw);
+    GfxRoundRect rr;
+    gfx_round_rect_init(&rr, shape.w, shape.h, radius);
+
+    for (int sy = area.y; sy < area.y + area.h; ++sy) {
+        int dy = sy - shape.y;
+        int y0;
+        unsigned int wy;
+        axis_sample(dy, shape.h, sh, &y0, &wy);
+        int y1 = y0 + 1 < sh ? y0 + 1 : sh - 1;
+        const uint32_t *top = source + (size_t)y0 * (size_t)sw;
+        const uint32_t *bottom = source + (size_t)y1 * (size_t)sw;
+        uint32_t *drow = dst + (size_t)(sy - buffer->y) * (size_t)buffer->w + (size_t)(area.x - buffer->x);
+        int corner_row = rr.radius > 0 && (dy < rr.radius || dy >= shape.h - rr.radius);
+        int edge_row = glass && 2 * dy < shape.h && dy <= rr.radius;
+
+        for (int i = 0; i < area.w; ++i) {
+            int x0 = (int)(columns[i] >> 8);
+            unsigned int wx = columns[i] & 0xFFu;
+            int x1 = x0 + 1 < sw ? x0 + 1 : sw - 1;
+            uint32_t pixel = pixel_lerp(top[x0], top[x1], wx);
+            if (wy) pixel = pixel_lerp(pixel, pixel_lerp(bottom[x0], bottom[x1], wx), wy);
+
+            int dx = area.x + i - shape.x;
+            unsigned int alpha = opacity;
+            if (corner_row) {
+                unsigned int cover = gfx_round_rect_coverage(&rr, dx, dy);
+                if (cover == 0) continue;
+                alpha = (cover * opacity + 127u) / 255u;
+            }
+            if (edge_row) {
+                unsigned int edge = gfx_round_rect_edge(&rr, dx, dy);
+                pixel = gfx_mix(pixel, fx->glass_highlight,
+                                (edge * fx->glass_highlight_alpha + 127u) / 255u);
+            }
+            drow[i] = alpha >= 255u ? pixel : gfx_mix(drow[i], pixel, alpha);
+        }
+    }
+}
+
+static void compose_window(uint32_t *dst, const CompRect *buffer, const CompRect *region, const Window *win) {
+    if (window_posed(win)) compose_posed_body(dst, buffer, region, win);
+    else compose_window_body(dst, buffer, region, win, 1);
 }
 
 /* Paints background, shadows and the windows below z_limit into `region` of
@@ -536,11 +701,15 @@ static void compose_region(uint32_t *dst, const CompRect *buffer, const CompRect
         if (!win || !win->visible) continue;
         const GfxShadow *shadow = window_shadow(win);
         if (shadow) {
-            gfx_draw_shadow(&canvas, shadow, win->x - buffer->x, win->y - buffer->y, win->w, win->h,
+            CompRect shape = window_shape(win);
+            unsigned int shadow_alpha = fx->shadow_alpha;
+            if (window_posed(win))
+                shadow_alpha = (shadow_alpha * win->state->pose_opacity + 127u) / 255u;
+            gfx_draw_shadow(&canvas, shadow, shape.x - buffer->x, shape.y - buffer->y, shape.w, shape.h,
                             fx->shadow_offset_x, fx->shadow_offset_y,
-                            fx->shadow_color, fx->shadow_alpha, &clip);
+                            fx->shadow_color, shadow_alpha, &clip);
         }
-        compose_window_body(dst, buffer, region, win);
+        compose_window(dst, buffer, region, win);
     }
 }
 
@@ -555,12 +724,20 @@ static void reconcile_windows(void) {
         CompRect extent = comp_window_extent(win);
         int visible = win->visible != 0;
         int restyled = !style_equal(&win->style, &st->last_style);
+        unsigned int opacity = window_posed(win) ? st->pose_opacity : 255u;
         /* The extent also depends on live theme shadow tokens, so compare it
            directly rather than inferring it from geometry and style. */
-        if (!st->presented || restyled || visible != st->last_visible ||
+        if (!st->presented || restyled || visible != st->last_visible || opacity != st->last_opacity ||
             !rect_equal(&rect, &st->last_rect) || !rect_equal(&extent, &st->last_extent)) {
-            if (st->presented && st->last_visible) damage_add(&st->last_extent);
-            if (visible) damage_add(&extent);
+            int was_shown = st->presented && st->last_visible;
+            if (was_shown && visible && rect_overlap_is_cheaper(&st->last_extent, &extent)) {
+                CompRect both = st->last_extent;
+                rect_union(&both, &extent);
+                damage_add(&both);
+            } else {
+                if (was_shown) damage_add(&st->last_extent);
+                if (visible) damage_add(&extent);
+            }
         }
         if (restyled) st->glass_valid = 0;
         st->presented = 1;
@@ -568,6 +745,7 @@ static void reconcile_windows(void) {
         st->last_rect = rect;
         st->last_extent = extent;
         st->last_style = win->style;
+        st->last_opacity = opacity;
     }
 }
 

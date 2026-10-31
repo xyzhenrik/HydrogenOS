@@ -36,6 +36,7 @@
 #define ACCENT_TOP         38
 
 #define TALL_ROW_HEIGHT 56
+#define SWITCH_ROWS     2
 #define SWITCH_WIDTH    44
 #define SWITCH_HEIGHT   26
 #define BUTTON_WIDTH    96
@@ -99,14 +100,14 @@ static void add_card(SettingsUiLayout *layout, int *y, int height) {
 static void layout_appearance(SettingsUiLayout *layout, int y) {
     const GfxRect *theme_card;
     const GfxRect *accent_card;
-    const GfxRect *glass_card;
+    const GfxRect *switch_card;
 
     add_card(layout, &y, THEME_CARD_HEIGHT);
     add_card(layout, &y, ACCENT_CARD_HEIGHT);
-    add_card(layout, &y, TALL_ROW_HEIGHT);
+    add_card(layout, &y, SWITCH_ROWS * SETTINGS_UI_ROW_HEIGHT);
     theme_card = &layout->cards[0];
     accent_card = &layout->cards[1];
-    glass_card = &layout->cards[2];
+    switch_card = &layout->cards[2];
 
     int tiles_x = theme_card->x + (theme_card->w - (2 * TILE_WIDTH + TILE_GAP)) / 2;
     for (int i = 0; i < 2; ++i) {
@@ -117,9 +118,12 @@ static void layout_appearance(SettingsUiLayout *layout, int y) {
         layout->accent_dot[i] = rect_make(accent_card->x + ROW_PAD + i * ACCENT_PITCH,
                                           accent_card->y + ACCENT_TOP, ACCENT_HIT, ACCENT_HIT);
     }
-    layout->glass_switch = rect_make(glass_card->x + glass_card->w - ROW_PAD - SWITCH_WIDTH,
-                                     glass_card->y + (glass_card->h - SWITCH_HEIGHT) / 2,
-                                     SWITCH_WIDTH, SWITCH_HEIGHT);
+    GfxRect *switches[SWITCH_ROWS] = { &layout->glass_switch, &layout->motion_switch };
+    for (int i = 0; i < SWITCH_ROWS; ++i) {
+        GfxRect row = row_rect(switch_card, i);
+        *switches[i] = rect_make(row.x + row.w - ROW_PAD - SWITCH_WIDTH,
+                                 row.y + (row.h - SWITCH_HEIGHT) / 2, SWITCH_WIDTH, SWITCH_HEIGHT);
+    }
 }
 
 void settings_ui_layout(int width, int height, int top, int section,
@@ -200,8 +204,11 @@ int settings_ui_hit_test(const SettingsUiLayout *layout, int x, int y) {
                 return SETTINGS_HIT_ACCENT + i;
         }
         /* The whole row toggles, not just the switch. */
-        if (rect_contains(&layout->cards[2], x, y))
-            return SETTINGS_HIT_GLASS;
+        for (int i = 0; i < SWITCH_ROWS; ++i) {
+            GfxRect row = row_rect(&layout->cards[2], i);
+            if (rect_contains(&row, x, y))
+                return i == 0 ? SETTINGS_HIT_GLASS : SETTINGS_HIT_MOTION;
+        }
         break;
     case SETTINGS_SECTION_KEYBOARD:
         for (int i = 0; i < LIST_ROWS; ++i) {
@@ -436,23 +443,25 @@ static void draw_accent_card(const Painter *painter, const Settings *settings,
     }
 }
 
-static void draw_glass_card(const Painter *painter, const Settings *settings,
-                            const SettingsUiLayout *layout) {
-    const SettingsPalette *palette = painter->palette;
-    const GfxRect *card = &layout->cards[2];
-    const GfxRect *track = &layout->glass_switch;
+/* A row of a card with a label on the left and an on/off switch on the right. */
+static void draw_switch_row(const Painter *painter, const GfxRect *card, int row,
+                            const GfxRect *track, const char *label, int on) {
     int knob = SWITCH_HEIGHT - 4;
-    int knob_x = settings->glass ? track->x + track->w - 2 - knob : track->x + 2;
+    int knob_x = on ? track->x + track->w - 2 - knob : track->x + 2;
 
-    draw_card(painter, card, 1);
-    draw_text(painter, card->x + ROW_PAD, card->y + 10, "Glass effects", palette->ink);
-    draw_text(painter, card->x + ROW_PAD, card->y + 30, "Translucent bars and launcher",
-              palette->ink_dim);
-
-    fill_round(painter, track, SWITCH_HEIGHT / 2,
-               settings->glass ? palette->accent : palette->control_off, 255);
+    draw_row(painter, card, row, label, 0);
+    fill_round(painter, track, SWITCH_HEIGHT / 2, on ? painter->palette->accent : painter->palette->control_off, 255);
     fill_disc(painter, knob_x + knob / 2, track->y + 2 + knob / 2 + 1, knob / 2, 0x000000u, 50);
     fill_disc(painter, knob_x + knob / 2, track->y + 2 + knob / 2, knob / 2, COLOR_WHITE, 255);
+}
+
+static void draw_switch_card(const Painter *painter, const Settings *settings,
+                             const SettingsUiLayout *layout) {
+    const GfxRect *card = &layout->cards[2];
+
+    draw_card(painter, card, SWITCH_ROWS);
+    draw_switch_row(painter, card, 0, &layout->glass_switch, "Glass effects", settings->glass);
+    draw_switch_row(painter, card, 1, &layout->motion_switch, "Reduce motion", settings->reduce_motion);
 }
 
 static void draw_appearance(const Painter *painter, const SettingsUi *ui,
@@ -462,7 +471,7 @@ static void draw_appearance(const Painter *painter, const SettingsUi *ui,
     draw_theme_tile(painter, ui->settings, &layout->theme_tile[0], SETTINGS_THEME_DARK);
     draw_theme_tile(painter, ui->settings, &layout->theme_tile[1], SETTINGS_THEME_LIGHT);
     draw_accent_card(painter, ui->settings, layout);
-    draw_glass_card(painter, ui->settings, layout);
+    draw_switch_card(painter, ui->settings, layout);
 }
 
 /* ---------------- Keyboard ---------------- */
@@ -718,6 +727,10 @@ unsigned int settings_ui_click(SettingsUi *ui, const Window *window, int x, int 
     }
     if (hit == SETTINGS_HIT_GLASS) {
         settings->glass = !settings->glass;
+        return SETTINGS_UI_REDRAW | SETTINGS_UI_CHANGED;
+    }
+    if (hit == SETTINGS_HIT_MOTION) {
+        settings->reduce_motion = !settings->reduce_motion;
         return SETTINGS_UI_REDRAW | SETTINGS_UI_CHANGED;
     }
     if (hit >= SETTINGS_HIT_LAYOUT && hit < SETTINGS_HIT_LAYOUT + 2) {

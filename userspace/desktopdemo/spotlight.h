@@ -20,6 +20,10 @@ typedef struct SpotlightHost {
     int app_count;
     void (*draw_icon)(Window *window, int app_id, int x, int y, int size);
     void (*launch)(int app_id);
+    /* Optional. Called when the launcher opens or closes, in place of showing
+       or hiding the window directly, so the host can animate the change and
+       hide the window when it is over. */
+    void (*shown_changed)(Window *window, int shown);
 } SpotlightHost;
 
 /* The palette and settings are read on every redraw, so theme changes show up
