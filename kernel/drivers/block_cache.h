@@ -9,11 +9,11 @@
  *
  * Writes only dirty the cached copy. Dirty sectors reach the device
  *   - on block_cache_sync(), which also flushes the device's own cache,
- *   - when block_cache_tick() finds the oldest dirty sector older than
- *     one second,
+ *   - when block_cache_tick() finds the oldest sector that is not yet
+ *     durable older than one second (it also flushes the device),
  *   - in bulk when the number of dirty sectors hits a fixed share of the
- *     cache, which bounds the data a crash can lose and guarantees that
- *     eviction always finds a clean sector.
+ *     cache, which guarantees that eviction always finds a clean sector.
+ *     The device is not flushed there; the next tick does that.
  * Callers that need ordering or durability (unmount, power-off, metadata
  * operations) call block_cache_sync().
  */

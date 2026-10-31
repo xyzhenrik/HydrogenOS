@@ -13,11 +13,12 @@
 
 typedef struct virtio_blk_device {
     pci_device_t pci_dev;
-    virtio_pci_common_cfg_t *common_cfg;
+    /* Device registers: every access must reach the device in program order. */
+    volatile virtio_pci_common_cfg_t *common_cfg;
     uint32_t *notify_cfg;
     uint32_t notify_off_multiplier;
     uint8_t *isr_cfg;
-    virtio_blk_config_t *device_cfg;
+    volatile virtio_blk_config_t *device_cfg;
 
     virtqueue_t vq;
     uint16_t notify_off;
@@ -70,7 +71,7 @@ static int virtio_blk_read_sectors(uint32_t lba, uint8_t count, void *buffer) {
     if (!g_vblk_present) return -1;
     if (count == 0 || buffer == NULL) return -1;
 
-    virtio_blk_config_t *cfg = g_vblk.device_cfg;
+    volatile virtio_blk_config_t *cfg = g_vblk.device_cfg;
     if (cfg && ((uint64_t)lba + count) > cfg->capacity) return -1;
 
     virtio_blk_req_t *req = (virtio_blk_req_t *)kalloc(sizeof(virtio_blk_req_t));
@@ -147,7 +148,7 @@ static int virtio_blk_write_sectors(uint32_t lba, uint8_t count, void *buffer) {
     if (!g_vblk_present) return -1;
     if (count == 0 || buffer == NULL) return -1;
 
-    virtio_blk_config_t *cfg = g_vblk.device_cfg;
+    volatile virtio_blk_config_t *cfg = g_vblk.device_cfg;
     if (cfg && ((uint64_t)lba + count) > cfg->capacity) return -1;
 
     virtio_blk_req_t *req = (virtio_blk_req_t *)kalloc(sizeof(virtio_blk_req_t));
@@ -316,7 +317,7 @@ void virtio_blk_init(void) {
 
         switch (cap.cfg_type) {
             case VIRTIO_PCI_CAP_COMMON_CFG:
-                g_vblk.common_cfg = (virtio_pci_common_cfg_t *)mapped;
+                g_vblk.common_cfg = (volatile virtio_pci_common_cfg_t *)mapped;
                 break;
             case VIRTIO_PCI_CAP_NOTIFY_CFG:
                 g_vblk.notify_cfg = (uint32_t *)mapped;
@@ -326,7 +327,7 @@ void virtio_blk_init(void) {
                 g_vblk.isr_cfg = (uint8_t *)mapped;
                 break;
             case VIRTIO_PCI_CAP_DEVICE_CFG:
-                g_vblk.device_cfg = (virtio_blk_config_t *)mapped;
+                g_vblk.device_cfg = (volatile virtio_blk_config_t *)mapped;
                 break;
         }
 
