@@ -5,12 +5,13 @@
 #include "framebuffer.h"
 #include "serial.h"
 #include "logo_splash.h"
+#include "wordmark.h"
 
 /* Everything is drawn with integer arithmetic only: the kernel keeps no FPU
-   state, and the shapes are signed distance functions in 1/SUB pixel units
-   that are turned into anti-aliased coverage. */
+   state. The wordmark and the drop are pre-rasterised coverage bitmaps; only
+   the progress bar is a signed distance function in 1/SUB pixel units that is
+   turned into anti-aliased coverage. */
 #define SUB 16
-#define FAR (1 << 24)
 #define PROGRESS_MAX 1000u
 #define SERVICES_BASE 300u
 #define REPORT_CAP 48
@@ -21,50 +22,14 @@
 #define LETTER_COLOR 0x00EEF6FFu
 #define BAR_FILL 0x00F0F7FFu
 #define BAR_TRACK_WEIGHT 36u
-#define SUFFIX_WEIGHT 150u
 
-/* Cap-height relative sizes in per mille. */
-#define STROKE 150
-#define LETTER_GAP 190
-#define DROP_HEIGHT 1300
-#define DROP_OVERSHOOT 90
-
-typedef enum glyph {
-    GLYPH_H,
-    GLYPH_Y,
-    GLYPH_D,
-    GLYPH_R,
-    GLYPH_DROP,
-    GLYPH_G,
-    GLYPH_E,
-    GLYPH_N,
-    GLYPH_O,
-    GLYPH_S,
-} glyph_t;
-
-/* weight is 0..256: how strongly the letter is drawn over the background.
-   The "OS" suffix is dimmer than the name so that the drop stays the O of
-   "Hydrogen". */
-typedef struct wordmark_letter {
-    glyph_t glyph;
-    int32_t width;
-    uint32_t weight;
-} wordmark_letter_t;
-
-static const wordmark_letter_t wordmark[] = {
-    { GLYPH_H, 720, 256 },
-    { GLYPH_Y, 780, 256 },
-    { GLYPH_D, 740, 256 },
-    { GLYPH_R, 700, 256 },
-    { GLYPH_DROP, 980, 256 },
-    { GLYPH_G, 1000, 256 },
-    { GLYPH_E, 560, 256 },
-    { GLYPH_N, 740, 256 },
-    { GLYPH_O, 1000, SUFFIX_WEIGHT },
-    { GLYPH_S, 575, SUFFIX_WEIGHT },
-};
-
-#define WORDMARK_LETTERS (sizeof(wordmark) / sizeof(wordmark[0]))
+/* Sizes relative to the screen height, in per mille: the cap height of the
+   wordmark, the visible height of the drop above it, and the gaps. */
+#define CAP_PER_MILLE 50
+#define DROP_PER_MILLE 130
+#define DROP_GAP_CAPS_PER_MILLE 1100
+#define BAR_GAP_CAPS_PER_MILLE 2200
+#define GROUP_CENTER_PER_MILLE 430
 
 /* Progress after each kernel stage; init's services fill the rest. */
 static const uint16_t stage_progress[] = { 80, 150, 230, SERVICES_BASE };
@@ -72,8 +37,15 @@ static const uint16_t stage_progress[] = { 80, 150, 230, SERVICES_BASE };
 typedef struct splash_layout {
     uint32_t width;
     uint32_t height;
-    int32_t cap;
-    int32_t stroke;
+    int32_t wordmark_x;
+    int32_t wordmark_y;
+    int32_t wordmark_w;
+    int32_t wordmark_h;
+    int pick;
+    int32_t drop_x;
+    int32_t drop_y;
+    int32_t drop_size;
+    int drop_pick;
     int32_t bar_x;
     int32_t bar_y;
     int32_t bar_w;
@@ -174,146 +146,6 @@ static void present(int32_t x, int32_t y, int32_t w, int32_t h) {
                                 (uint32_t)h);
 }
 
-/* ---- Distance functions. Glyph space has its origin at the top-left of the
-   cap box; positive distance is outside. ---- */
-
-static int32_t box_distance(int32_t x, int32_t y, int32_t x0, int32_t y0,
-                            int32_t x1, int32_t y1) {
-    return imax(imax(x0 - x, x - x1), imax(y0 - y, y - y1));
-}
-
-/* Straight stroke along a-b with flat ends cut by the clip box instead of
-   perpendicular to the stroke, so diagonals end flush with the cap line. */
-static int32_t band_distance(int32_t x, int32_t y, int32_t ax, int32_t ay,
-                             int32_t bx, int32_t by, int32_t half,
-                             int32_t clip_x0, int32_t clip_y0, int32_t clip_x1,
-                             int32_t clip_y1) {
-    int64_t dx = bx - ax;
-    int64_t dy = by - ay;
-    int64_t cross = (int64_t)(x - ax) * dy - (int64_t)(y - ay) * dx;
-    int32_t len = length((int32_t)dx, (int32_t)dy);
-    int32_t perp = (int32_t)((cross < 0 ? -cross : cross) / len);
-    return imax(perp - half,
-                box_distance(x, y, clip_x0, clip_y0, clip_x1, clip_y1));
-}
-
-/* Right half of a ring, as the bowl of D and R. It reaches one pixel past the
-   center line so that it overlaps the bars it joins; abutting shapes would
-   leave a faint seam at the shared edge. */
-static int32_t bowl_distance(int32_t x, int32_t y, int32_t cx, int32_t cy,
-                             int32_t outer, int32_t inner) {
-    if (x < cx - SUB)
-        return FAR;
-    int32_t r = length(x - cx, y - cy);
-    return imax(r - outer, inner - r);
-}
-
-static int32_t glyph_distance(glyph_t glyph, int32_t x, int32_t y, int32_t w) {
-    const int32_t c = layout.cap;
-    const int32_t t = layout.stroke;
-
-    switch (glyph) {
-    case GLYPH_H:
-        return imin(imin(box_distance(x, y, 0, 0, t, c),
-                         box_distance(x, y, w - t, 0, w, c)),
-                    box_distance(x, y, 0, (c - t) / 2, w, (c + t) / 2));
-    case GLYPH_Y: {
-        int32_t mid = w / 2;
-        int32_t join = c * 46 / 100;
-        int32_t inset = t * 7 / 10;
-        int32_t arms = imin(
-            band_distance(x, y, inset, 0, mid, join, t / 2, 0, 0, w, join),
-            band_distance(x, y, w - inset, 0, mid, join, t / 2, 0, 0, w, join));
-        return imin(arms, box_distance(x, y, mid - t / 2, join - t, mid + t / 2, c));
-    }
-    case GLYPH_D: {
-        int32_t radius = c / 2;
-        int32_t bowl_x = w - radius;
-        return imin(
-            imin(box_distance(x, y, 0, 0, t, c),
-                 imin(box_distance(x, y, 0, 0, bowl_x, t),
-                      box_distance(x, y, 0, c - t, bowl_x, c))),
-            bowl_distance(x, y, bowl_x, radius, radius, radius - t));
-    }
-    case GLYPH_R: {
-        int32_t bowl_h = c * 56 / 100;
-        int32_t radius = bowl_h / 2;
-        int32_t bowl_x = w - radius;
-        int32_t stem_and_bars = imin(
-            box_distance(x, y, 0, 0, t, c),
-            imin(box_distance(x, y, 0, 0, bowl_x, t),
-                 box_distance(x, y, 0, bowl_h - t, bowl_x, bowl_h)));
-        int32_t leg = band_distance(x, y, w * 42 / 100, bowl_h - t / 2,
-                                    w - t * 6 / 10, c, t / 2, 0, bowl_h - t, w, c);
-        return imin(imin(stem_and_bars, leg),
-                    bowl_distance(x, y, bowl_x, radius, radius, radius - t));
-    }
-    case GLYPH_G: {
-        int32_t radius = c / 2;
-        int32_t dx = x - radius;
-        int32_t dy = y - radius;
-        int32_t r = length(dx, dy);
-        int32_t ring = imax(r - radius, radius - t - r);
-        /* The opening is the sector between 0 and 40 degrees above the
-           horizontal on the right; (41, 49) / 64 is (sin, cos) of 40 degrees. */
-        int32_t opening = imin(-dy, (dx * 41 + dy * 49) / 64);
-        return imin(imax(ring, opening),
-                    box_distance(x, y, radius, radius - t / 2, c, radius + t / 2));
-    }
-    case GLYPH_E:
-        return imin(
-            imin(box_distance(x, y, 0, 0, t, c), box_distance(x, y, 0, 0, w, t)),
-            imin(box_distance(x, y, 0, (c - t) / 2, w * 90 / 100, (c + t) / 2),
-                 box_distance(x, y, 0, c - t, w, c)));
-    case GLYPH_N: {
-        int32_t inset = t * 7 / 10;
-        return imin(imin(box_distance(x, y, 0, 0, t, c),
-                         box_distance(x, y, w - t, 0, w, c)),
-                    band_distance(x, y, inset, 0, w - inset, c, t / 2, 0, 0, w, c));
-    }
-    case GLYPH_O: {
-        int32_t radius = c / 2;
-        int32_t r = length(x - radius, y - radius);
-        return imax(r - radius, radius - t - r);
-    }
-    case GLYPH_S: {
-        /* Two rings that overlap by one stroke, each missing the sector
-           (35 degrees above the horizontal down to the vertical) that faces
-           away from the other ring; (37, 52) / 64 is (sin, cos) of 35 degrees. */
-        int32_t radius = (c + t) / 4;
-        int32_t cx = x - w / 2;
-        int32_t upper_dy = y - radius;
-        int32_t lower_dy = y - (c - radius);
-        int32_t upper_r = length(cx, upper_dy);
-        int32_t lower_r = length(cx, lower_dy);
-        int32_t upper = imax(imax(upper_r - radius, radius - t - upper_r),
-                             imin(cx, (cx * 37 + upper_dy * 52) / 64));
-        int32_t lower = imax(imax(lower_r - radius, radius - t - lower_r),
-                             imin(-cx, (-cx * 37 - lower_dy * 52) / 64));
-        return imin(upper, lower);
-    }
-    case GLYPH_DROP:
-        break;
-    }
-    return FAR;
-}
-
-static void draw_glyph(glyph_t glyph, int32_t gx, int32_t gy, int32_t w,
-                       uint32_t weight) {
-    for (int32_t py = gy / SUB - 1; py <= (gy + layout.cap) / SUB + 1; ++py) {
-        for (int32_t px = gx / SUB - 1; px <= (gx + w) / SUB + 1; ++px) {
-            uint32_t *pixel = surface_pixel(px, py);
-            if (!pixel)
-                continue;
-            int32_t d = glyph_distance(glyph, px * SUB + SUB / 2 - gx,
-                                       py * SUB + SUB / 2 - gy, w);
-            int32_t cov = coverage(d);
-            if (cov)
-                *pixel = blend(*pixel, LETTER_COLOR, (uint32_t)cov * weight / SUB);
-        }
-    }
-}
-
 /* Source position of destination pixel `index` of `size` in a source of
    `source` pixels: a base pixel and a 0..255 weight towards its successor. */
 static void sample_axis(int32_t index, int32_t size, int32_t source,
@@ -325,52 +157,37 @@ static void sample_axis(int32_t index, int32_t size, int32_t source,
     *weight = (uint32_t)position & 0xFFu;
 }
 
-static uint32_t coverage_at(const uint8_t *bitmap, int32_t source, int32_t x,
-                            int32_t y) {
-    return bitmap[imin(y, source - 1) * source + imin(x, source - 1)];
+static uint32_t coverage_at(const uint8_t *bitmap, int32_t width, int32_t height,
+                            int32_t x, int32_t y) {
+    return bitmap[imin(y, height - 1) * width + imin(x, width - 1)];
 }
 
-/* The drop is the artwork's coverage bitmap, bilinearly resampled from the
-   smallest bitmap that is not smaller than the target and coloured with the
-   artwork's stroke gradient. Its bottom sits on the baseline of the cap box
-   at (gx, gy, w), centred in the slot; the apex reaches above the letters. */
-static void draw_drop(int32_t gx, int32_t gy, int32_t w) {
-    const int32_t cap_pixels = layout.cap / SUB;
-    const int32_t size =
-        cap_pixels * DROP_HEIGHT / (1000 - 2 * LOGO_PADDING_PERMILLE);
-    int pick = LOGO_SIZE_COUNT - 1;
-    for (int i = 0; i < LOGO_SIZE_COUNT; ++i) {
-        if (logo_sizes[i] >= size) {
-            pick = i;
-            break;
-        }
-    }
-    const uint8_t *bitmap = logo_coverage[pick];
-    const int32_t source = logo_sizes[pick];
-    const int32_t left = (gx + w / 2) / SUB - size / 2;
-    const int32_t bottom = (gy + layout.cap) / SUB + cap_pixels * DROP_OVERSHOOT / 1000 +
-                           size * LOGO_PADDING_PERMILLE / 1000;
-    const int32_t top = bottom - size;
-
-    for (int32_t py = 0; py < size; ++py) {
+/* Draws a coverage bitmap bilinearly resampled to dw x dh at (left, top). The
+   colour is `color`, or the row's colour of `gradient` (see logo_gradient_at)
+   when one is given. Resampling by one is exact, so a bitmap drawn at its own
+   size keeps its hinted edges. */
+static void draw_coverage(const uint8_t *bitmap, int32_t sw, int32_t sh, int32_t left,
+                          int32_t top, int32_t dw, int32_t dh, uint32_t color,
+                          const uint32_t *gradient) {
+    for (int32_t py = 0; py < dh; ++py) {
         int32_t y0;
         uint32_t wy;
-        sample_axis(py, size, source, &y0, &wy);
-        uint32_t color = logo_gradient_at(logo_gradient_dark, size, py);
-        for (int32_t px = 0; px < size; ++px) {
+        sample_axis(py, dh, sh, &y0, &wy);
+        uint32_t row_color = gradient ? logo_gradient_at(gradient, dh, py) : color;
+        for (int32_t px = 0; px < dw; ++px) {
             uint32_t *pixel = surface_pixel(left + px, top + py);
             if (!pixel)
                 continue;
             int32_t x0;
             uint32_t wx;
-            sample_axis(px, size, source, &x0, &wx);
-            uint32_t upper = coverage_at(bitmap, source, x0, y0) * (256u - wx) +
-                             coverage_at(bitmap, source, x0 + 1, y0) * wx;
-            uint32_t lower = coverage_at(bitmap, source, x0, y0 + 1) * (256u - wx) +
-                             coverage_at(bitmap, source, x0 + 1, y0 + 1) * wx;
+            sample_axis(px, dw, sw, &x0, &wx);
+            uint32_t upper = coverage_at(bitmap, sw, sh, x0, y0) * (256u - wx) +
+                             coverage_at(bitmap, sw, sh, x0 + 1, y0) * wx;
+            uint32_t lower = coverage_at(bitmap, sw, sh, x0, y0 + 1) * (256u - wx) +
+                             coverage_at(bitmap, sw, sh, x0 + 1, y0 + 1) * wx;
             uint32_t alpha = ((upper >> 8) * (256u - wy) + (lower >> 8) * wy) >> 8;
             if (alpha)
-                *pixel = blend(*pixel, color, alpha + (alpha >> 7));
+                *pixel = blend(*pixel, row_color, alpha + (alpha >> 7));
         }
     }
 }
@@ -427,26 +244,58 @@ static void set_progress(uint32_t value) {
 
 /* ---- Layout and first paint ---- */
 
-static void compute_layout(void) {
-    layout.width = framebuffer.width;
-    layout.height = framebuffer.height;
-    int32_t cap = (int32_t)imin((int32_t)(layout.height * 85 / 1000),
-                                (int32_t)(layout.width * 8 / 100));
-    if (cap < 8)
-        cap = 8;
-    layout.cap = cap * SUB;
-    layout.stroke = layout.cap * STROKE / 1000;
-    layout.bar_w = (int32_t)(layout.width * 26 / 100);
-    layout.bar_h = imax(3, (int32_t)(layout.height / 190));
-    layout.bar_x = ((int32_t)layout.width - layout.bar_w) / 2;
-    layout.bar_y = (int32_t)(layout.height * 45 / 100) + cap * 23 / 10 + layout.bar_h;
+/* Index of the smallest bitmap of `sizes` that is not smaller than `wanted`,
+   or the largest one. */
+static int pick_size(const uint16_t *sizes, int count, int32_t wanted) {
+    for (int i = 0; i < count; ++i) {
+        if (sizes[i] >= wanted)
+            return i;
+    }
+    return count - 1;
 }
 
-static int32_t wordmark_width(void) {
-    int32_t total = (int32_t)(WORDMARK_LETTERS - 1) * (layout.cap * LETTER_GAP / 1000);
-    for (uint32_t i = 0; i < WORDMARK_LETTERS; ++i)
-        total += layout.cap * wordmark[i].width / 1000;
-    return total;
+static int pick_nearest(const uint16_t *sizes, int count, int32_t wanted) {
+    int best = 0;
+    for (int i = 1; i < count; ++i) {
+        if (imax(sizes[i], wanted) - imin(sizes[i], wanted) <
+            imax(sizes[best], wanted) - imin(sizes[best], wanted))
+            best = i;
+    }
+    return best;
+}
+
+/* The group of drop above wordmark is centred around GROUP_CENTER_PER_MILLE of
+   the height, with the progress bar below it. */
+static void compute_layout(void) {
+    const int32_t width = (int32_t)framebuffer.width;
+    const int32_t height = (int32_t)framebuffer.height;
+    layout.width = framebuffer.width;
+    layout.height = framebuffer.height;
+
+    int32_t cap = imax(8, height * CAP_PER_MILLE / 1000);
+    layout.pick = pick_nearest(wordmark_caps, WORDMARK_SIZE_COUNT, cap);
+    layout.wordmark_w = (wordmark_widths[layout.pick] * cap + wordmark_caps[layout.pick] / 2) /
+                        wordmark_caps[layout.pick];
+    layout.wordmark_h = (wordmark_heights[layout.pick] * cap + wordmark_caps[layout.pick] / 2) /
+                        wordmark_caps[layout.pick];
+
+    int32_t drop_visible = imax(16, height * DROP_PER_MILLE / 1000);
+    layout.drop_size = drop_visible * 1000 / (1000 - 2 * LOGO_PADDING_PERMILLE);
+    layout.drop_pick = pick_size(logo_sizes, LOGO_SIZE_COUNT, layout.drop_size);
+    int32_t gap = cap * DROP_GAP_CAPS_PER_MILLE / 1000;
+
+    int32_t group = drop_visible + gap + cap;
+    int32_t group_top = height * GROUP_CENTER_PER_MILLE / 1000 - group / 2;
+    int32_t cap_top = group_top + drop_visible + gap;
+    layout.drop_x = (width - layout.drop_size) / 2;
+    layout.drop_y = group_top - layout.drop_size * LOGO_PADDING_PERMILLE / 1000;
+    layout.wordmark_x = (width - layout.wordmark_w) / 2;
+    layout.wordmark_y = cap_top + cap / 2 - layout.wordmark_h / 2;
+
+    layout.bar_w = width * 26 / 100;
+    layout.bar_h = imax(3, height / 190);
+    layout.bar_x = (width - layout.bar_w) / 2;
+    layout.bar_y = cap_top + cap + cap * BAR_GAP_CAPS_PER_MILLE / 1000;
 }
 
 static void paint(void) {
@@ -456,16 +305,13 @@ static void paint(void) {
             row[x] = background_pixel(x, y);
     }
 
-    int32_t x = ((int32_t)layout.width * SUB - wordmark_width()) / 2;
-    int32_t y = ((int32_t)layout.height * 45 / 100) * SUB - layout.cap / 2;
-    for (uint32_t i = 0; i < WORDMARK_LETTERS; ++i) {
-        int32_t w = layout.cap * wordmark[i].width / 1000;
-        if (wordmark[i].glyph == GLYPH_DROP)
-            draw_drop(x, y, w);
-        else
-            draw_glyph(wordmark[i].glyph, x, y, w, wordmark[i].weight);
-        x += w + layout.cap * LETTER_GAP / 1000;
-    }
+    /* The drop is the artwork's own coverage, coloured with its stroke gradient. */
+    draw_coverage(logo_coverage[layout.drop_pick], logo_sizes[layout.drop_pick],
+                  logo_sizes[layout.drop_pick], layout.drop_x, layout.drop_y,
+                  layout.drop_size, layout.drop_size, 0, logo_gradient_dark);
+    draw_coverage(wordmark_coverage[layout.pick], wordmark_widths[layout.pick],
+                  wordmark_heights[layout.pick], layout.wordmark_x, layout.wordmark_y,
+                  layout.wordmark_w, layout.wordmark_h, LETTER_COLOR, NULL);
     draw_bar();
     present(0, 0, (int32_t)layout.width, (int32_t)layout.height);
 }

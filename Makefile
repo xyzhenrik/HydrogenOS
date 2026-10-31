@@ -1149,6 +1149,7 @@ LOGO_DARK_SOURCE = assets/Hydrogen_Icon_Dark_Small.png
 LOGO_GEN_DIR = $(BUILD_DIR)/gen
 LOGO_UI_HEADER = $(LOGO_GEN_DIR)/logo_ui.h
 LOGO_SPLASH_HEADER = $(LOGO_GEN_DIR)/logo_splash.h
+WORDMARK_HEADER = $(LOGO_GEN_DIR)/wordmark.h
 
 $(LOGO_UI_HEADER): tools/mklogo.py $(LOGO_LIGHT_SOURCE) $(LOGO_DARK_SOURCE)
 	mkdir -p $(LOGO_GEN_DIR)
@@ -1157,6 +1158,12 @@ $(LOGO_UI_HEADER): tools/mklogo.py $(LOGO_LIGHT_SOURCE) $(LOGO_DARK_SOURCE)
 $(LOGO_SPLASH_HEADER): tools/mklogo.py $(LOGO_LIGHT_SOURCE) $(LOGO_DARK_SOURCE)
 	mkdir -p $(LOGO_GEN_DIR)
 	python3 tools/mklogo.py --light $(LOGO_LIGHT_SOURCE) --dark $(LOGO_DARK_SOURCE) --sizes 128,256 --gradients dark --out $@
+
+# The wordmark is drawn in tools/mkwordmark.py; the sizes are cap heights in
+# pixels (the splash uses 5% of the screen height, so 36 is 1280x720).
+$(WORDMARK_HEADER): tools/mkwordmark.py tools/vecraster.py
+	mkdir -p $(LOGO_GEN_DIR)
+	python3 tools/mkwordmark.py --caps 36,72 --out $@
 
 $(USER_DESKTOPDEMO_OBJ): userspace/desktopdemo/desktopdemo.c $(LOGO_UI_HEADER) userspace/desktopdemo/spotlight.h userspace/compositor/compositor.h userspace/lib/mini_libc.h userspace/lib/syscall.h userspace/lib/wallclock.h userspace/lib/settings.h userspace/lib/settings_ui.h userspace/lib/window_geometry.h userspace/lib/anim.h userspace/lib/window_motion.h userspace/lib/filemanager.h userspace/desktopdemo/app_terminal.h userspace/lib/terminal.h userspace/lib/iconset.h $(ICONSET_DATA_H)
 	mkdir -p $(BUILD_DIR)
@@ -1405,7 +1412,7 @@ $(BUILD_DIR)/fb_console.o: kernel/video/fb_console.c kernel/video/fb_console.h k
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(BUILD_DIR)/bootsplash.o: kernel/video/bootsplash.c kernel/video/bootsplash.h kernel/video/fb_console.h kernel/include/framebuffer.h $(LOGO_SPLASH_HEADER)
+$(BUILD_DIR)/bootsplash.o: kernel/video/bootsplash.c kernel/video/bootsplash.h kernel/video/fb_console.h kernel/include/framebuffer.h $(LOGO_SPLASH_HEADER) $(WORDMARK_HEADER)
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CFLAGS) -I$(LOGO_GEN_DIR) -c $< -o $@
 
