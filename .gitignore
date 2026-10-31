@@ -13,3 +13,7 @@
 *.swp
 *~
 .DS_Store
+
+# Markdown notes stay local; only the README is tracked
+*.md
+!README.md
