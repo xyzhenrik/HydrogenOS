@@ -273,7 +273,7 @@ OBJS += $(BUILD_DIR)/kmsg.o $(BUILD_DIR)/crash.o $(BUILD_DIR)/oom.o $(BUILD_DIR)
 OBJS += $(USER_HELLO_BINOBJ) $(USER_ECHO_BINOBJ) $(USER_CAT_BINOBJ) $(USER_TIME_BINOBJ) $(USER_SLEEP_BINOBJ)
 RUN_DEPS = $(ISO)
 BUILD_DEPS = $(KERNEL_BIN) $(INITRD) $(DISK_IMG)
-RUN_CMD = qemu-system-x86_64 -cdrom $(ISO) -m 512M -vga std -serial stdio -netdev user,id=n0 -device virtio-net-pci,netdev=n0
+RUN_CMD = qemu-system-x86_64 -cdrom $(ISO) -m 512M -vga std -serial stdio -netdev user,id=n0 -device virtio-net-pci,netdev=n0 -device virtio-tablet-pci
 ISO_DEPS = $(KERNEL_BIN) $(GRUB_CFG) $(INITRD)
 else
 CFLAGS = $(CFLAGS_BASE) -m32 -mno-red-zone
@@ -432,7 +432,7 @@ $(BUILD_DIR)/bochs_display.o: kernel/drivers/bochs_display.c kernel/drivers/boch
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CFLAGS) -DGFX_WIDTH=$(GFXW) -DGFX_HEIGHT=$(GFXH) -DGFX_DEPTH=$(GFXD) -c $< -o $@
 
-$(BUILD_DIR)/virtio_input.o: kernel/drivers/virtio_input.c kernel/drivers/virtio_input.h kernel/drivers/virtio.h kernel/drivers/pci.h
+$(BUILD_DIR)/virtio_input.o: kernel/drivers/virtio_input.c kernel/drivers/virtio_input.h kernel/drivers/virtio.h kernel/drivers/pci.h kernel/include/mouse.h
 	mkdir -p $(BUILD_DIR)
 	$(CC) $(CFLAGS) -c $< -o $@
 

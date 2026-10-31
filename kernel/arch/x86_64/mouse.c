@@ -1,5 +1,6 @@
 #include "mouse.h"
 #include "io.h"
+#include "drivers/virtio_input.h"
 #include <stddef.h>
 #include <stdint.h>
 
@@ -58,6 +59,32 @@ int mouse_take_wheel(void) {
     int w = wheel_delta;
     wheel_delta = 0;
     return w;
+}
+
+/* Absolute devices report a position in device units spanning [0, range].
+   QEMU derives them as pixel * 2^15 / width, so rounding to the nearest pixel
+   recovers the exact host pointer position. */
+static int scale_to_pixels(uint32_t value, uint32_t range, int bounds) {
+    uint64_t span = (uint64_t)range + 1;
+    uint64_t pixel = ((uint64_t)value * (uint64_t)bounds + span / 2) / span;
+    return pixel >= (uint64_t)bounds ? bounds - 1 : (int)pixel;
+}
+
+void mouse_set_position_scaled(uint32_t x, uint32_t x_range, uint32_t y, uint32_t y_range) {
+    if (bounds_w == 0 || bounds_h == 0) return;
+    mouse_x = scale_to_pixels(x, x_range, bounds_w);
+    mouse_y = scale_to_pixels(y, y_range, bounds_h);
+}
+
+void mouse_set_buttons(uint8_t buttons) {
+    buttons &= 0x07;
+    if (buttons == last_pkt.buttons) return;
+    struct mouse_packet p = { .dx = 0, .dy = 0, .buttons = buttons };
+    buffer_put(p);
+}
+
+void mouse_add_wheel(int delta) {
+    wheel_delta += delta;
 }
 
 static inline void mouse_wait_write(void) {
@@ -150,6 +177,7 @@ void mouse_handle_irq(void) {
 }
 
 void mouse_poll(void) {
+    virtio_input_poll();
     for (int i = 0; i < 4; ++i) {
         uint8_t status = inb(0x64);
         if ((status & 0x01) == 0) break;
