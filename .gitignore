@@ -1,13 +1,7 @@
-# Build output (objects, ELFs, initrd, ISO, disk images, logs)
 /build/
-
-# All dotfiles and dot-directories (secrets, editor/tool settings, worktrees)
 .*
 !.gitignore
-
-# Editor / OS noise
 *~
-
-# Markdown notes stay local; only the README is tracked
 *.md
 !README.md
+/docs/
