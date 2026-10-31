@@ -249,8 +249,11 @@
   and version display.
 - `DesktopTheme` tokens drive all desktop colors (`COL_*` now resolve to theme
   fields); dark/light presets.
-- Real icons: `userspace/lib/icons.h` generated from Iconify MDI SVGs (32x32
-  ARGB) and alpha-blended in the taskbar, start menu and About entry.
+- Icons: vector drawings in `tools/mkicons.py` (rasteriser `tools/vecraster.py`),
+  rendered at build time into premultiplied ARGB at exactly the sizes the UI
+  draws (`ICON_SIZE_*`), per theme for colour icons, as tintable masks for
+  glyphs. `userspace/lib/iconset.c` blends them 1:1 in the taskbar, launcher,
+  Files and Settings; `icons.h` only keeps the logo bitmap.
 
 **Comfort/stability**
 - IntelliMouse 4-byte packets + wheel field in `SYS_MOUSE_STATE`; terminal and

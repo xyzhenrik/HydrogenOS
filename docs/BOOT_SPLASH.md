@@ -3,9 +3,13 @@
 `kernel/video/bootsplash.{c,h}` draws a calm boot screen as soon as the
 framebuffer is initialised: the HydrogenOS wordmark (the O of "Hydrogen" is
 the drop, "OS" follows in a dimmer weight) on a dark gradient, with a thin
-progress bar below it. Everything is drawn procedurally with integer arithmetic (signed distance functions turned into
-anti-aliased coverage, a dithered gradient), so it scales with the
-resolution and needs no assets, fonts or FPU state.
+progress bar below it. The letters and the bar are drawn procedurally with
+integer arithmetic (signed distance functions turned into anti-aliased
+coverage, a dithered gradient), so they scale with the resolution and need no
+fonts or FPU state. The drop is the real logo: `tools/mklogo.py` turns
+`assets/Hydrogen_Icon_Transparent.png` into coverage bitmaps at build time
+(`build/<arch>/gen/logo_splash.h`), which the splash resamples and colours
+with the artwork's gradient.
 
 While the splash is active the kernel log stays off the framebuffer. It is
 still written to the serial port.

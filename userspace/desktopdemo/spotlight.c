@@ -1,6 +1,7 @@
 #include "spotlight.h"
 
 #include "gfx_effects.h"
+#include "iconset.h"
 #include "kbd_keys.h"
 #include "launcher_model.h"
 #include "mini_libc.h"
@@ -17,9 +18,8 @@
 #define HEADER_H        28
 #define ROW_H           40
 #define ROW_RADIUS      10
-#define ICON_SIZE       28
 #define ICON_X          (PAD + 8)
-#define NAME_X          (ICON_X + ICON_SIZE + 12)
+#define NAME_X          (ICON_X + ICON_SIZE_APP + 12)
 #define POWER_H         64
 #define NOTICE_H        28
 #define LIST_GAP        8
@@ -28,7 +28,6 @@
 #define BUTTON_H        36
 #define BUTTON_GAP      8
 #define BUTTON_W        ((SPOTLIGHT_WIDTH - 2 * PAD - BUTTON_GAP) / 2)
-#define GLYPH_SIZE      16
 #define GLYPH_GAP       8
 #define CHAR_W          8
 #define CHAR_H          16
@@ -235,57 +234,13 @@ static void draw_text_centered(int center_x, int y, const char *text, uint32_t r
     draw_text(center_x - (int)strlen(text) * CHAR_W / 2, y, text, rgb);
 }
 
-typedef int (*GlyphShape)(int u, int v);
-
-/* Shapes are described on a 64x64 grid, so they scale to any size; each pixel
-   is sampled 4x4 times for anti-aliasing. */
-static void draw_glyph(int x, int y, int size, GlyphShape inside, uint32_t rgb) {
+static void draw_glyph(IconId id, int x, int y, int size, uint32_t rgb) {
     GfxCanvas c = canvas();
-    for (int py = 0; py < size; ++py) {
-        for (int px = 0; px < size; ++px) {
-            int covered = 0;
-            for (int sy = 0; sy < 4; ++sy) {
-                for (int sx = 0; sx < 4; ++sx) {
-                    int u = ((2 * (px * 4 + sx) + 1) * 8) / size;
-                    int v = ((2 * (py * 4 + sy) + 1) * 8) / size;
-                    covered += inside(u, v);
-                }
-            }
-            if (covered) gfx_blend_pixel(&c, x + px, y + py, rgb, (unsigned int)covered * 255u / 16u);
-        }
-    }
+    icon_draw_glyph(&c, id, size, x, y, rgb, 255);
 }
 
-static int in_ring(int dx, int dy) {
-    int d2 = dx * dx + dy * dy;
-    return d2 >= 20 * 20 && d2 <= 27 * 27;
-}
-
-static int magnifier_shape(int u, int v) {
-    int dx = u - 26, dy = v - 26;
-    int d2 = dx * dx + dy * dy;
-    if (d2 >= 15 * 15 && d2 <= 22 * 22) return 1;
-    return u >= 41 && u <= 58 && (u > v ? u - v : v - u) <= 5;
-}
-
-static int power_shape(int u, int v) {
-    int dx = u - 32, dy = v - 32;
-    if (dx >= -3 && dx <= 3 && dy >= -29 && dy <= -3) return 1;
-    return in_ring(dx, dy) && !(dy < 0 && dx >= -8 && dx <= 8);
-}
-
-static int restart_shape(int u, int v) {
-    int dx = u - 32, dy = v - 32;
-    if (in_ring(dx, dy) && !(dx >= 0 && dy < 0 && dx <= -2 * dy)) return 1;
-    /* Arrowhead on the open end of the ring, pointing along the gap. */
-    int tip_run = 46 - u;
-    int offset = v - 9;
-    if (offset < 0) offset = -offset;
-    return u >= 32 && u <= 46 && offset * 14 <= tip_run * 9;
-}
-
-static GlyphShape power_glyph(int action) {
-    return action == POWER_RESTART ? restart_shape : power_shape;
+static IconId power_glyph(int action) {
+    return action == POWER_RESTART ? ICON_GLYPH_RESTART : ICON_GLYPH_POWER;
 }
 
 static void draw_program_badge(int x, int y, int size, const char *name, uint32_t ink, unsigned int opacity) {
@@ -306,13 +261,13 @@ static void draw_item(int index) {
 
     if (selected) fill_round(PAD, row_y, row_w, ROW_H, ROW_RADIUS, p->accent, 255);
 
-    int icon_y = row_y + (ROW_H - ICON_SIZE) / 2;
+    int icon_y = row_y + (ROW_H - ICON_SIZE_APP) / 2;
     if (item->entry.app_id == LAUNCHER_ENTRY_PROGRAM) {
-        draw_program_badge(ICON_X, icon_y, ICON_SIZE, item->entry.name, ink, OPACITY_BADGE);
+        draw_program_badge(ICON_X, icon_y, ICON_SIZE_APP, item->entry.name, ink, OPACITY_BADGE);
         program_directory(&item->entry, hint, sizeof(hint));
         if (strcmp(hint, "/") == 0) copy_text(hint, sizeof(hint), "Program");
     } else {
-        g.host->draw_icon(g.window, item->entry.app_id, ICON_X, icon_y, ICON_SIZE);
+        g.host->draw_icon(g.window, item->entry.app_id, ICON_X, icon_y, ICON_SIZE_APP);
         copy_text(hint, sizeof(hint), "Application");
     }
 
@@ -329,7 +284,7 @@ static void draw_field(void) {
 
     fill_round(PAD, FIELD_Y, width, FIELD_H, FIELD_RADIUS, p->chrome_text, OPACITY_FIELD);
     stroke_round(PAD, FIELD_Y, width, FIELD_H, FIELD_RADIUS, p->chrome_text, OPACITY_FIELD_EDGE);
-    draw_glyph(PAD + 12, FIELD_Y + (FIELD_H - GLYPH_SIZE) / 2, GLYPH_SIZE, magnifier_shape, p->chrome_dim);
+    draw_glyph(ICON_GLYPH_SEARCH, PAD + 12, FIELD_Y + (FIELD_H - ICON_SIZE_GLYPH) / 2, ICON_SIZE_GLYPH, p->chrome_dim);
 
     int text_y = FIELD_Y + (FIELD_H - CHAR_H) / 2;
     if (g.query_length > 0) {
@@ -368,10 +323,10 @@ static void draw_power_button(int action, int selected) {
     if (selected) fill_round(x, button_y(), BUTTON_W, BUTTON_H, ROW_RADIUS, p->accent, 255);
     else fill_round(x, button_y(), BUTTON_W, BUTTON_H, ROW_RADIUS, p->chrome_text, OPACITY_BUTTON);
 
-    int content = GLYPH_SIZE + GLYPH_GAP + (int)strlen(label) * CHAR_W;
+    int content = ICON_SIZE_GLYPH + GLYPH_GAP + (int)strlen(label) * CHAR_W;
     int left = x + (BUTTON_W - content) / 2;
-    draw_glyph(left, button_y() + (BUTTON_H - GLYPH_SIZE) / 2, GLYPH_SIZE, power_glyph(action), ink);
-    draw_text(left + GLYPH_SIZE + GLYPH_GAP, button_y() + (BUTTON_H - CHAR_H) / 2, label, ink);
+    draw_glyph(power_glyph(action), left, button_y() + (BUTTON_H - ICON_SIZE_GLYPH) / 2, ICON_SIZE_GLYPH, ink);
+    draw_text(left + ICON_SIZE_GLYPH + GLYPH_GAP, button_y() + (BUTTON_H - CHAR_H) / 2, label, ink);
 }
 
 static void draw_power_section(void) {
@@ -412,7 +367,8 @@ static void draw_confirmation(void) {
     int badge_y = 28;
 
     fill_round(badge_x, badge_y, badge, badge, badge / 2, p->chrome_text, OPACITY_FIELD);
-    draw_glyph(center - 16, badge_y + 16, 32, power_glyph(g.confirm), p->chrome_text);
+    draw_glyph(power_glyph(g.confirm), center - ICON_SIZE_GLYPH_LARGE / 2, badge_y + (badge - ICON_SIZE_GLYPH_LARGE) / 2,
+               ICON_SIZE_GLYPH_LARGE, p->chrome_text);
 
     draw_text_centered(center, 114, g.confirm == POWER_RESTART ? "Restart this computer?"
                                                               : "Shut down this computer?", p->chrome_text);
