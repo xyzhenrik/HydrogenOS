@@ -1,18 +1,12 @@
 # Build output (objects, ELFs, initrd, ISO, disk images, logs)
 /build/
 
-# Local secrets
-.env
-.env.*
-
-# Per-user Claude Code settings
-.claude/settings.local.json
-.claude/worktrees/
+# All dotfiles and dot-directories (secrets, editor/tool settings, worktrees)
+.*
+!.gitignore
 
 # Editor / OS noise
-*.swp
 *~
-.DS_Store
 
 # Markdown notes stay local; only the README is tracked
 *.md
